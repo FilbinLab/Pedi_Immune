@@ -1,0 +1,145 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+
+base_dir = "C:/Users/jenna/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+project_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/")
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/",
+                     "Annotation/BySubtype/Midline/Midline_HistoneMutant/WithNewSample/BT1873Only/")
+library(Seurat, lib.loc = "C:/Users/jenna/OneDrive/Documents/R/win-library/4.0/Seurat/V4") 
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+stat_helper = paste0(base_dir, script_dir, "common_stat_test.R")
+source(preprocessing)
+source(stat_helper)
+
+
+seurat_analysis_folder = "analysis/seurat/"
+seurat_fig_folder = "figures/seurat/"
+for (folder in c(seurat_analysis_folder, seurat_fig_folder)){
+  if (!dir.exists(folder)){
+    dir.create(folder)
+  }
+}
+
+
+## Set colors for use later- better for discriminating against groups
+library(sparseMatrixStats)
+library(RColorBrewer)
+n <- 50
+qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+
+subtypes<- read.csv(paste0(project_dir, "Subtypes.csv"))
+```
+
+## Load in original and current seurat objs
+```{r}
+load(paste0(seurat_analysis_folder, "seurat_obj.Robj"))
+current_seurat_obj<- seurat_obj; rm(seurat_obj)
+
+load("../../analysis/seurat/seurat_obj_Cluster6Removed.Robj")
+original_seurat_obj<-seurat_obj_annot; rm(seurat_obj_annot)
+```
+
+
+```{r}
+seurat_list<-list(current=current_seurat_obj, original=original_seurat_obj)
+
+transferAnchors<-FindTransferAnchors(reference = seurat_list$original, query=seurat_list$current)
+
+predictions <- TransferData(anchorset = transferAnchors, 
+                            refdata = original_seurat_obj$ManualAnnot)
+
+predictions_final<- predictions$predicted.id; names(predictions_final)<- rownames(predictions)
+current_seurat_obj@meta.data$Predictions<- predictions_final
+current_seurat_obj@meta.data$Scores<- predictions
+
+DimPlot(current_seurat_obj, group.by="Predictions", pt.size = 2,
+        label = TRUE, label.size = 6)+NoLegend()
+ggsave(paste0(seurat_fig_folder, "Predictions_fromOriginal_Projection.png"), width=5, height=5)
+```
+## Save
+```{r}
+save(current_seurat_obj, file=paste0(seurat_analysis_folder,
+                                     "AnnotationsProjectedFromOriginal_seurat.Robj"))
+```
+
+## Barplot of cell breakdown
+```{r}
+load(paste0(seurat_analysis_folder,
+            "AnnotationsProjectedFromOriginal_seurat.Robj"))
+BT1873Only_seurat<- current_seurat_obj
+
+df<- as.data.frame(table(current_seurat_obj$Predictions))
+colnames(df)<- c("ProjectedCellType", "NCells")
+ggplot(df, aes(x="", y=NCells, fill=ProjectedCellType ))+
+  geom_bar(stat="identity", width=1) +
+  coord_polar("y", start=0)
+ggsave("figures/seurat/ProjectedAnnot_Breakdown.png", width=5, height=4)
+```
+
+## Compare projection breakdown here vs with other midline histone mutant samples
+```{r}
+## Load in seurat object with projections for BT1873 as well as other samples
+load(paste0("../", seurat_analysis_folder,
+            "AnnotationsProjectedFromOriginal_seurat.Robj"))
+seurat_tmp<- subset(current_seurat_obj, sample=="BT1873vent")
+
+old_project<- seurat_tmp@meta.data[,c("sample", "Predictions")]
+colnames(old_project)<-c("sample", "Predictions_WithOtherSamples")
+
+new_project<- BT1873Only_seurat@meta.data[,c("sample", "Predictions")]
+colnames(new_project)<-c("sample", "Predictions_BT1873Only")
+
+old_new_projections<- merge(old_project, new_project,
+                            by=0)
+old_new_projections<- old_new_projections[,grep("sample.", colnames(old_new_projections),
+                                                invert=TRUE)]
+old_new_projections$Match<- ifelse(old_new_projections$Predictions_WithOtherSamples==old_new_projections$Predictions_BT1873Only,
+                                   yes="Match", no="noMatch")
+old_new_projections$Change<- paste0(old_new_projections$Predictions_WithOtherSamples,
+                                    "->", old_new_projections$Predictions_BT1873Only)
+table(old_new_projections$Change, old_new_projections$Match)
+
+old_new_projections$Predictions_WithOtherSamples<- factor(old_new_projections$Predictions_WithOtherSamples,
+                                                          levels=c("G2M", "S-Phase",
+                                                                   "AC-like",
+                                                                   "OPC-like", "OPC-like_Alt",
+                                                                   "OPC-like_Ribosomal"))
+old_new_projections$Predictions_BT1873Only<- factor(old_new_projections$Predictions_BT1873Only,
+                                                          levels=c("G2M", "S-Phase",
+                                                                   "AC-like",
+                                                                   "OPC-like", "OPC-like_Alt",
+                                                                   "OPC-like_Ribosomal"))
+
+
+ggplot(old_new_projections, aes(x=Predictions_WithOtherSamples,
+                                y=Predictions_BT1873Only,
+                                color=Match))+
+  geom_jitter(width=0.15, height=0.15, size=3, alpha=0.3)+
+  theme(axis.text.x = element_text(angle=45, hjust=1))+
+  labs(title="PredictionsForBT1873: \nWith other samples vs by itself",
+       subtitle="Each point == cell")
+ggsave("figures/BT1873Projections_WithOtherSamples_vs_ByItself.png",
+       width=5, height=4)
+```
+
+
+
+
+## Identify markers
+```{r}
+current_seurat_obj<- SetIdent(current_seurat_obj, value=current_seurat_obj$Predictions)
+all_markers<- FindAllMarkers(current_seurat_obj, min.pct=0.5)
+all_markers_filtered<- all_markers[all_markers$p_val_adj<0.05 &
+                                     all_markers$avg_log2FC>0.5,]
+```
+
+

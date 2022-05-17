@@ -1,0 +1,224 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+
+
+```{r}
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/TumorCellAnnotation/AllSubtypesTogether/")
+
+
+
+library(Seurat)
+library(ggplot2)
+library(ggpubr)
+library(randomcoloR)
+
+analysis_dir<- "analysis/Merge_allSubtypes/"
+#figure_dir<- "figures/Merge_allSubtypes/"
+tumor_dir<- "../BySubtype/"
+
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(nmf_helper)
+```
+
+
+
+## Read in all tumor seurat objects, and rename cell types as needed
+## Also rename cell annotation column to "CellAnnot" for all subtypes
+```{r}
+## Midline histone mut
+  ## Read in seurat object
+  load(paste0(tumor_dir,
+              "Midline/Midline_histoneMutant/WithNewSample/analysis/seurat/seurat_obj_Cluster6Removed.Robj"))
+  seurat_tumor_midlineHistoneMut<- seurat_obj_annot
+  
+  ## make cell annotation column for each- name needs to match
+  seurat_tumor_midlineHistoneMut$CellAnnot<- seurat_tumor_midlineHistoneMut$ManualAnnot
+  
+  ## Rename/merge some annotations: OPC-like_* --> OPC-like
+  seurat_tumor_midlineHistoneMut$CellAnnot<- gsub("OPC-like.*", "OPC-like",
+                                             gsub("G2M", "Cycling",
+                                             gsub("S-Phase", "Cycling",
+                                                  seurat_tumor_midlineHistoneMut$CellAnnot)))
+  
+  ## Add column with non-renamed annotations
+  seurat_tumor_midlineHistoneMut$OriginalAnnot<- seurat_tumor_midlineHistoneMut$ManualAnnot
+
+## Midline histone WT
+  ## Read in seurat object
+  load(paste0(tumor_dir,
+              "Midline/Midline_HistoneWT/analysis/seurat/seurat_obj.Robj"))
+  seurat_tumor_midlineHistoneWT<- seurat_obj
+  
+  ## make cell annotation column for each- name needs to match
+  seurat_tumor_midlineHistoneWT$CellAnnot<- seurat_tumor_midlineHistoneWT$TopSigPrevious
+  
+  ## Rename/merge some annotations: AC-MES-like --> AC-like
+  seurat_tumor_midlineHistoneWT$CellAnnot<- gsub("AC-MES-like", "AC-like",
+                                                  seurat_tumor_midlineHistoneWT$CellAnnot)
+  
+  ## Add column with non-renamed annotations
+  seurat_tumor_midlineHistoneWT$OriginalAnnot<- seurat_tumor_midlineHistoneWT$TopSigPrevious
+
+## BCOR
+  ## Read in seurat object
+  load(paste0(tumor_dir,
+              "/Hemispheric/BCOR/analysis/seurat/seurat_obj_annot.Robj"))
+  seurat_tumor_hemiBCOR<- seurat_obj
+  
+  ## make cell annotation column for each- name needs to match
+  seurat_tumor_hemiBCOR$CellAnnot<- Idents(seurat_tumor_hemiBCOR)
+  
+  ## Rename/merge some annotations: OPC-like* --> OPC-like, MES/AC-->AC, NPC2/Neuronal-->Neuronal-like
+  seurat_tumor_hemiBCOR$CellAnnot<- gsub("MES/AC-like", "AC-like",
+                                    gsub("NPC2", "Neuronal-like",
+                                    gsub("Neuronal", "Neuronal-like",
+                                    gsub("OPC-like.*", "OPC-like",
+                                    gsub("G2M", "Cycling",
+                                    gsub("Sphase", "Cycling",
+                                         seurat_tumor_hemiBCOR$CellAnnot))))))
+  
+  ## Add column with non-renamed annotations
+  seurat_tumor_hemiBCOR$OriginalAnnot<-Idents(seurat_tumor_hemiBCOR)
+
+## Hemi histone WT
+  ## Read in seurat object
+  load(paste0(tumor_dir,
+              "/Hemispheric/HistoneWT/SingleSample_Annot/BT1857/analysis/seurat/seurat_obj.Robj"))
+  seurat_tumor_hemiHistoneWT<- seurat_obj
+  
+  ## make cell annotation column for each- name needs to match
+  seurat_tumor_hemiHistoneWT$CellAnnot<- seurat_tumor_hemiHistoneWT$ManualAnnot
+  
+  ## Add column with non-renamed annotations
+  seurat_tumor_hemiHistoneWT$OriginalAnnot<-seurat_tumor_hemiHistoneWT$ManualAnnot
+  
+## Hemi histone mutant
+  ## Read in seurat object
+  load(paste0(tumor_dir,
+              "/Hemispheric/HistoneMut/analysis/seurat/seurat_obj.Robj"))
+  seurat_tumor_hemiHistoneMut<- seurat_obj
+  
+  ## make cell annotation column for each- name needs to match
+  seurat_tumor_hemiHistoneMut$CellAnnot<- gsub("AC_like", "AC-like", 
+                                               gsub("OC_like", "OC-like", 
+                                                    gsub("GIPC_like", "GIPC-like",
+                                                         gsub("cycling", "Cycling", seurat_tumor_hemiHistoneMut$TopSigPrevious))))
+  
+  ## Add column with non-renamed annotations
+  seurat_tumor_hemiHistoneMut$OriginalAnnot<- seurat_tumor_hemiHistoneMut$TopSigPrevious
+  
+## Ependymoma- all subtypes
+  ## Read in seurat object
+  load(paste0(tumor_dir,
+              "Ependymoma/analysis/Projection_AllEpn_ToImmuneEpn/seurat_obj_ProjectedAnnots.Robj"))
+  seurat_tumor_epn<-seurat_obj
+  
+  ## make cell annotation column for each- name needs to match
+  cellAnnots<- c("PF_Ependymal_like", "SP_Ependymal_like", "ST_Ependymal_like",
+                 "PF_Astroependymal_like", "PF_Metabolic", "ST_Metabolic",
+                 "PF_Immune_Reactive", "SP_Immune_Reactive",
+                 "PF_Astroglial_like","ST_Metabolic", "ST_Ependymal_like","ST_Interferon_Response",
+                 "PF_G2M_Phase","ST_G2M_Phase", "PF_S_Phase", "ST_S_Phase")
+  names(cellAnnots)<- c(rep("Ependymal_like", 4), rep("Metabolic", 2), rep("Immune_Reactive",2), "AC-like",
+                        "Metabolic", "Ependymal_like", "Immune_Reactive", rep("G2M",2),rep("SPhase",2))
+  
+  seurat_tumor_epn$CellAnnot<- plyr::mapvalues(seurat_tumor_epn$UpdatedAnnot,
+                                               cellAnnots, names(cellAnnots))
+  seurat_tumor_epn$CellAnnot<- gsub("G2M", "Cycling", 
+                                    gsub("S-Phase", "Cycling",
+                                         gsub("Sphase", "Cycling", 
+                                              gsub("SPhase", "Cycling", seurat_tumor_epn$CellAnnot))))
+  
+  
+  ## Add column with non-renamed annotations
+  seurat_tumor_epn$OriginalAnnot<- seurat_tumor_epn$UpdatedAnnot
+
+
+```
+
+## List of all tumor seurat objects
+```{r}
+tumor_seurat_list<- list(midlineHistoneMut=seurat_tumor_midlineHistoneMut,
+                         midlineHistoneWT=seurat_tumor_midlineHistoneWT,
+                         hemiBCOR=seurat_tumor_hemiBCOR,
+                         hemiHistoneMut=seurat_tumor_hemiHistoneMut,
+                         hemiHistoneWT=seurat_tumor_hemiHistoneWT,
+                         epn=seurat_tumor_epn)
+```
+
+## Merge all tumor seurat objects into single seurat object
+## Metadata needed: sample, subtype, cellAnnot (merged, default for cellchat), original cellAnnot (may be same as cellAnnot)
+```{r}
+## subset to sample, then get counts + metadata
+cm_meta_list<-lapply(1:length(tumor_seurat_list), function(x){
+  seurat<- tumor_seurat_list[[x]]
+  subtype<- names(tumor_seurat_list)[x]
+  seurat$subtype<- subtype
+  
+  meta<- seurat@meta.data[,c("sample", "CellAnnot", "subtype", "OriginalAnnot")]
+  
+  cm<- as.data.frame(seurat@assays$RNA@counts)
+  cm$gene<-rownames(cm)
+  
+  return(list(cm=cm,meta=meta))})
+names(cm_meta_list)<- names(tumor_seurat_list)
+
+for(i in names(cm_meta_list)){
+  print(paste0("cells in ", i, ": ", nrow(cm_meta_list[[i]]$meta)))
+}
+
+## merge counts and metadata
+cm_list<- lapply(cm_meta_list, function(x){x$cm})
+names(cm_list)<- names(cm_meta_list)
+
+meta_list<- lapply(cm_meta_list, function(x){
+  tmp<- x$meta; tmp$Cell<- rownames(tmp)
+  return(tmp)})
+names(meta_list)<-names(cm_meta_list)
+
+merged_cm<- cm_list %>% purrr::reduce(left_join, by = "gene")
+rownames(merged_cm)<- merged_cm$gene
+merged_cm<-merged_cm[,colnames(merged_cm) !="gene"]
+
+merged_meta<- do.call("rbind", meta_list)
+rownames(merged_meta)<-merged_meta$Cell
+print(paste0("total cells: ", nrow(merged_meta)))
+
+merged_cm<- merged_cm[,order(colnames(merged_cm))]
+merged_meta<- merged_meta[order(rownames(merged_meta)),]
+print(paste0("Check: "))
+print(paste0("metadata/cm match: ",
+             sum(colnames(merged_cm)%in% rownames(merged_meta))))
+print(paste0("Total cells: ", nrow(merged_meta)))
+
+# Create seurat object from merged counts and merged meta
+seurat_merged<-preprocessSeuratObject(cm=na.omit(merged_cm), project="")
+seurat_merged<- AddMetaData(seurat_merged, merged_meta)
+seurat_merged<- RunPCA(seurat_merged, features = seurat_merged@assays$RNA@var.features,
+                       npcs=ifelse(ncol(merged_cm)<50, ncol(merged_cm)-1, 50))
+seurat_merged<-RunUMAP(seurat_merged, reduction="pca", dims = 1:20 )
+seurat_merged<- FindNeighbors(seurat_merged, reduction="pca", dims = 1:20) 
+seurat_merged<-FindClusters(seurat_merged, resolution = 0.8)
+
+tumor_merged<-seurat_merged
+
+## rename BT1873vent --> BT1837
+tumor_merged$sample<- gsub("BT1873vent", "BT1873", tumor_merged$sample)
+
+save(tumor_merged, file=paste0(analysis_dir, "AllTumorSeuratObj.Robj"))
+
+## Export df of cell types per subtype for use downstream when plotting cellchat results
+cellTypes_bySubtype<- as.data.frame.matrix(table(tumor_merged$CellAnnot, tumor_merged$subtype))
+saveRDS(cellTypes_bySubtype, file=paste0(analysis_dir, "cellTypes_bySubtype.rds"))
+```
+

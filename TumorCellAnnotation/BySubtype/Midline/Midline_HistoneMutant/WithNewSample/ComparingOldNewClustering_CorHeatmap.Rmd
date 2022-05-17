@@ -1,0 +1,197 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+```{r}
+library(Seurat, lib.loc = "C:/Users/jenna/OneDrive/Documents/R/win-library/4.0/Seurat/V4") 
+
+base_dir = "C:/Users/jenna/"
+project_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/")
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(project_dir, 
+                     "Annotation/BySubtype/Midline/Midline_HistoneMutant/WithNewSample/")
+
+seurat_fig_folder = "figures/seurat/"
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+```
+
+## Load in count matrix
+```{r}
+## Read in cm list, sample list, and tumor/normal annotation
+load(paste0(project_dir, "SplitBySubtype/WithNewSamples/analysis/midlineHistoneMut_cm_list.Robj"))
+samples = readRDS(paste0(project_dir, "SplitBySubtype/WithNewSamples/analysis/midlineHistoneMut_samples.rds"))
+tumor_stat = readRDS(paste0(project_dir, "SplitBySubtype/WithNewSamples/analysis/midlineHistoneMut_cluster6CellsNormal_call_tumor.rds"))
+
+cm_list<-midlineHistoneMut_cm_list
+
+sum(colnames(cm_list$raw_data)==names(samples)); length(samples)
+sum(names(samples)==names(tumor_stat))
+
+## Keep maligant cells
+cm<- cm_list$raw_data
+cm = cm_list$raw_data[, tumor_stat=="Malignant"]
+samples_tumor = samples[tumor_stat=="Malignant"]
+length(samples_tumor); sum(colnames(cm)==names(samples_tumor))
+
+```
+
+## Read in cluster marker genes for:
+1. "Old" analysis- doesn't include the new sample
+2. "New" analysis- includes the new sample
+
+```{r}
+old_markers<- read.csv("../analysis/seurat/Top30Markers_Theta0.9.csv")
+new_markers<- read.csv("analysis/seurat/Top30Markers_Theta0.9.csv")
+new_markers<- read.csv("analysis/seurat/Top30Markers_Theta0.5.csv")
+
+## rename clusters to denote whether they came from old or new analysis
+old_markers$cluster<- paste0("original_", old_markers$cluster)
+new_markers$cluster<- paste0("new_", new_markers$cluster)
+
+## Split dataframe into list
+old_markers<- split(old_markers, f=old_markers$cluster)
+old_markers<- lapply(old_markers, function(x){x$gene})
+
+new_markers<- split(new_markers, f=new_markers$cluster)
+new_markers<- lapply(new_markers, function(x){x$gene})
+
+## combine into 1 list
+all_markers<- c(new_markers, old_markers)
+```
+
+## Score cells for both old/new cluster markers
+```{r}
+## mean gene counts
+cm_mean<- log2(rowMeans(cm_list$raw_data)+1)
+
+all_score<-scoreNmfGenes(cm_list$center_data, cm_mean, all_markers)
+all_score<- t(all_score)
+```
+
+
+
+## pearson correlation + HC
+```{r}
+## Cluster using pearson
+all_pearson = cor(all_score, method="pearson")
+
+## Cluster using pearson --> HC
+all_hc<-clusterNmfFactors(all_score)
+all_cor<-all_hc$cor_coef[all_hc$hc_obj$order, all_hc$hc_obj$order]
+
+range<-max(abs(all_cor))
+
+hm_colors = rev((brewer.pal(n=9, name="RdBu")))
+hm_colors = colorRampPalette(colors = hm_colors)
+pheatmap(all_cor, color = hm_colors(100), 
+         breaks = seq(-range, range, length.out = 100),
+         cluster_rows = F, cluster_cols = F, 
+         annotation_names_row = F, annotation_names_col =T,
+         show_rownames = T, show_colnames = F,
+         filename = paste0(seurat_fig_folder, "NewOriginalClusterMarkersScore_res0.5.png"), 
+         width = 12, height = 6)
+
+```
+
+
+## Compare how well annotations match up between:
+1. original annotations and projections
+2. original annotations and "de novo" annotations using new clusters
+```{r}
+load("../analysis/seurat/seurat_obj_Cluster6Removed.Robj")
+seurat_original<- seurat_obj_annot; rm(seurat_obj_annot) ##1292
+
+load("analysis/seurat/seurat_obj_Cluster6Removed.Robj")
+seurat_current<-seurat_obj_annot; rm(seurat_obj_annot)
+
+load("analysis/seurat/AnnotationsProjectedFromOriginal_seurat.Robj")
+seurat_projected<- current_seurat_obj; rm(current_seurat_obj)
+
+## Remove new samples
+seurat_current<- subset(seurat_current, sample != "BT1873vent") ##1278
+seurat_projected<-subset(seurat_projected,sample != "BT1873vent" ) ## 1278
+
+## Subset to common cells (minor difference)
+commonCells<- colnames(seurat_original)[colnames(seurat_original) %in% colnames(seurat_current)]
+commonCells<- commonCells[commonCells %in% colnames(seurat_projected)] ##1292
+
+seurat_original<- subset(seurat_original, cells =commonCells)
+seurat_current<- subset(seurat_current, cells=commonCells)
+seurat_projected<- subset(seurat_projected, cells=commonCells)
+
+## For original vs projected: breakdown of cell types? how many match?
+original_table<-as.data.frame(table(seurat_original$ManualAnnot))
+colnames(original_table)<- c("CellType", "NumberCells")
+levels<- c("AC-like","G2M","OC-like","OPC-like","OPC-like_Alt",
+           "OPC-like_MES"     ,"OPC-like_Ribosomal","S-Phase")
+original_table$CellType<- factor(original_table$CellType,
+                                 levels=levels)
+
+projected_table<-as.data.frame(table(seurat_projected$Predictions))
+colnames(projected_table)<- c("CellType", "NumberCells")
+projected_table$CellType<- factor(projected_table$CellType,
+                                 levels=unique(projected_table$CellType)
+                                 [sort(unique(projected_table$CellType))])
+
+p1<-ggplot(original_table, aes(x="", y=NumberCells, fill=CellType))+
+  geom_bar(stat="identity")+
+  coord_polar("y", start=0)+
+  ggtitle("Original Annotation")+
+  xlab("")
+
+p2<-ggplot(projected_table, aes(x="", y=NumberCells, fill=CellType))+
+  geom_bar(stat="identity")+
+  coord_polar("y", start=0)+
+  ggtitle("Projected Annotation")+
+  xlab("")
+p1+p2
+ggsave("figures/OriginalvProjected_Breakdown.png", width=10, height=5)
+
+all_annots<-merge(seurat_original@meta.data,
+                  seurat_projected@meta.data,
+                  by=0)
+all_annots<-all_annots[,c("Row.names", "sample.x","ManualAnnot.x","Predictions")]
+all_annots$Change<- paste0(all_annots$ManualAnnot.x, "->", all_annots$Predictions)
+all_annots$Match<- ifelse(all_annots$ManualAnnot.x==all_annots$Predictions,
+                          "Match", "NoMatch")
+
+mismatchAnnots<- all_annots[all_annots$Match=="NoMatch",]
+
+df<-as.data.frame(table(mismatchAnnots$Change, mismatchAnnots$sample.x))
+colnames(df)<-c("ChangeInAnnotation", "Sample", "NCells")
+df<- df[df$NCells!=0,]
+ggplot(df, aes(x=reorder(ChangeInAnnotation,NCells, sum), 
+               y=NCells,
+               fill=Sample))+
+  geom_bar(position="stack", stat="identity")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))+
+  xlab("")+
+  ggtitle("Change in annotation from Original --> Projected")
+ggsave("figures/MismatchBetweenOriginalProjected_ChangeInAnnot.png",
+       width=10, height=4)
+
+## Ignoring any OPC changes
+noOPC<- mismatchAnnots[!(grepl("OPC", mismatchAnnots$ManualAnnot.x) & 
+                         grepl("OPC", mismatchAnnots$Predictions)),]
+
+df<-as.data.frame(table(noOPC$Change, noOPC$sample.x))
+colnames(df)<-c("ChangeInAnnotation", "Sample", "NCells")
+df<- df[df$NCells!=0,]
+ggplot(df, aes(x=reorder(ChangeInAnnotation,NCells, sum), 
+               y=NCells,
+               fill=Sample))+
+  geom_bar(position="stack", stat="identity")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))+
+  xlab("")+
+  labs(title="Change in annotation from Original --> Projected",
+       subtitle= "(no OPC > OPC)")
+ggsave("figures/MismatchBetweenOriginalProjected_ChangeInAnnot_NoOPC.png",
+       width=8, height=4)
+```
+

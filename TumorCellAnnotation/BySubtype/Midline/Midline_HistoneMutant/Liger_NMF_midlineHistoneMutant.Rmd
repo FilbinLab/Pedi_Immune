@@ -1,0 +1,305 @@
+---
+title: "LIGER iNMF"
+output: html_document
+---
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(liger)
+library(ggplot2)
+
+base_dir = "C:/Users/jenna/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/Midline_HistoneMutant/")
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+
+liger_analysis_folder = "analysis/liger/"
+liger_fig_folder = "figures/liger/"
+for (folder in c(liger_analysis_folder, liger_fig_folder)){
+  if (!dir.exists(folder)){
+    dir.create(folder)
+  }
+}
+nmf_analysis_folder = "/analysis/nmf/Merge/"
+
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+stat_helper = paste0(base_dir, script_dir, "common_stat_test.R")
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(nmf_helper)
+source(stat_helper)
+source(preprocessing)
+
+```
+
+## Read in data, then split by sample
+```{r}
+## Read in cm list, sample list, and tumor/normal annotation
+load("../analysis/midlineHistoneMut_cm_list.Robj")
+tumor_stat = readRDS("../analysis/inferCNV/seurat/midlineHistoneMut_cluster6CellsNormal_call_tumor.rds")
+samples = readRDS("../analysis/midlineHistoneMut_samples.rds")
+cm_list<-midlineHistoneMut_cm_list
+
+## Keep maligant cells
+cm<- cm_list$raw_data
+cm = cm_list$raw_data[, tumor_stat=="Malignant"]
+samples_tumor = samples[tumor_stat=="Malignant"]
+length(samples_tumor); sum(colnames(cm)==names(samples_tumor))
+
+## Split cm into list of cm, 1 for each sample
+split_cm<- list()
+for (s in unique(samples)){
+  cells<- samples[samples %in% s]
+  cm_sample<- cm[,colnames(cm) %in% names(cells)]
+  split_cm[[s]]<- cm_sample
+}
+```
+
+## Create liger object
+```{r}
+liger_obj <- createLiger(split_cm)
+```
+
+## Normalize, identify variable expressed genes, scale data
+```{r}
+liger_obj <- liger::normalize(liger_obj)
+liger_obj <- selectGenes(liger_obj)
+liger_obj <- scaleNotCenter(liger_obj)
+```
+
+
+## Optional: Use the suggestK function to determine the appropriate number of factors to use.
+## Optional: Use the suggestLambda function to find the smallest lambda for which the alignment metric stabilizes.
+## These steps take approximately ~1 hour
+```{r}
+suggestK(liger_obj) ## default 20
+suggestLambda(liger_obj, k = 30, num.cores = 4) ## default 5
+```
+
+## Joint Matrix Facotorization
+Important parameters are as follows:
+
+1. k. Integer value specifying the inner dimension of factorization, or number of factors. Higher k is recommended for datasets with more substructure. We find that a value of k in the range 20 - 40 works well for most datasets. Because this is an unsupervised, exploratory analysis, there is no single “right” value for k, and in practice, users choose k from a combination of biological prior knowledge and other information.
+
+2. lambda. This is a regularization parameter. Larger values penalize dataset-specific effects more strongly, causing the datasets to be better aligned, but possibly at the cost of higher reconstruction error. The default value is 5. We recommend using this value for most analyses, but find that it can be lowered to 1 in cases where the dataset differences are expected to be relatively small, such as scRNA-seq data from the same tissue but different individuals.
+
+3. thresh. This sets the convergence threshold. Lower values cause the algorithm to run longer. The default is 1e-6.
+
+4. max.iters. This variable sets the maximum number of iterations to perform. The default value is 30.
+
+## This step takes approximately ~10 minutes
+```{r}
+liger_obj <- optimizeALS(liger_obj, k = 6, lambda = 5)
+
+## cluster cells, perform quantile normalization by dataset, factor, and cluster
+## All performed in quantile_norm function
+liger_obj <- quantile_norm(liger_obj)
+
+## Save liger object
+save(liger_obj, file=paste0(liger_analysis_folder, "liger_obj_PreUMAP.Robj"))
+```
+
+## Run UMAP
+## Can run Louvain first, or skip that step and retain all factors
+```{r}
+## Optional: Louvain clustering
+liger_obj_louvain <- louvainCluster(liger_obj, resolution = 0.25)
+
+## Run UMAP
+liger_obj <- liger::runUMAP(liger_obj, distance = 'cosine', n_neighbors = 30, min_dist = 0.3)
+
+save(liger_obj, file=paste0(liger_analysis_folder, "liger_obj_PostUMAP_NoLouvain.Robj"))
+```
+
+
+## Plot on UMAP- colored by factors + sample
+```{r}
+all.plots <- plotByDatasetAndCluster(liger_obj, axis.labels = c('UMAP 1', 'UMAP 2'),
+                                     return.plots = T, pt.size = 1)
+all.plots[[1]]
+ggsave(paste0(liger_fig_folder, "UMAP_Sample_6Factors.png"), width=7,height=7)
+
+
+all.plots[[2]]
+ggsave(paste0(liger_fig_folder, "UMAP_AllFactors_6Factors.png"), width=7,height=7)
+
+```
+
+## Export cell assignments for use with seurat clustering
+```{r}
+liger_factorAssignments<- as.factor(as.character(liger_obj@clusters))
+
+save(liger_factorAssignments, file=paste0(liger_analysis_folder, "ligerFactor_Assignment.Robj"))
+
+```
+
+## Plot factor loaded directly onto UMAP
+## Limitation here: can only compare 1 dataset vs 1 other
+```{r}
+## Set 2 datasets to compare
+dataset1="MUV079"
+dataset2="MUV092"
+
+## saves all gene loadings plots to pdf
+pdf(paste0(liger_fig_folder, "gene_loadings_", dataset1, "vs", dataset2, ".pdf"))
+gene_loadings <- plotGeneLoadings(liger_obj, 
+                                  dataset1 = dataset1, 
+                                  dataset2=dataset2,
+                                  num.genes.show = 12, ## default 12
+                                  do.spec.plot = TRUE, 
+                                  return.plots = FALSE,
+                                  do.title = TRUE,
+                                  pval.thresh = 0.05, ## default 0.05, wilcoxon
+                                  log.fc.thresh = 1) ## default 1
+dev.off()
+```
+
+## Identify markers for each factor
+## Only identifies markers for factors that are the top factor for at least 1 cell
+```{r}
+cluster.results <- runWilcoxon(liger_obj, compare.method = "clusters")
+cluster.results_filtered<-cluster.results[cluster.results$padj<0.05 &
+                                            cluster.results$logFC>3,]
+
+save(cluster.results_filtered, file=paste0(liger_analysis_folder,
+                                           "AllFactors_FilteredMarkers.Robj"))
+```
+
+## Identify markers between each dataset, for each factor
+## These are dataset-specific markers for each factor
+## Only identifies markers for factors that are the top factor for at least 1 cell
+```{r}
+cluster.results_dataset <- runWilcoxon(liger_obj, compare.method = "datasets")
+cluster.results_dataset_filtered<-cluster.results_dataset[cluster.results_dataset$padj<0.05 &
+                                            cluster.results_dataset$logFC>3,]
+```
+
+
+## Visualize expression of top gene across samples
+```{r}
+geneToTest<- "ABHD3"
+
+PRF1 <- plotGene(liger_obj, geneToTest, 
+                 axis.labels = c('UMAP 1', 'UMAP 2'), 
+                 return.plots = T,
+                 plot.by="dataset", 
+                 pt.size = 1)
+
+cowplot::plot_grid(plotlist=PRF1)
+ggsave(paste0(liger_fig_folder, "plotGene_", geneToTest, ".png"), width=10, height=10)
+```
+
+
+## Alternative approach for annotating cells with factor
+## Score each cell using top marker genes for each factor- using scoreNmfGenes function
+```{r}
+## Optional: remove factors 7/9- very few cells score highly for them
+factor_markers<- cluster.results_filtered[cluster.results_filtered$group != "7" &
+                                            cluster.results_filtered$group != "9",]
+
+## Split by factor, then Get top 50 markers, based on p value
+
+factor_markers_list<- split(factor_markers, f= factor_markers$group)
+factor_markers_list<- lapply(factor_markers_list, function(x){
+  tmp<- x[order(x$padj),]
+  tmp[1:50,]
+})
+names(factor_markers_list)<- paste0("factor", names(factor_markers_list))
+
+## Get list of top genes for each factor
+gene_list<- lapply(factor_markers_list, function(x){na.omit(x$feature)})
+
+## center counts and get mean gene expression
+cm_center<-cm_list$center_data
+cm_center<- cm_center[,colnames(cm_center) %in% colnames(cm)]
+cm_mean<- log2(rowMeans(cm)+1)
+
+## Score each cell for factor gene set
+nmf_score = scoreNmfGenes(cm_center, cm_mean, gene_list)
+nmf_score = t(nmf_score) 
+
+num_meta_program = length(gene_list)
+nmf_score_final_t = data.frame(nmf_score)
+
+## Get top 3 factors for each cell
+for (i in 1:3){
+  nmf_score_final_t = metagene_score_signature(nmf_score_final_t, num_meta_program, i)
+}
+
+saveRDS(nmf_score_final_t, 
+        file=paste0(liger_analysis_folder, "nmf_score_NoFactor7.9", ".Rds"))
+```
+
+
+## ORA with hemispheric genesets
+## Compare with factors from previously defined metaprograms from hemispheric samples
+```{r}
+all_markers_list<-split(cluster.results_filtered, cluster.results_filtered$group )
+all_markers_list<-lapply(all_markers_list, function(x){x$feature})
+names(all_markers_list)<-paste0("Factor", names(all_markers_list))
+
+midline_genesets<-readRDS(paste0(working_dir, 
+                                 nmf_analysis_folder,
+                                 "midlinePreviousPrograms_OC.AC.OPC.MES1.rds"))
+
+tmp2 = sapply(gene_list, function(x){
+    sapply(midline_genesets, function(y){
+        fisher_test(x, y, unlist(union(midline_genesets, gene_list)))
+    })
+})
+tmp2 = data.frame(tmp2)
+tmp3<- apply(tmp2, 2, function(x) {p.adjust(x) < 0.1})
+tmp4<-apply(tmp2, 2, function(x) {p.adjust(x)})
+
+write.table(tmp4, paste0(liger_analysis_folder,
+                        "ScoreFactors_UsingPreviousNMF_padj_6Factors.txt"))
+
+```
+
+
+
+## Compare sample intergration using LIGER iNMF vs previous NMF
+```{r}
+## Make df of liger annotations, removing factors with no cells
+liger_table_annots<-table(liger_obj@cell.data$dataset, liger_obj@clusters)
+liger_table_annots<- liger_table_annots[,colSums(liger_table_annots)>0]
+
+liger_table_annots<- melt(liger_table_annots)
+colnames(liger_table_annots)<- c("Sample", "Factor", "NCells")
+liger_table_annots$Factor<- as.character(paste0("Factor", liger_table_annots$Factor))
+
+## Plot distribution of samples across factors
+liger_distr<-ggplot(liger_table_annots, aes(x=Factor, y=NCells, fill=Sample))+ 
+  geom_bar(position="stack", stat="identity")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))+
+  ggtitle("LIGER NMF: \nbreakdown of samples per factor")
+
+
+## Make df of previous NMF annotations
+
+## Read in previous scores
+NameOfMetaprogramList<-"Merge3_cluster6CellsNormal"
+nmf_score = readRDS(paste0(working_dir, nmf_analysis_folder, "nmf_score", NameOfMetaprogramList, ".rds"))
+
+## Add column denoting sample
+nmf_score$sample<- gsub("\\..*", "", rownames(nmf_score) )
+nmf_table_annots<-table(nmf_score$sample, nmf_score$signature_1)
+nmf_table_annots<- melt(nmf_table_annots)
+colnames(nmf_table_annots)<- c("Sample", "Program", "NCells")
+
+## Plot distribution of samples across programs
+nmf_distr<- ggplot(nmf_table_annots, aes(x=Program, y=NCells, fill=Sample))+ 
+  geom_bar(position="stack", stat="identity")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))+
+  ggtitle("Previous NMF: \nbreakdown of samples per program")
+
+liger_distr + nmf_distr
+ggsave(paste0(liger_fig_folder, "LigerSampleDistr_vs_NMFSampleDistr.png"), width=7, height=7)
+```
+
+```{r}
+sessionInfo()
+```
+
+
+
