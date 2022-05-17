@@ -1,0 +1,121 @@
+---
+title: "CompareProgramProportions.Rmd"
+author: "Jenna LaBelle"
+date: "11/11/2021"
+output: html_document
+---
+
+## Purpose:
+Compare proportion of cells assigned to ped NMF programs in adult vs ped myeloid cells
+
+## Approach:
+Score adult for ped myeloid programs. Assign max, then compare proportions
+
+
+```{r}
+library(Seurat) 
+library(clusterProfiler)
+library(biomaRt)
+library(stringr)
+library(ggpubr)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/02b_Myeloid/03_CompareToAdult/")
+
+analysis_dir_tmp<- paste0(working_dir, "/analysis/CompareProgramProportions_PedNMF/")
+figure_dir_tmp<- paste0(working_dir, "/figures/CompareProgramProportions_PedNMF/")
+
+if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp)};if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+```
+
+## Read in seurat object + marker genes
+Seurat object from Merge_AssessIntegration (merged adult/ped myeloid)
+```{r}
+cohort<- "pedOnly_nomuv63"
+figure_dir<- paste0(figure_dir_tmp, cohort, "/"); analysis_dir<- paste0(analysis_dir_tmp, cohort, "/")
+if(!dir.exists(figure_dir)){dir.create(figure_dir)};if(!dir.exists(analysis_dir)){dir.create(analysis_dir)}
+
+ped_rank<- 6
+seurat_obj<- readRDS(paste0("analysis/Merge_AssessIntegration/", cohort, "/myeloid_seurat_Ped.AdultGBM.IDHMut_merged.Rds"))
+
+## ped marker genes
+ped_markers<- read.csv(paste0("../01a_NMF/analysis/de.novoNMF/", cohort,  "/top_DE_genes_10Xannotated_NMF_rank", ped_rank, ".csv"))
+ped_markers<- ped_markers[,!grepl("X", colnames(ped_markers))]
+```
+
+
+
+## Score ped/adult myeloid cells for ped/adult programs, add to seurat
+```{r}
+## Norm/Center
+cm_list<-NormCenter(seurat_obj@assays$RNA@counts)
+cm_mean<- rowMeans(log2(cm_list$raw_data + 1))
+
+## create marker list
+marker_list<- split(ped_markers, f=ped_markers$cluster); marker_list<- lapply(marker_list, function(x){x$gene})
+
+## score for marker list
+scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, marker_list)))
+
+## Determine max program/score
+scores$MaxProgram<- apply(scores, 1, function(x){names(x)[which.max(x)]})
+scores$MaxScore<- apply(scores[,colnames(scores) != "MaxProgram"], 1, function(x){x[which.max(x)]})
+
+## Add to seurat object
+seurat_obj<- AddMetaData(seurat_obj, scores)
+```
+
+## Plot: max program, spread of scores in ped vs adult
+```{r}
+colors_use<-c("orange", "turquoise3", "red", "olivedrab4",  "purple", "navy" )
+names(colors_use)<- unique(seurat_obj$MaxProgram)
+
+## UMAP of max program
+p1<-DimPlot(seurat_obj, group.by = "MaxProgram")+scale_color_manual(values=colors_use)
+seurat_obj$MaxProgram_HighScore<- ifelse(seurat_obj$MaxScore>0.25, seurat_obj$MaxProgram, "ScoreTooLow")
+p2<-DimPlot(seurat_obj, group.by = "MaxProgram_HighScore")+scale_color_manual(values=c(colors_use, ScoreTooLow="grey"))
+p1+p2
+ggsave(paste0(figure_dir,"UMAP_MaxPedProgram.png" ), width=12, height=5)
+
+## Spread of scores in ped vs adult
+df<- seurat_obj@meta.data
+ggplot(df, aes(x=MaxScore, fill=Age))+
+  geom_histogram()+
+  scale_fill_manual(values=c(Adult="navy", Ped="red"))
+ggsave(paste0(figure_dir, "Histogram_scoresForMaxProgram_adult.vs.ped.png"), width=5, height=4)
+
+## Proportion of scores <.1, <.2, <.5, <1 in adult vs ped
+df_byGroup<- df %>% group_by(Age) %>% summarise(LessThan_0.1=sum(MaxScore<0.1),
+                                          LessThan_0.2=sum(MaxScore<0.2),
+                                          LessThan_0.5=sum(MaxScore<0.5),
+                                          LessThan_1=sum(MaxScore<1),
+                                          GreaterThan_1=sum(MaxScore>1)) %>% as.data.frame()
+df_byGroup<- as.data.frame(t(df_byGroup))
+colnames(df_byGroup)<- df_byGroup[1,]; df_byGroup<- df_byGroup[-1,]
+df_byGroup$Group<- rownames(df_byGroup)
+df_byGroup<- melt(df_byGroup, id="Group"); colnames(df_byGroup)<- c("Group", "Age", "nCells")
+df_byGroup$nCells<- as.numeric(df_byGroup$nCells)
+df_byGroup<- df_byGroup %>% group_by(Age) %>% mutate(perCells=nCells/sum(nCells)) %>% as.data.frame()
+
+df_byGroup$Group<- factor(df_byGroup$Group, 
+                          levels=c("GreaterThan_1", "LessThan_1", "LessThan_0.5", "LessThan_0.2", "LessThan_0.1"))
+ggplot(df_byGroup, aes(x=Age, y=perCells, fill=Group))+
+  geom_bar(stat="identity", position="stack")+
+    scale_fill_manual(values=c(GreaterThan_1= "green",
+                             LessThan_1="pink",
+                             LessThan_0.1="red",
+                             LessThan_0.2="purple",
+                             LessThan_0.5="magenta"))
+ggsave(paste0(figure_dir, "Grouping_scoresForMaxProgram_adult.vs.ped.png"), width=5, height=4)
+```
+Results: scoring for ped programs is too disparate between adult/ped- while most adult cells score above 1, their overall spread of scores is much lower than ped. Likely too big of a confounder. Will run NMF on merged adult/ped instead.
+

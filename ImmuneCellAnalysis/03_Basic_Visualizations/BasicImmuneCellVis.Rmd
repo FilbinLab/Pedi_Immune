@@ -1,0 +1,407 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+## Purpose:
+Nice plots (mainly UMAP) of immune cells- myeloid/tcell together and separate, by cell type, by sample, subtype, etc
+
+## Approach:
+Cell type annotations for tcells (CD4/CD8) based on "NMF approach"- briefly, run tcell nmf --> identify programs --> split seurat by program --> identify cd4/cd8 cluster-wise for each program. This analysis performed for ped/adult simultaneously. This analysis performed in 02a_Tcells/02_Ped.Adult/02_detailed_annot/IdentifyCD4.CD8_byNMF.Rmd
+
+
+```{r}
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/03_Basic_Visualizations/")
+
+library(Seurat)
+library(ggplot2)
+library(ggpubr)
+library(randomcoloR)
+
+
+figure_dir_tmp<- "figures/BasicVis/"; if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp)}
+tcell_data_dir<- "../02a_Tcells/02_Ped.Adult/03_Visualize.Reannotate_programs/analysis/Reannotate_programs/"
+myeloid_data_dir<- "../01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/"
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+```
+
+## Read in processed seurat objects
+```{r}
+rank_use<- "8"; sharedBy="union"; cohort<- "pedOnly_nomuv63"
+tcell_data_dir<- paste0(tcell_data_dir, "rank", rank_use, "_sharedBy", sharedBy, "/")
+myeloid_data_dir<- paste0(myeloid_data_dir, cohort, "/")
+
+figure_dir<- paste0(figure_dir_tmp, cohort, "/")
+if(!dir.exists(figure_dir)){dir.create(figure_dir)}
+
+
+## Read in seurat objects
+immune_seurat<- readRDS(paste0(myeloid_data_dir, "tcell.myeloid_seurat_harmony.Rds"))
+myeloid_seurat<- readRDS(paste0(myeloid_data_dir, "myeloid_seurat_harmony.Rds"))
+myeloid_seurat_noDC.Bcell<- readRDS(paste0(myeloid_data_dir, "myeloid_seurat_noDC.B_harmony.Rds"))
+tcell_seurat<- readRDS(paste0(tcell_data_dir, "ped_seurat_tcell_harmony.Rds"))
+cd4_seurat<- readRDS(paste0(tcell_data_dir, "ped_seurat_cd4_harmony.Rds"))
+cd8_seurat<- readRDS(paste0(tcell_data_dir, "ped_seurat_cd8_harmony.Rds"))
+adult_tcell<- readRDS(paste0(tcell_data_dir, "adult_seurat_tcell_harmony.Rds"))
+
+## Read in colors
+immune_colors<- readRDS("../plot_colors/ImmuneCell.celltypes.Rds")
+subtype_colors<-  readRDS("../plot_colors/Subtype.Rds")
+```
+
+## Plotting themes
+```{r}
+umap_theme<- function(p, colors=immune_colors){
+  p+NoLegend()+
+  scale_color_manual(values=colors[names(colors) %in% unique(seurat_plot$plotting)])+
+  theme(legend.position = "bottom",
+        legend.text = element_text(face="bold"),
+      plot.title = element_blank(),
+      axis.text = element_text(face="bold", colour = "black"),
+      axis.title = element_text(face="bold", colour = "black"))+
+  ylab("UMAP2")+xlab("UMAP1")
+}
+
+bargraph_bd_theme<- function(){
+  theme(axis.text.x = element_text(angle=45, hjust=1, color="black"),
+        axis.text = element_text(color="black", face="bold"),
+        axis.title =  element_text(color="black", face="bold"),
+        axis.text.y = element_text(color="black"),
+        legend.position = "bottom",
+        legend.title=element_blank())
+  }
+
+
+```
+
+## Additions to seurat objects for nicer plotting
+```{r}
+tcell_seurat$NiceSubtype_Merge<-gsub("-H3G34R/V", "", gsub("-HistoneWT", "", gsub("-H3K27M", "", gsub("-BCOR", "", tcell_seurat$NiceSubtype))))
+tcell_seurat$detailed_annot_withCycling_byNMF<- ifelse(tcell_seurat$detailed_annot_withCycling=="Cycling", "Cycling", 
+                                                       tcell_seurat$detailed_annot_byNMFrank8_mergedByunion)
+
+adult_tcell$detailed_annot_withCycling<- ifelse(adult_tcell$detailed_annot_withCyc.Treg.Cyto=="Cycling", "Cycling",
+                                                adult_tcell$detailed_annot_byNMFrank8_mergedByunion)
+```
+
+
+## Tcell/Myeloid together, colored by major annot
+```{r}
+## By T cell/Myeloid
+seurat_plot<- immune_seurat
+seurat_plot$plotting<- seurat_plot$broad_annot
+DimPlot(seurat_plot, group.by = "plotting", label = TRUE, label.size = 10) %>% umap_theme()
+ggsave(paste0(figure_dir, "TCellMyeloid.png"), width=6, height=5.5)
+
+## With CD4/CD8 distinction
+seurat_plot<- subset(immune_seurat, detailed_annot_byNMF != "Unclear")
+seurat_plot$plotting<- gsub("DC", "Myeloid", gsub("BCell", "Myeloid", seurat_plot$detailed_annot_byNMF))
+
+DimPlot(seurat_plot, group.by = "plotting", label=TRUE, label.size = 8) %>% umap_theme()
+ggsave(paste0(figure_dir, "CD4CD8Myeloid.png"), width=6, height=5.5)
+
+## With CD4/CD8/DC/Bcell distinction
+seurat_plot<- subset(immune_seurat, detailed_annot_byNMF != "Unclear")
+seurat_plot$plotting<- seurat_plot$detailed_annot_byNMF
+DimPlot(seurat_plot, group.by = "plotting", label=TRUE, label.size = 5) %>% umap_theme()
+ggsave(paste0(figure_dir, "CD4CD8.BcellDC.png"), width=6, height=5.5)
+
+## Add on monocyte annotation (confirmed with NMF programs)- just to explain far-clustering myeloid cluster
+## Need to increase resolution first
+seurat_plot<- FindClusters(immune_seurat, resolution = 1.5)
+seurat_plot<- subset(seurat_plot, detailed_annot_byNMF != "Unclear")
+seurat_plot$plotting<- ifelse(seurat_plot$seurat_clusters=="10", "Monocyte",seurat_plot$detailed_annot_byNMF)
+immune_colors<- c(immune_colors, Monocyte="orange")
+DimPlot(seurat_plot, group.by = "plotting", label=TRUE, label.size = 5) %>% umap_theme()
+ggsave(paste0(figure_dir, "CD4CD8.BcellDCMonocyte.png"), width=6, height=5.5)
+
+## With DC/Bcell/monocyte, but no CD4/CD8
+seurat_plot$plotting<- gsub("CD4", "Tcell", gsub("CD8", "Tcell", seurat_plot$plotting))
+DimPlot(seurat_plot, group.by = "plotting", label=TRUE, label.size = 5) %>% umap_theme()
+ggsave(paste0(figure_dir, "CD4CD8.BcellDCMonocyte_NoCD4.CD8.png"), width=6, height=5.5)
+
+## To support myeloid/tcell annotation: show myeloid marker genes
+FeaturePlot(immune_seurat, features=c( "CSF1R", "CD3G", "CD8A", "CD4"), ncol = 4, cols = c("grey", "red"))
+ggsave(paste0(figure_dir, "MyeloidTcellMarkers.png"), width=24, height=5.5)
+```
+
+
+## Tcells: CD4/CD8/Cycling 
+```{r}
+## CD4/CD8/Cycling
+## cycling distinction added on (based on non-NMF based approach, but won't change cycling cells)
+seurat_plot<- subset(tcell_seurat,detailed_annot_byNMFrank8_mergedByunion != "Unclear")
+seurat_plot$plotting<- seurat_plot$detailed_annot_withCycling_byNMF
+DimPlot(seurat_plot, group.by = "plotting", label = TRUE, label.size = 8) %>% umap_theme()
+ggsave(paste0(figure_dir, "TCell_CD4.CD8.Cycling.png"), width=6, height=5.5)
+
+
+## Treg markers: to show that they don't form a distinct cluster
+FeaturePlot(tcell_seurat, features=c("FOXP3", "IL2RA", "CTLA4"), ncol = 1, cols=c("grey", "red"))
+ggsave(paste0(figure_dir, "Tcell_TregMarkers.png"), width=6, height=18)
+```
+
+## Myeloid cells: by B cells/DC/Other
+```{r}
+seurat_plot<- myeloid_seurat;seurat_plot$plotting<- seurat_plot$detailed_annot
+DimPlot(seurat_plot, group.by = "plotting", label = TRUE, label.size = 8) %>% umap_theme()
+ggsave(paste0(figure_dir, "Myeloid_WithDC.BCells.png"), width=6, height=5.5)
+```
+
+## By sample
+```{r}
+## Both T cell /myeloid
+colors_use<- unique(immune_seurat$sampleid)
+colors_use<- distinctColorPalette(length(unique(immune_seurat$sampleid)))
+names(colors_use)<-unique(immune_seurat$sampleid)
+seurat_plot<- immune_seurat; seurat_plot$plotting<- seurat_plot$sampleid
+DimPlot(seurat_plot, group.by = "plotting", label = FALSE) %>% umap_theme(colors=colors_use)
+ggsave(paste0(figure_dir, "TCellMyeloid_Sample.png"), width=6, height=6.5)
+
+## T cells
+seurat_plot<- tcell_seurat; seurat_plot$plotting<- seurat_plot$sampleid
+DimPlot(seurat_plot, group.by = "plotting", label = FALSE) %>% umap_theme(colors=colors_use)
+ggsave(paste0(figure_dir, "Tcells_Sample.png"), width=6.5, height=5.5)
+
+## Myeloid
+seurat_plot<- myeloid_seurat; seurat_plot$plotting<- seurat_plot$sampleid
+DimPlot(seurat_plot, group.by = "plotting", label = FALSE) %>% umap_theme(colors=colors_use)
+ggsave(paste0(figure_dir, "Myeloid_Sample.png"), width=6.5, height=5.5)
+
+## Myeloid, without dc/bcells
+seurat_plot<- myeloid_seurat_noDC.Bcell; seurat_plot$plotting<- seurat_plot$sampleid
+DimPlot(seurat_plot, group.by = "plotting", label = FALSE) %>% umap_theme(colors=colors_use)
+ggsave(paste0(figure_dir, "Myeloid_Sample_noDC.Bcell.png"), width=6.5, height=5.5)
+
+```
+
+
+## By subtype
+```{r}
+## By detailed subtype
+  ## Tcell
+  seurat_plot<- tcell_seurat; seurat_plot$plotting<- seurat_plot$NiceSubtype
+  DimPlot(seurat_plot, group.by = "plotting", label = FALSE) %>% umap_theme(colors=subtype_colors) +
+    theme(legend.position = "right")
+  ggsave(paste0(figure_dir, "Tcell_Subtype.png"), width=7, height=5)
+  
+  ## Myeloid
+  seurat_plot<- myeloid_seurat_noDC.Bcell; seurat_plot$plotting<- seurat_plot$NiceSubtype
+  DimPlot(seurat_plot, group.by = "plotting", label = FALSE) %>% umap_theme(colors=subtype_colors) +
+    theme(legend.position = "right")
+  ggsave(paste0(figure_dir, "Myeloid.noBC.DC_Subtype.png"), width=7, height=5)
+
+
+## By broad subtype
+colors_use<- c(Ependymoma="magenta3",
+               `Hemispheric`="deepskyblue1",
+               `Midline`="chartreuse3")
+
+  ## Tcell
+  seurat_plot<- tcell_seurat; seurat_plot$plotting<- seurat_plot$NiceSubtype_Merge
+  DimPlot(seurat_plot, group.by = "plotting", label = FALSE) %>% umap_theme(colors=colors_use) 
+  ggsave(paste0(figure_dir, "Tcell_BroadSubtype.png"), width=6, height=5)
+
+  ## Myeloid
+  seurat_plot<- myeloid_seurat_noDC.Bcell; seurat_plot$plotting<- seurat_plot$NiceSubtype_Merge
+  DimPlot(seurat_plot, group.by = "plotting", label = FALSE) %>% umap_theme(colors=colors_use) 
+  ggsave(paste0(figure_dir, "Myeloid.noBC.DC_BroadSubtype.png"), width=6, height=5)
+
+
+```
+
+## Breakdown of cell proportions by subtype
+```{r}
+## Tcell, with cycling
+df_bd<- as.data.frame(table(tcell_seurat$NiceSubtype, tcell_seurat$detailed_annot_withCycling_byNMF))
+colnames(df_bd)<- c("Subtype", "CellType", "NCells")
+df_bd$CellType<- as.character(df_bd$CellType)
+df_bd<- df_bd[df_bd$CellType!="Unclear",]
+df_bd<- df_bd %>% group_by(Subtype) %>% mutate(CellProportion=NCells/sum(NCells)) %>% as.data.frame()
+
+ggplot(df_bd, aes(x=Subtype, y=CellProportion, fill=CellType))+
+  geom_bar(position = "stack", stat="identity") + 
+  theme_classic()+
+  bargraph_bd_theme()+
+  xlab("")+ ylab("Proportion of cell type")+
+  scale_fill_manual(values=c(immune_colors[names(immune_colors) %in% unique(df_bd$CellType)]))
+ggsave(paste0(figure_dir, "Tcell_BreakdownAcrossAllSubtypes_WithCycling.png"), width=4, height=4)
+
+
+## Tcell, by major subtype
+df_bd<- as.data.frame(table(tcell_seurat$NiceSubtype_Merge, tcell_seurat$detailed_annot_withCycling_byNMF))
+colnames(df_bd)<- c("Subtype", "CellType", "NCells")
+df_bd$CellType<- as.character(df_bd$CellType)
+df_bd<- df_bd[df_bd$CellType!="Unclear",]
+df_bd<- df_bd %>% group_by(Subtype) %>% mutate(CellProportion=NCells/sum(NCells)) %>% as.data.frame()
+
+ggplot(df_bd, aes(x=Subtype, y=CellProportion, fill=CellType))+
+  geom_bar(position = "stack", stat="identity") + 
+  theme_classic()+
+  bargraph_bd_theme()+
+  xlab("")+ ylab("Proportion of cell type")+
+  scale_fill_manual(values=c(immune_colors[names(immune_colors) %in% unique(df_bd$CellType)]))
+ggsave(paste0(figure_dir, "Tcell_BreakdownAcrossMajorSubtypes.png"), width=4, height=4)
+
+## Myeloid
+df_bd<- as.data.frame(table(myeloid_seurat$NiceSubtype, myeloid_seurat$detailed_annot))
+colnames(df_bd)<- c("Subtype", "CellType", "NCells")
+df_bd$CellType<- as.character(df_bd$CellType)
+df_bd<- df_bd %>% group_by(Subtype) %>% mutate(CellProportion=NCells/sum(NCells)) %>% as.data.frame()
+
+ggplot(df_bd, aes(x=Subtype, y=CellProportion, fill=CellType))+
+  geom_bar(position = "stack", stat="identity") + 
+  theme_classic()+
+  bargraph_bd_theme()+
+  xlab("")+ ylab("Proportion of cell type")+
+  scale_fill_manual(values=c(immune_colors[names(immune_colors) %in% unique(df_bd$CellType)]))
+ggsave(paste0(figure_dir, "Myeloid_BreakdownAcrossAllSubtypes.png"), width=4, height=4)
+
+## Myeloid- breakdown cell type by program
+df_bd<- as.data.frame(table(myeloid_seurat$NiceSubtype, myeloid_seurat$detailed_annot))
+colnames(df_bd)<- c("Subtype", "CellType", "NCells")
+df_bd$CellType<- as.character(df_bd$CellType)
+
+  ## Normalize so that all subtypes are weighted the same, normalizing for total size
+  nCells<- table(myeloid_seurat$NiceSubtype)
+  nCells_norm<- max(nCells)/nCells
+  df_bd$Norm_factor<-as.numeric(as.character(plyr::mapvalues(df_bd$Subtype, names(nCells_norm), nCells_norm)))
+  df_bd$NCells_norm<- df_bd$NCells * df_bd$Norm_factor
+
+  df_bd<- df_bd %>% group_by(CellType) %>% mutate(CellProportion=NCells_norm/sum(NCells_norm)) %>% as.data.frame()
+
+ggplot(df_bd, aes(x=CellType, y=CellProportion, fill=Subtype))+
+  geom_bar(position = "stack", stat="identity")+
+  theme_classic()+
+  bargraph_bd_theme()+
+  xlab("")+ ylab("Proportion of cell types")+
+  scale_fill_manual(values=subtype_colors)
+ggsave(paste0(figure_dir, "Myeloid_BreakdownOfCellTypes_AcrossAllSubtypes.png"), width=4, height=3)
+```
+
+## clonal vs nonclonal t cells
+```{r}
+df<- tcell_seurat@meta.data
+
+df_bd<- as.data.frame(table(df$sampleid, df$clonal))
+colnames(df_bd)<- c("Sample", "Clonality", "NCells")
+
+## Convert to proportion of cells
+df_bd <- df_bd %>% group_by(Sample) %>% mutate(PerCells=NCells/sum(NCells)) %>% as.data.frame()
+
+## Add subtype
+df_bd$Subtype<- plyr::mapvalues(df_bd$Sample, tcell_seurat$sampleid, tcell_seurat$NiceSubtype, warn_missing = FALSE)
+df_bd$Subtype<- gsub("-", "\n", gsub("Hemispheric", "Hemi", gsub("Histone", "Hist", df_bd$Subtype)))
+
+## Plot
+ggplot(df_bd, aes(x=Sample, y=PerCells, fill=Clonality))+
+  geom_bar(stat="identity", position="stack")+
+  facet_grid(cols=vars(Subtype), scale="free_x", space="free_x")+
+  theme_classic()+
+  bargraph_bd_theme()+
+  ylab("Proportion of Tcells")+
+  xlab("")+
+  scale_fill_manual(values=c(clonal="red", nonclonal="grey"))
+ggsave(paste0(figure_dir, "Tcells_clonal.vs.nonclonal.png"), width=10, height=3)
+```
+
+
+##  T cell types, with adult
+```{r}
+## Plot and save adult umap with major annotations
+seurat_plot<- subset(adult_tcell, detailed_annot_withCycling != "Unclear")
+seurat_plot$plotting<- seurat_plot$detailed_annot_withCycling
+DimPlot(seurat_plot, group.by = "plotting",label=TRUE, label.size = 5) %>% umap_theme(immune_colors)
+ggsave(paste0(figure_dir, "Adult_TCellMajorCellTypes_WithCycling.png"), width=6, height=5.5)
+
+## Bar plot of adult major annots + ped major annots. Grouped by subtype
+  ## Ped
+  df_bd<- as.data.frame(table(tcell_seurat$NiceSubtype, tcell_seurat$detailed_annot_withCycling_byNMF))
+  colnames(df_bd)<- c("Subtype", "CellType", "NCells")
+  df_bd<- df_bd[df_bd$CellType!="NA",]
+  df_bd<- df_bd %>% group_by(Subtype) %>% mutate(CellProportion=NCells/sum(NCells)) %>% as.data.frame()
+  ped_df_bd<- df_bd
+  ped_df_bd$Age<- "Ped"
+
+  ## Adult
+  adult_df_bd<- as.data.frame(table(adult_tcell$NiceSubtype, adult_tcell$detailed_annot_withCycling))
+  colnames(adult_df_bd)<- c("Subtype", "CellType", "NCells")
+  adult_df_bd<- adult_df_bd[adult_df_bd$CellType!="NA",]
+  adult_df_bd<- adult_df_bd %>% group_by(Subtype) %>% mutate(CellProportion=NCells/sum(NCells)) %>% as.data.frame()
+  adult_df_bd$Age<- "Adult"
+
+df_bd<- rbind(ped_df_bd, adult_df_bd)
+
+ggplot(df_bd, aes(x=Subtype, y=CellProportion, fill=CellType))+
+  geom_bar(position = "stack", stat="identity")+
+  theme_classic()+
+  bargraph_bd_theme()+
+  xlab("")+ ylab("Percentage of cell types")+
+  scale_fill_manual(values=immune_colors[names(immune_colors) %in% unique(df_bd$CellType)])+
+  facet_grid(cols=vars(Age), scale="free_x", space="free_x")
+ggsave(paste0(figure_dir, "CellTypeBreakdownAcrossSubtypes_WithCycling_WithAdult.png"), width=5, height=4)
+```
+
+
+
+
+## Saw poor quality after FACS for MUV92/94, ok for MUV079
+## Does the quality here reflect this?
+```{r}
+## T cells
+df<-tcell_seurat@meta.data
+df$FACS_Qual<- ifelse(df$sampleid %in% c("MUV092", "MUV094"), "LowQual", 
+                      ifelse(df$sampleid=="MUV079", "HighQual", "Unknown"))
+ggplot(df, aes(x=reorder(sampleid, nFeature_RNA, FUN=median),y=nFeature_RNA, fill=FACS_Qual))+
+  geom_boxplot()+
+  theme(axis.text.x = element_text(angle=45, hjust=1))+
+  xlab("")+
+  scale_fill_manual(values=c(LowQual="red", HighQual="green", Unknown="grey"))+
+  ggtitle("T cells: nGenes detected\nQuality by FACS")
+
+VlnPlot(tcell_seurat, group.by = "sampleid", features="nFeature_RNA")
+
+## Myeloid
+df<-myeloid_seurat@meta.data
+df$FACS_Qual<- ifelse(df$sampleid %in% c("MUV092", "MUV094"), "LowQual", 
+                      ifelse(df$sampleid=="MUV079", "HighQual", "Unknown"))
+ggplot(df, aes(x=reorder(sampleid, nFeature_RNA, FUN=median),y=nFeature_RNA, fill=FACS_Qual))+
+  geom_boxplot()+
+  theme(axis.text.x = element_text(angle=45, hjust=1))+
+  xlab("")+
+  scale_fill_manual(values=c(LowQual="red", HighQual="green", Unknown="grey"))+
+  ggtitle("T cells: nGenes detected\nQuality by FACS")
+
+```
+
+## For comparison/visualization purposes only (not used anywhere in manuscript): how does UMAP look without ANY integration?
+```{r}
+## Read in immune seurat
+immune_seurat<- readRDS(paste0(data_dir, "tcell.myeloid_seurat.Rds"))
+
+## Re-process using our standard pipeline but without any integration
+immune_meta<- immune_seurat@meta.data
+immune_seurat<- RunFullSeurat(immune_seurat@assays$RNA@counts, RunHarmony = FALSE, samples=immune_meta$sampleid)
+immune_seurat<- AddMetaData(immune_seurat, immune_meta[,!colnames(immune_meta) %in% colnames(immune_seurat@meta.data)])
+
+## plot
+immune_seurat_tmp<- subset(immune_seurat, detailed_annot != "Tcell_UnclearCD4.CD8")
+DimPlot(immune_seurat_tmp, group.by = "detailed_annot", label=TRUE, label.size = 5)+
+  scale_color_manual(values=c(CD4="navy", 
+                              CD8="cadetblue3",
+                              DC="violetred",
+                              BCell="olivedrab",
+                              Myeloid="gold3"))+
+    theme(legend.position = "bottom",
+        plot.title = element_blank())+
+  ylab("UMAP2")+xlab("UMAP1")+ NoLegend()
+```
+

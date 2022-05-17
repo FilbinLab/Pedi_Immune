@@ -1,0 +1,281 @@
+---
+title: "Identify MgTam/MoTAM"
+output: html_document
+---
+
+## Purpose:
+Identify potential Mg-derived/Mo-derived cells in myeloid cell datasets. To be used as additional layer of annotation on top of NMF
+
+## Approach:
+Score myeloid cells for MgTAM/MoTAM genesets (from adult GBM 10X), visualize spread of scores, high scorers, etc. 
+
+```{r}
+library(Seurat) 
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/02b_Myeloid/02_AdditionalAnnotation/")
+
+integration<- "" ## HarmonyInt/ or ""
+analysis_dir_tmp<- paste0(working_dir, "/analysis/MoTAM.MgTAM/", integration)
+figure_dir_tmp<- paste0(working_dir, "/figures/MoTAM.MgTAM/", integration)
+data_dir_tmp<- paste0("../../01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/",integration)
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir_tmp)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir_tmp)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+
+```
+
+## Read in ped myeloid seurat object
+```{r}
+cohort<- "pedOnly_nomuv63"
+data_dir<- paste0(data_dir_tmp, cohort, "/")
+
+figure_dir<- paste0(figure_dir_tmp, cohort, "/")
+analysis_dir<- paste0(analysis_dir_tmp, cohort, "/")
+if(!dir.exists(figure_dir)){dir.create(figure_dir,recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir,recursive = TRUE)}
+
+## Can use harmony integration JUST for visualization purposes- annotations + programs are all from original, non-integrated analysis
+## Set this to "_harmony" or ""
+use_harmony_forVis<- "_harmony"
+if(use_harmony_forVis=="_harmony"){
+  figure_dir<- paste0(figure_dir, "Harmony/"); if(!dir.exists(figure_dir)){dir.create(figure_dir)}
+  }
+
+## load ped myeloid seurat object- without DC or B cells
+seurat_obj<- readRDS(paste0(data_dir, "myeloid_seurat_noDC.B", use_harmony_forVis, ".Rds"))
+```
+
+ 
+## Marker genes
+```{r}
+## Mg: "CLEC12A", "FXYD5"; Mo: "SALL1",
+FeaturePlot(seurat_obj,
+            c("FCGR2B","FXYD6", ## moTAM
+              "VSIG4", "CH25H"), ## mGTAM
+            cols = c("lightgrey", "red"),
+            pt.size = 1,
+            ncol = 2) & NoAxes() & NoLegend()
+ggsave("moTAM_mgTAM_genes_feature.png", path=figure_dir,
+       width=6, height=6)
+```
+
+## Score macrophage and microglia program
+```{r}
+## Norm and center counts
+cm = GetAssayData(seurat_obj, slot = "counts")
+cm_norm = log2(cm/10+1)
+cm_mean = log2(rowMeans(cm)+1)
+cm_center = cm_norm-rowMeans(cm_norm)
+
+## Read in microglia and macrophage markers- top 100
+gene_set_dir<- "../../../../../../Marker_genes/"
+gene_sets = read.csv(paste0(gene_set_dir, "Nature2021Movahedi_MoTAM.vs.MgTAM.csv"))
+gene_list<- split(gene_sets, f=gene_sets$cluster)
+gene_list<- lapply(gene_list, function(x){
+  tmp<- x[order(x$avg_logFC,decreasing = TRUE),]
+  return(tmp$gene[1:25])
+})
+
+## Score for microglia/macrophage markers
+tam_score = scoreNmfGenes(cm_center, cm_mean, gene_list)
+tam_score = data.frame(t(tam_score))
+```
+ 
+## Correlation between macrophage and microglia scores
+```{r}
+ggplot(tam_score, aes(x=Mo_TAM, y=Mg_TAM)) + geom_point() +
+  labs(x="Mo_TAM score", y="Mg_TAM score") +
+  theme(axis.title=element_text(size=20),
+        axis.text=element_text(size=20))
+ggsave("MoTAM_MgTAM_correlation.png", path=figure_dir,
+       width=6, height=6)
+```
+ 
+## Add score and annotation to seurat obj
+```{r}
+seurat_obj = AddMetaData(seurat_obj, tam_score$Mg_TAM, "Mg_TAM_score")
+seurat_obj = AddMetaData(seurat_obj, tam_score$Mo_TAM, "Mo_TAM_score")
+
+## Assign as macrophage/microglia
+mg_annot = ifelse(seurat_obj$Mg_TAM_score > seurat_obj$Mo_TAM_score,
+                  "Mg_TAM", "Mo_TAM")
+
+## Alternative: only assign as macrophage/microglia if score is high enough
+mg_annot = ifelse(seurat_obj$Mg_TAM_score < 0 & seurat_obj$Mo_TAM_score < 0,
+                  "undetermined",
+                  ifelse(seurat_obj$Mg_TAM_score > seurat_obj$Mo_TAM_score,
+                        "Mg_TAM", "Mo_TAM"))
+seurat_obj = AddMetaData(seurat_obj, mg_annot, "MgMo_annot")
+
+## alternative: assign microglia/macrophage if scores are high
+score_thresh<- 0.5
+seurat_obj$AltMoMg_annot<- ifelse(seurat_obj$Mg_TAM_score>score_thresh & seurat_obj$Mo_TAM_score >score_thresh, "HighBoth",
+                                ifelse(seurat_obj$Mg_TAM_score>score_thresh, "Mg_TAM",
+                                       ifelse(seurat_obj$Mo_TAM_score>score_thresh, "Mo_TAM", "NotHighForEither")))
+
+saveRDS(seurat_obj, file=paste0(data_dir, "myeloid_seurat_noDC.B", use_harmony_forVis, ".Rds"))
+```
+ 
+## Plot microglia/macrophage classification and score
+```{r}
+## Plot annotations- only "undetermined" if score for both is too low
+DimPlot(object = seurat_obj,
+         group.by = "MgMo_annot",
+         label = FALSE,
+         pt.size = 2,
+         label.size = 8) + NoAxes()+
+  scale_color_manual(values=c(Mo_TAM="red", Mg_TAM="blue", undetermined="grey50"))
+ggsave("UMAP_MoMg_classifications.png", path=figure_dir, width=6, height=4)
+
+## Plot annotations- 
+DimPlot(object = seurat_obj,
+         group.by = "AltMoMg_annot",
+         label = FALSE,
+         pt.size = 2,
+         label.size = 8) + NoAxes()+
+  scale_color_manual(values=c(Mo_TAM="red", Mg_TAM="blue", NotHighForEither="grey",
+                              HighBoth="green"))
+ggsave(paste0("UMAP_MoMg_classifications_ScoreThresh", score_thresh, ".png"), path=figure_dir, width=6, height=4)
+
+## Plot numeric scores for microglia/macrophage
+all_plots<- lapply( c("Mg_TAM_score", "Mo_TAM_score"), function(x){
+  FeaturePlot(seurat_obj,
+            features = x)+
+  scale_color_gradient(low="white", high="red")
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=2)
+
+ggsave("tam_scores.png", path=figure_dir, width=8, height=4)
+```
+
+## Plot gradient of macrophage/microglia scores
+```{r}
+seurat_obj$MoMg_gradient<- seurat_obj$Mo_TAM_score - seurat_obj$Mg_TAM_score
+FeaturePlot(seurat_obj, features="MoMg_gradient")+
+  scale_color_gradient2(low="blue", mid="white", high="red")+
+  ggtitle("> 0 = Mo_TAM / < 0 = Mg_TAM")
+ggsave(paste0(figure_dir, "MoMg_gradient.png"), width=6, height=5)
+```
+
+
+## Do scores for NMF programs correlate with microglia/macrophage scores?
+```{r}
+## Read in scores for all NMF programs, for all ranks
+rank_use<-6
+all_scores<- readRDS(paste0("../01a_NMF/analysis/de.novoNMF/", cohort, "/NMF_scores_annotByAdult10X_rank6-6.Rds"))
+scores<- all_scores[[paste0("rank", rank_use)]]
+
+## Read in annotations- these annotations are based on correlation with adult GBM 10X (see AdultGBM10X_AnnotatePed.Rmd) EXCEPT for Inflammatory and Stress_response. These 2 programs do not exist in adult 10X dataset, and are based on correlation with "original" myeloid programs (see NMF/Myeloid/NMF.Rmd)
+#annotations<- readRDS(paste0("analysis/GBM.10X_AnnotatePed/", "PedNMFrank", rank_use, "_RenamedByGBM10XCorrelation.Rds"))
+
+## Rename scores with annotations from 10x
+#colnames(scores)<- plyr::mapvalues(colnames(scores), annotations, names(annotations))
+#scores$MaxProgram<- plyr::mapvalues(scores$MaxProgram, annotations, names(annotations))
+
+## Add on microglia/macrophage score
+scores$moTAM_score<- as.numeric(plyr::mapvalues(rownames(scores), colnames(seurat_obj), seurat_obj$Mo_TAM_score))
+scores$mgTAM_score<- as.numeric(plyr::mapvalues(rownames(scores), colnames(seurat_obj), seurat_obj$Mg_TAM_score))
+
+## Cycle through each program, plotting correlation with macrophage and microglia scores
+all_plots<-lapply(colnames(all_scores$rank6), function(x){
+  tmp<- scores[,c(x, "moTAM_score", "mgTAM_score")]
+  colnames(tmp)<- c("program_score", "moTAM_score", "mgTAM_score")
+  p1<- ggplot(tmp, aes(x=program_score, y=moTAM_score))+geom_point(color="red")+ggtitle(paste0("MoTAM vs ", x))
+  p2<- ggplot(tmp, aes(x=program_score, y=mgTAM_score))+geom_point(color="blue")+ggtitle(paste0("MgTAM vs ", x))
+  p1.2<-cowplot::plot_grid(plotlist=list(p1, p2), ncol = 2)
+  return(p1.2)
+})
+cowplot::plot_grid(plotlist = all_plots, ncol = 1)
+ggsave(paste0(figure_dir, "moTAM.mgTAM_Scores_vs_nmfScores.png"), width=8, height=20)
+
+
+## Alternative- standard correlation heatmap
+scores_tmp<- scores[,!colnames(scores) %in%c("MaxProgram", "MaxScore")]
+
+scores_factor_hc = clusterNmfFactors(scores_tmp)
+scores_factor_cor = scores_factor_hc$cor_coef[scores_factor_hc$hc_obj$order, scores_factor_hc$hc_obj$order]
+
+  ## Heatmap of correlations
+  hm_colors = rev((brewer.pal(n=9, name="RdBu")))
+  hm_colors = colorRampPalette(colors = hm_colors)
+  pheatmap(scores_factor_cor, color = hm_colors(100), 
+           cluster_rows = F, cluster_cols = F, 
+           annotation_names_row = F, annotation_names_col =T,
+           show_rownames = T, show_colnames = F,
+           filename = paste0(figure_dir, "Corr_PedNMFrank", rank_use, "MgTAM.MoTAM.png"),
+           width = 8, height = 4)
+  
+  ## Dendrogram of hierarchical clustering 
+  jpeg(filename=paste0( figure_dir, "HC_PedNMFrank", rank_use, "MgTAM.MoTAM.png"), width = 400, height = 600)
+  plot(scores_factor_hc$hc_obj)
+  dev.off()
+```
+
+## For each program, subset to cells scoring highest for that program. Then plot their Mg_TAM vs their Mo_TAM scores
+```{r}
+rank_use<-6
+colors_use<-c("purple","turquoise3", "red", "orange", "navy", "olivedrab4"  )
+names(colors_use)<- as.character(unique(myeloid_seurat@meta.data[[paste0("NMF_rank", rank_use, "_annotByAdult10X")]]))
+
+
+## Read in scores for all NMF programs, for all ranks
+all_scores<- readRDS(paste0("../01a_NMF/analysis/de.novoNMF/", cohort, "/NMF_scores_annotByAdult10X_rank6-6.Rds"))
+scores<- all_scores[[paste0("rank", rank_use)]]
+programs<-colnames(scores)[!grepl("Max", colnames(scores))]
+
+
+
+## Add on microglia/macrophage score
+scores$moTAM_score<- as.numeric(plyr::mapvalues(rownames(scores), colnames(seurat_obj), seurat_obj$Mo_TAM_score))
+scores$mgTAM_score<- as.numeric(plyr::mapvalues(rownames(scores), colnames(seurat_obj), seurat_obj$Mg_TAM_score))
+
+## cycle through each program, subset to those cells, plot moTAM vs MgTAM
+all_plots<- lapply(programs, function(x){
+  df<- scores[scores$MaxProgram==x, c("moTAM_score", "mgTAM_score")]
+  ggplot(df, aes(x=moTAM_score, y=mgTAM_score))+
+    geom_point(color=colors_use[x])+
+    ggtitle(x)+
+    ylim(-2,2)+xlim(-1, 1)+
+    geom_hline(yintercept = 0)+geom_vline(xintercept = 0)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "Mo.vs.Mg_scores_ByMaxNMFProgram.png"), width=9, height=7)
+```
+
+## Histogram of program scores, colored by mg_tam/mo_tam distinction
+```{r}
+## Read in scores for programs
+rank_use<- 6
+all_scores<- readRDS(paste0("../01a_NMF/analysis/de.novoNMF/",cohort,
+                            "/NMF_scores_annotByAdult10X_rank6-6", ".Rds"))
+scores<- all_scores[[paste0("rank", rank_use)]]
+programs<- colnames(scores[!grepl("Max", colnames(scores))])
+
+## Add on max mo_tam/mg_tam
+scores$MM_annot<- plyr::mapvalues(rownames(scores), colnames(seurat_obj), seurat_obj$MgMo_annot)
+
+
+
+## plot
+all_plots<- lapply(programs, function(x){
+  df<- scores[,c(x, "MM_annot")]
+  colnames(df)<- c("ProgramScore", "MM_annot")
+  p<- ggplot(df, aes(x=ProgramScore, fill=MM_annot))+
+    geom_histogram()+
+    scale_fill_manual(values=c(Mg_TAM="blue", Mo_TAM="red", undetermined="grey"))+
+    ggtitle(x)
+    return(p)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "Histogram_ProgramScores.png"), width=15, height=6)
+```

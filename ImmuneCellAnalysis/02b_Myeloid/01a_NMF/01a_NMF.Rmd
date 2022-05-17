@@ -1,0 +1,328 @@
+---
+title: "NMF.Rmd"
+author: "Jenna LaBelle"
+date: "11/11/2021"
+output: html_document
+---
+
+## Purpose:
+Identify metaprograms for myeloid cells
+
+## Approach:
+Run de novo NMF (10x repeats) for pediatric myeloid. 
+
+```{r}
+library(Seurat) 
+library(clusterProfiler)
+library(biomaRt)
+library(stringr)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/02b_Myeloid/01a_NMF/")
+
+integration<- "HarmonyInt/" ## HarmonyInt/ or ""
+analysis_dir_tmp<- paste0(working_dir, "/analysis/de.novoNMF/", integration, "/")
+figure_dir_tmp<- paste0(working_dir, "/figures/de.novoNMF/", integration, "/")
+
+if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp)};if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+library(reticulate) 
+use_python("/Users/jlabelle/miniconda3/bin/python", required = T)  # specify python in my conda env for scrublet
+use_condaenv("base", conda = "/Users/jlabelle/miniconda3/condabin/conda")  # reticulate library to load the conda environnment for running
+library(Seurat)
+
+source(paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/", "/Scripts/plotutils.R"))
+source(paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/", "/Scripts/seurat3utils.R"))
+source(paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/", "/Scripts/color.R"))
+
+tests <- c("wilcox", "t", "roc", "MAST", "bimod")
+test <- tests[2]
+```
+
+## Read in seurat object + original markers + original annotations
+```{r}
+cohort<-"pedOnly_nomuv63"
+
+## Current seurat object
+myeloid_seurat<-readRDS(paste0("../../01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/",integration, "/",
+                               cohort, "/myeloid_seurat_noDC.B.Rds"))
+
+## Original seurat object (with cell annotations)
+backup<- myeloid_seurat
+load("../../../Preprocessing_ByOrr/Preprocessing/analysis/WithNewSamples/Myeloid_seurat_obj.Robj")
+original_myeloid_seurat<- myeloid_seurat
+myeloid_seurat<- backup; rm(backup)
+
+## Original myeloid NMF marker genes
+original_markers<- read.csv("../../../Preprocessing_ByOrr/data/pedbrain_immune_Myeloid_top_DE_genes_NMF_rank6.csv",
+                            row.names = "X")
+
+analysis_dir<- paste0(analysis_dir_tmp, cohort, "/")
+figure_dir<- paste0(figure_dir_tmp, cohort, "/")
+if(!dir.exists(figure_dir)){dir.create(figure_dir)};if(!dir.exists(analysis_dir)){dir.create(analysis_dir)}
+```
+
+## Clustering using non-negative matrix factorization (NMF)
+Cluster data using NMF with a range of ranks. The rank is the number of metagenes and the number of clusters. The choice of the rank is heuristic. For each clustering, we also calculate DE genes.
+```{r NMF, eval = F}
+# Vector of ranks for which to calculate NMF.
+rank <- 5:7
+
+# Identify variable genes within this cell subset.
+var.genes <- SelectIntegrationFeatures(SplitObject(myeloid_seurat, split.by = "sampleid"), nfeatures = 2000, verbose = TRUE,
+                                       fvf.nfeatures = 2000, selection.method = "vst")
+
+VariableFeatures(myeloid_seurat) <- var.genes
+
+# Number of variable genes
+print(length(VariableFeatures(myeloid_seurat)))
+
+# Perform 10 NMF runs for each value of rank r.
+x <- as.matrix(myeloid_seurat[['RNA']][VariableFeatures(myeloid_seurat), ])
+x <- x[which(rowSums(x) > 0), ]  # remove any rows filled with 0 (just in case these exist)
+
+estim.r <- nmf(x, rank = rank, method = "brunet", nrun = 50, seed = 123456, .options = "tvP")
+png(paste0(figure_dir, "_NMF_plot_rank.png"), width = 2000, height = 1000, res = 100)
+plot(estim.r)
+dev.off()
+
+# Iterate over different ranks and look at clustering.
+for (i in seq(rank)) {
+  r <- rank[i]
+  
+  # Plot coefficient values of metagenes for each cell.
+  png(paste0(figure_dir, "_NMF_coefmap_rank", r, ".png"), width = 2000, height = 1000, res = 100)
+  coefmap(estim.r$fit[[i]], Colv=T)
+  dev.off()
+
+  # Show genes contributing the most to each metagene (factor). 
+  # Remember, this is limited to the variable genes if that was the input to NMF.
+  for (j in seq(r)) {
+    top.features <- names(sort(estim.r$fit[[i]]@fit@W[, j], decreasing = T)[1:10])
+    print(paste(top.features, collapse = " "))
+  }
+  s <- extractFeatures(estim.r$fit[[i]], 10L)
+  for (j in seq(r)) {
+    top.features <- rownames(estim.r$fit[[i]]@fit@W)[s[[j]]]
+    print(paste(top.features, collapse = " "))
+  }
+
+  # Plot NMF residuals.
+  png(paste0(figure_dir, "_NMF_residuals_rank", r, ".png"), width = 2000, height = 1000, res = 100)
+  plot(estim.r$fit[[i]])
+  dev.off()
+
+  # Check coefficient matrix has cell names in same order as Seurat object myeloid_seurat.
+  H <- estim.r$fit[[i]]@fit@H
+  all.equal(as.integer(as.character(predict(estim.r$fit[[i]], what = "samples"))), as.integer(apply(H, 2, which.max)))
+  all.equal(colnames(H), colnames(myeloid_seurat))
+  all.equal(rownames(estim.r$fit[[i]]@fit@W), VariableFeatures(myeloid_seurat))
+  
+  # Cluster cells based on maximum coefficient for metagene.
+  myeloid_seurat[[paste0("NMF_rank", r)]] <- predict(estim.r$fit[[i]], what = "samples")
+  Idents(myeloid_seurat) <- paste0("NMF_rank", r)
+
+  # UMAP visualization and myeloid and myeloid expression across clusters and find DE genes.
+  DimPlot(myeloid_seurat, reduction = "umap", cols = material.heat(n_distinct(Idents(myeloid_seurat))), label = T)
+  ggsave(paste0(figure_dir,  "UMAP_NMF_rank", r, ".png"), width = 6, height = 6)
+  VlnPlot(myeloid_seurat, features = c("CSF1R", "CD3G"), cols = material.heat(n_distinct(Idents(myeloid_seurat))), 
+          ncol = 1, pt.size = 0.5) 
+  ggsave(paste0(figure_dir, "vln_NMF_rank", r, ".png"), width = 8, height = 8)
+  
+  # Find differentially expressed genes for each cluster.
+  myeloid_seurat.markers <- FindAllMarkers(myeloid_seurat, min.pct = 0.1, logfc.threshold = 0.5, 
+                                           max.cells.per.ident = 1500, test.use = test, 
+                                           return.thresh = 0.1 / nrow(myeloid_seurat), verbose = T)
+  top10genes <- myeloid_seurat.markers %>% filter(avg_log2FC > 0) %>% group_by(cluster) %>% top_n(10, avg_log2FC)
+  top100genes <- myeloid_seurat.markers %>% filter(avg_log2FC > 0) %>% group_by(cluster) %>% top_n(100, avg_log2FC)
+  
+  # Write cluster markers to csv file.
+  write.csv(top100genes, file = paste0(analysis_dir,  "top_DE_genes_NMF_rank", r, ".csv"))
+  myeloid_seurat <- ScaleData(myeloid_seurat, features = c(top10genes$gene), do.center = T, do.scale = F)
+  DoHeatmap(myeloid_seurat, features = top10genes$gene) + scale_fill_distiller(palette = "RdYlBu")
+  ggsave(paste0(figure_dir,  "DE_genes_expression_rank", r, ".png"), width = 18, height = 24)
+}
+
+
+saveRDS(estim.r, file=paste0(analysis_dir, "estimR_rank5-7.Rds"))
+saveRDS(myeloid_seurat, file=paste0("../../01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/",integration, "/",
+                               cohort, "/myeloid_seurat_noDC.B.Rds"))
+```
+
+## Correlate with original programs to help annotate new programs (not used downstream)
+```{r}
+## Norm/center current cm
+cm_list<- NormCenter(myeloid_seurat@assays$RNA@counts)
+cm_mean<- log2(rowMeans(cm_list$raw_data)+1)
+
+## Rename previous NMF programs --> annotations
+original_markers<- split(original_markers, f=original_markers$cluster)
+original_markers<- lapply(original_markers, function(x){x$gene})
+nmf_annots<- c(1:6)
+names(nmf_annots)<- c("MES_Mono", "RiboActive", "Stress_Response", "IFN_Response", "Phago_Lipid_Mg", "Inflammatory")
+names(original_markers)<- plyr::mapvalues(names(original_markers), nmf_annots, names(nmf_annots))
+
+## Try for rank 5-7
+ranks<- 5:7
+all_scores<-list()
+for(rank in ranks){
+  print(rank)
+  
+  ## Read in current marker genes- rank 6. Convert to list
+  current_markers<- read.csv(paste0(analysis_dir, "top_DE_genes_NMF_rank", rank, ".csv"))
+  current_markers<- split(current_markers, f=current_markers$cluster)
+  current_markers<- lapply(current_markers, function(x){x$gene})
+  names(current_markers)<- paste0("NewNMF_", names(current_markers))
+  
+  ## Score current cm for both
+  all_markers<- c(current_markers, original_markers)
+  scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, all_markers)))
+  all_scores[[paste0("rank", rank)]]<- scores
+  
+  ## Correlate and plot heatmap
+  scores_factor_hc = clusterNmfFactors(scores)
+  scores_factor_cor = scores_factor_hc$cor_coef[scores_factor_hc$hc_obj$order, scores_factor_hc$hc_obj$order]
+  
+  ## Heatmap of correlations
+  hm_colors = rev((brewer.pal(n=9, name="RdBu")))
+  hm_colors = colorRampPalette(colors = hm_colors)
+  pheatmap(scores_factor_cor, color = hm_colors(100), 
+           cluster_rows = F, cluster_cols = F, 
+           annotation_names_row = F, annotation_names_col =T,
+           show_rownames = T, show_colnames = F,
+           filename = paste0(figure_dir, "Cor_NewNMFrank", rank, "_OriginalPrograms.png"),
+           width = 8, height = 4)
+  
+  ## Dendrogram of hierarchical clustering 
+  jpeg(filename=paste0(figure_dir, "nmf_factors_hc", rank, ".png"), width = 400, height = 600)
+  plot(scores_factor_hc$hc_obj)
+  dev.off()
+  
+}
+
+
+saveRDS(all_scores, file=paste0(analysis_dir, "scores_NewNMF.OriginalPrograms_rank5-7.Rds"))
+```
+
+## Assign each new program to highest correlated previous program
+## However- the original analysis included Bcells and DC. This seems to change annotation significantly
+## These annotations may not be used downstream.
+Current approach: use original programs to annotate ONLY Stress_Response and Inflammatory. Leave others as NMF1/NMF2, etc
+Then correlate with adult GBM 10x (in AdultGBM10X_AnnotatePed.Rmd) to annotate remaining programs
+
+## Annotate based on correlation with original (for Inflammatory and Stress_Response)
+```{r}
+ranks<-6:7
+
+  ## pedOnly
+  annot_by_rank<- list(rank5=c("NMF1", "Inflammatory", "NMF3", "Stress_Response", "NMF5"),
+                       rank6=c("NMF1", "Inflammatory", "Stress_Response", "NMF4", "NMF5", "NMF6"),
+                       rank7=c("NMF1", "Inflammatory", "NMF3","Stress_Response", "NMF5", "NMF6", "NMF7"),
+                       rank8=c("NMF1", "NMF2","Inflammatory", "MES_Mono", "NMF5", "Stress_Response","NMF7", "IFN_Response"),
+                       rank9=c("IFN_Response", "NMF2", "Stress_Response", "NMF4","Inflammatory", "NMF6", "MES_Mono", "NMF8", "RiboActive"))
+  
+  ## pedOnly_nomuv63.withmuv91
+  annot_by_rank<- list(rank6=c("Inflammatory", "NMF2", "NMF3", "Stress_Response", "NMF5", "NMF6"),
+                       rank7=c("NMF1", "NMF2", "NMF3", "Stress_Response", "NMF5", "NMF6", "Inflammatory"))
+  
+  ## pedOnly_nomuv63
+  annot_by_rank<- list(rank6=c("NMF1", "NMF2", "NMF3", "Stress_Response", "NMF5", "Inflammatory"),
+                       rank7=c("Stress_Response", "NMF2", "NMF3", "NMF4", "Inflammatory", "NMF6", "NMF7"))
+  
+  ## pedOnly_novmuv63 + harmony integration
+  annot_by_rank<- list(rank6=c("NMF1", "NMF2", "NMF3", "NMF4", "Stress_Response", "NMF6"),
+                       rank7=c("NMF1", "NMF2", "Inflammatory", "NMF4", "NMF5", "NMF6", "Stress_Response"))
+  
+
+for(rank in ranks){
+  print(rank)
+  
+  ## Read in NMF marker genes
+  marker_genes<- read.csv(paste0(analysis_dir,  "top_DE_genes_NMF_rank", rank, ".csv"))
+  
+  ## Annotate
+  annots<- annot_by_rank[[paste0("rank", rank)]]
+  names(annots)<- paste0(1:rank)
+  
+  marker_genes$cluster<- plyr::mapvalues(marker_genes$cluster,  names(annots),annots)
+  myeloid_seurat@meta.data[[paste0("NMF_rank", rank, "_annot")]]<- plyr::mapvalues(myeloid_seurat@meta.data[[paste0("NMF_rank",
+                                                                                                                    rank)]],
+                                                                                    names(annots),annots)
+  
+  ## Save marker genes with annotations
+  write.csv(marker_genes, file=paste0(analysis_dir,  "top_DE_genes_annotated_NMF_rank", rank, ".csv"))
+}
+
+
+saveRDS(myeloid_seurat, file=paste0("../../01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/",integration, "/",
+                               cohort, "/myeloid_seurat_noDC.B.Rds"))
+
+## Save annotations
+annot_by_rank_named<- lapply(annot_by_rank, function(x){names(x)<-paste0("NMF", 1:length(x)); return(x)})
+saveRDS(annot_by_rank_named, file=paste0(analysis_dir, "NMF_annotations_rank", ranks[1], "-", ranks[length(ranks)], ".Rds"))
+
+```
+
+
+
+## Alternative to using NMF to directly assign programs to cell: score cells for NMF marker genes, then assign max program
+This may be preferrable to using NMF assignments directly, as downstream comparisons to adult/etc will involve scoring cells
+Score cells for each rank, assign max, add to seurat
+```{r}
+ranks<- 6:7
+
+cm_list<-NormCenter(myeloid_seurat@assays$RNA@counts)
+cm_mean<- rowMeans(log2(cm_list$raw_data + 1))
+all_scores<- list()
+for(rank in ranks){
+  print(rank)
+
+  ## Read in marker genes with annotations
+  marker_genes<- read.csv(paste0(analysis_dir,  "top_DE_genes_annotated_NMF_rank", rank, ".csv"))
+  marker_genes<- split(marker_genes, f=marker_genes$cluster); marker_genes<- lapply(marker_genes, function(x){x$gene})
+  
+  ## score cells
+  scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, marker_genes)))
+  
+  ## Identify max program/score
+  scores$MaxProgram<- apply(scores, 1, function(x){names(x)[which.max(x)]})
+  scores$MaxScore<- apply(scores[,colnames(scores)!="MaxProgram"], 1, function(x){x[which.max(x)]})
+  all_scores[[paste0("rank", rank)]]<- scores
+  
+  ## Add to seurat object
+  myeloid_seurat@meta.data[[paste0("NMF_rank", rank, "byScore_annot")]]<- plyr::mapvalues(colnames(myeloid_seurat),
+                                                                               rownames(scores), scores$MaxProgram)
+  myeloid_seurat@meta.data[[paste0("NMF_rank", rank, "byScore_score")]]<- plyr::mapvalues(colnames(myeloid_seurat),
+                                                                              rownames(scores), scores$MaxScore)
+  
+}
+
+saveRDS(myeloid_seurat, file=paste0("../../01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/",integration, "/",
+                               cohort, "/myeloid_seurat_noDC.B.Rds"))
+saveRDS(all_scores, file=paste0(analysis_dir, "NMF_scores_rank",ranks[1], "-", ranks[length(ranks)],".Rds"))
+```
+
+
+
+## For non-harmony integrated ONLY: integrate with harmony, then add on non-harmony-integrated annotations
+```{r}
+noInt_seurat<- readRDS(paste0("../../01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/",
+                               cohort, "/myeloid_seurat_noDC.B.Rds"))
+
+## Run harmony integration
+noInt_meta<- noInt_seurat@meta.data
+harmony_seurat<- RunFullSeurat(cm=noInt_seurat@assays$RNA@counts, RunHarmony = TRUE, samples=noInt_meta$sampleid)
+harmony_seurat<- AddMetaData(harmony_seurat, noInt_meta[,!colnames(noInt_meta) %in% colnames(harmony_seurat@meta.data)])
+
+saveRDS(harmony_seurat, file=paste0("../../01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/",
+                               cohort, "/myeloid_seurat_noDC.B_harmony.Rds"))
+```
+

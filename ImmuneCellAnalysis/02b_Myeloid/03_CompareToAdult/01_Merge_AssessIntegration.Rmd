@@ -1,0 +1,209 @@
+---
+title: "Merge_AssessIntegration.Rmd"
+author: "Jenna LaBelle"
+date: "11/11/2021"
+output: html_document
+---
+
+## Purpose:
+Assess how well adult/ped myeloid cells integrate- do they form separate clusters?
+
+## Approach:
+Merge ped/adult (gbm and IDHmut) into a single seurat object, look at integration on UMAP
+
+```{r}
+library(Seurat) 
+library(clusterProfiler)
+library(biomaRt)
+library(stringr)
+library(ggpubr)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/02b_Myeloid/03_CompareToAdult/")
+
+integration<- ""
+analysis_dir_tmp<- paste0(working_dir, "/analysis/Merge_AssessIntegration/", integration)
+figure_dir_tmp<- paste0(working_dir, "/figures/Merge_AssessIntegration/", integration)
+data_dir_tmp<- paste0("../../01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/",integration)
+
+if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp)};if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+```
+
+## Read in seurat objects
+```{r}
+cohort<- "pedOnly_nomuv63"
+adult_withMUV<- FALSE ## adult cohort with just published datasetes (FALSE) or with our 4 adult samples (TRUE)
+
+figure_dir<- paste0(figure_dir_tmp, cohort, "/", paste0("adult_withMUV.", adult_withMUV), "/")
+analysis_dir<- paste0(analysis_dir_tmp, cohort, "/", paste0("adult_withMUV.", adult_withMUV), "/")
+data_dir<- paste0(data_dir_tmp, cohort, "/")
+
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir)}
+
+## ped seurat object
+use_harmony_forVis<- ""
+ped_seurat<-readRDS(paste0(data_dir, "myeloid_seurat_noDC.B",use_harmony_forVis, ".Rds"))
+
+## adult (GBM and IDHmut; smartseq2)
+if(adult_withMUV){
+  adult_seurat<- readRDS(paste0("../../01_Preprocessing/03_PreprocessAdultDatasets/", 
+                                "analysis/Preprocess_AdultMyeloid/",
+                                "adult_myeloid_seurat_PublishedGBM.IDHmut.Filbin.Rds"))
+}else{
+  load(paste0("../../01_Preprocessing/03_PreprocessAdultDatasets/", 
+                                "analysis/Preprocess_AdultMyeloid/", "GBMNeftel_IDHmut2018_myeloid_merged_seurat.Robj"))
+  #adult_seurat<- gbm_idhmut_myeloid_seurat; rm(gbm_idhmut_myeloid_seurat)
+  adult_meta$NiceSubtype<- adult_meta$TumorType
+}
+
+```
+
+## Merge into single seurat object
+```{r}
+## Create merged metadata
+ped_meta<- ped_seurat@meta.data; adult_meta<- adult_seurat@meta.data
+ped_meta$Age<- "Ped"; adult_meta$Age<- "Adult"
+ped_meta<- ped_meta[,colnames(ped_meta) %in% colnames(adult_meta)];adult_meta<- adult_meta[,colnames(adult_meta) %in% colnames(ped_meta)]
+meta<- rbind(ped_meta, adult_meta)
+
+## Merge count matrices
+ped_cm<- ped_seurat@assays$RNA@counts; adult_cm<- adult_seurat@assays$RNA@counts
+ped_cm<- ped_cm[rownames(adult_cm),]
+sum(rownames(ped_cm) == rownames(adult_cm)); nrow(ped_cm); nrow(adult_cm)
+cm<- cbind(ped_cm, adult_cm)
+sum(colnames(cm)==rownames(meta)); ncol(cm); nrow(meta)
+
+## Run seurat pipeline (for harmony integration analysis, run both with and without integration. Want to know if cells still don't cluster by age even without any integration)
+if(integration=="HarmonyInt/"){
+  library(harmony)
+  seurat_obj<- RunFullSeurat(cm=cm,RunHarmony=TRUE,  samples = meta$sampleid)
+  seurat_obj_noInt<- RunFullSeurat(cm=cm,RunHarmony=FALSE,  samples = meta$sampleid)
+}else{
+  seurat_obj<- RunFullSeurat_Immune(cm=cm, samples = meta$sampleid)
+}
+
+## Add on metadata
+if(exists("seurat_obj_noInt")){
+  seurat_obj_noInt<- AddMetaData(seurat_obj_noInt, meta[,!colnames(meta) %in% colnames(seurat_obj_noInt@meta.data)])
+}
+seurat_obj<- AddMetaData(seurat_obj, meta[,!colnames(meta) %in% colnames(seurat_obj@meta.data)])
+
+if(exists("seurat_obj_noInt")){
+  saveRDS(seurat_obj_noInt, file=paste0(analysis_dir, "myeloid_seurat_Ped.AdultGBM.IDHMut_merged_noInt.Rds"))
+}
+
+saveRDS(seurat_obj, file=paste0(analysis_dir, "myeloid_seurat_Ped.AdultGBM.IDHMut_merged.Rds"))
+```
+
+## Plot to assess integration
+```{r}
+seurat_obj<- readRDS(paste0(analysis_dir, "myeloid_seurat_Ped.AdultGBM.IDHMut_merged.Rds"))
+figure_append<- ""
+
+## reduce resolution- aim for 6-8 clusters to reflect heterogeneity found in NMF/Liger
+if(integration=="HarmonyInt/"){
+  seurat_obj<-FindClusters(seurat_obj, resolution = 0.5) ## .32 for without integration
+}else{
+  seurat_obj<- FindClusters(seurat_obj, resolution = .7, algorithm = 4, random.seed = 100)
+}
+
+
+## UMAP- age/clusters
+DimPlot(seurat_obj, group.by = "Age")+
+  scale_color_manual(values=c(Adult="navy", Ped="red"))
+ggsave(paste0(figure_dir, "UMAP_ByAge", figure_append, ".png"), width=6, height=5)
+
+DimPlot(seurat_obj, label=TRUE)+NoLegend()
+ggsave(paste0(figure_dir, "UMAP_ByCluster_res0.5", figure_append, ".png"), width=6, height=6)
+
+```
+
+## composition of clusters by age
+```{r}
+cluster_bd<- as.data.frame(table(seurat_obj$Age, seurat_obj$seurat_clusters))
+colnames(cluster_bd)<- c("Age", "Cluster", "NCells")
+
+## Add total adult/ped frequency for references
+total_bd<- as.data.frame(table(seurat_obj$Age))
+colnames(total_bd)<- c("Age", "NCells")
+total_bd$Cluster<- "Total"
+total_bd<- total_bd[,c("Age", "Cluster", "NCells")]
+cluster_bd<- rbind(total_bd, cluster_bd)
+
+## Convert NCells to percentage
+cluster_bd<- cluster_bd %>% group_by(Cluster) %>% mutate(CellPercentage=NCells/sum(NCells)) %>% as.data.frame()
+
+## plot
+#cluster_bd$Cluster<- factor(cluster_bd$Cluster, levels=c("Total", variable_levels))
+ggplot(cluster_bd, aes(x=Cluster, y=CellPercentage, fill=Age))+
+  geom_bar(position="stack", stat="identity")+
+  scale_fill_manual(values=c(Adult="navy", Ped="red"))+
+  theme_classic()+
+  theme(axis.text = element_text(face="bold", size=12, color="black"),
+        axis.title = element_text(face="bold", size=12,color="black"))+
+  ylab("Percentage of adult/pediatric cells \nper cluster")+
+  xlab("")+
+  geom_hline(yintercept = cluster_bd[cluster_bd$Cluster=="Total" & cluster_bd$Age=="Ped", "CellPercentage"],
+             linetype="dashed", size=1)
+ggsave(paste0(figure_dir, "ProportionOfAdultPed_PerCluster.png"), width=6, height=4)
+
+## alternative plot
+cluster_bdByAge<- cluster_bd[cluster_bd$Cluster!="Total",] ## cluster_bd from previous chunk
+cluster_bdByAge<- cluster_bdByAge %>% group_by(Age) %>% mutate(CellPercentage_ByAge=NCells/sum(NCells)) %>% as.data.frame()
+
+
+#cluster_bdByAge$Cluster<- factor(as.character(cluster_bdByAge$Cluster), levels=c(variable_levels))
+ggplot(cluster_bdByAge, aes(x=Cluster, y=CellPercentage_ByAge, fill=Age))+
+  geom_bar(position="dodge", stat="identity")+
+  scale_fill_manual(values=c(Adult="navy", Ped="red"))+
+  theme_classic()+
+  theme(axis.text = element_text(face="bold", size=12, color="black"),
+        axis.title = element_text(face="bold", size=12,color="black"))+
+  ylab("Percentage of adult/pediatric cells \nper cluster")+
+  xlab("")
+ggsave(paste0(figure_dir, "ProportionOfAdultPed_PerCluster_SideBySide.png"), width=6, height=4)
+
+
+```
+results: no age-specific clusters are formed. suggests the possibility that while there are differences in PROPORTION of cell states, there are not any totally age-specific programs. This informs how we compare programs in adult/ped- don't expect age-specific programs, so can either use the ped programs directly, or run NMF on ped/adult together and use those.
+
+To help determine whether to use ped programs directly OR run NMF on ped adult together:
+Look at where ped programs fall in this UMAP/on these clusters. How well do they line up?
+```{r}
+rank_use<- 7
+
+## Subset to ped, keeping structure/clusters from merged ped/adult seurat
+ped_seurat_merged<-subset(seurat_obj, Age=="Ped")
+
+## Add on NMF programs
+ped_seurat_merged$PedNMF_Program<- plyr::mapvalues(colnames(ped_seurat_merged), colnames(ped_seurat), 
+                                                   as.character(ped_seurat@meta.data[[paste0("NMF_rank", rank_use, "_annotByAdult10X")]]))
+
+## Plot- UMAP + breakdown of each cluster by program
+colors_use<-c("orange", "turquoise3", "red", "olivedrab4",  "purple", "navy" ,"grey22")
+names(colors_use)<- unique(ped_seurat_merged$PedNMF_Program)
+p1<- DimPlot(ped_seurat_merged, group.by = "PedNMF_Program")+scale_color_manual(values=colors_use)
+
+bd<- as.data.frame(table(ped_seurat_merged$PedNMF_Program, ped_seurat_merged$seurat_clusters))
+colnames(bd)<- c("Program", "Cluster", "Ncells")
+bd <- bd %>% group_by(Cluster) %>% mutate(PerCells=Ncells/sum(Ncells)) %>% as.data.frame()
+p2<- ggplot(bd, aes(x=Cluster, y=PerCells, fill=Program))+
+  geom_bar(stat="identity", position="stack")+
+  scale_fill_manual(values=colors_use)
+p1+p2
+ggsave(paste0(figure_dir, "PedMyeloid_ByPedNMFProgram.png"), width=12, height=5)
+
+```
+
+

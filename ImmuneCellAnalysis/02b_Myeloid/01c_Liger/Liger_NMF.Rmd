@@ -1,0 +1,560 @@
+---
+title: "Liger"
+output: html_document
+---
+
+## Purpose
+Run integrative NMF (liger) on pediatric myeloid cells. Programs not used downstream, but used to help inform number of NMF programs to use
+
+
+## Approach
+Run Liger, compare to original programs to help annotate. Main purpose here, though, is to just use to help determine the appropriate number of programs for NMF
+
+```{r}
+library(rliger)
+#library(liger)
+library(ggplot2)
+library(SeuratWrappers)
+library(randomcoloR)
+library(clusterProfiler)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/02b_Myeloid/01b_Liger/")
+
+analysis_dir_tmp<- "analysis/"
+figure_dir_tmp<- "figures/"
+if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp)};if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp)}
+
+stat_helper = paste0(base_dir, script_dir, "common_stat_test.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+#source(stat_helper)
+source(nmf_helper)
+```
+
+## Load in seurat object
+```{r}
+cohort<- "pedOnly_nomuv63"
+myeloid_seurat<-readRDS(paste0("../../01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/",integration, "/",
+                               cohort, "/myeloid_seurat_noDC.B.Rds"))
+```
+
+## Select feature to integrate by- subtype or sampleid
+```{r}
+integration<- "NiceSubtype" ## NiceSubtype or sampleid
+myeloid_seurat$integration<- myeloid_seurat@meta.data[[integration]]
+
+## set analysis/figure dir
+analysis_dir<- paste0(analysis_dir_tmp, cohort, "/", integration, "/")
+figure_dir<- paste0(figure_dir_tmp, cohort, "/", integration, "/")
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)};if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+
+## Need at least 16 cells to run liger. remove samples with fewer than 16 cells
+cell_thresh<- 16
+nCells<- table(myeloid_seurat$integration)
+myeloid_seurat_cellThresh<- subset(myeloid_seurat, integration %in% names(nCells)[nCells>=cell_thresh])
+
+```
+
+## Create liger object, run liger pipeline
+Important parameters are as follows:
+
+1. k. Integer value specifying the inner dimension of factorization, or number of factors. Higher k is recommended for datasets with more substructure. We find that a value of k in the range 20 - 40 works well for most datasets. Because this is an unsupervised, exploratory analysis, there is no single “right” value for k, and in practice, users choose k from a combination of biological prior knowledge and other information.
+
+2. lambda. This is a regularization parameter. Larger values penalize dataset-specific effects more strongly, causing the datasets to be better aligned, but possibly at the cost of higher reconstruction error. The default value is 5. We recommend using this value for most analyses, but find that it can be lowered to 1 in cases where the dataset differences are expected to be relatively small, such as scRNA-seq data from the same tissue but different individuals.
+
+3. thresh. This sets the convergence threshold. Lower values cause the algorithm to run longer. The default is 1e-6.
+
+4. max.iters. This variable sets the maximum number of iterations to perform. The default value is 30.
+```{r}
+## Split cm 1 cm for each sample
+split_cm<- lapply( unique(myeloid_seurat_cellThresh$integration), function(x){
+  seurat_tmp<- subset(myeloid_seurat_cellThresh, integration==x)
+  return(seurat_tmp@assays$RNA@counts)
+})
+names(split_cm)<-  unique(myeloid_seurat_cellThresh$integration)
+
+## create liger object
+liger_obj <- createLiger(split_cm)
+
+## Normalize, identify variable expressed genes, scale data
+liger_obj <- rliger::normalize(liger_obj)
+liger_obj <- rliger::selectGenes(liger_obj)
+liger_obj <- scaleNotCenter(liger_obj)
+
+## Use the suggestK function to determine the appropriate number of factors to use.
+## Use the suggestLambda function to find the smallest lambda for which the alignment metric stabilizes.
+#suggestK(liger_obj) ## use k=30
+#suggestLambda(liger_obj, k = 30, num.cores = 4)
+
+## Joint Matrix Facotorization
+liger_obj <- rliger::optimizeALS(object= liger_obj, k = 20, lambda = 5)
+
+## cluster cells and perform quantile normalization by dataset, factor, and cluster
+liger_obj <- quantile_norm(liger_obj)
+
+## Run UMAP
+liger_obj <- runUMAP(liger_obj, distance = 'cosine', n_neighbors = 30, min_dist = 0.3)
+saveRDS(liger_obj, file=paste0(analysis_dir, "liger_obj.Rds"))
+```
+
+
+## Plot on UMAP- factors (merged or unmerged) + sample
+```{r}
+all.plots <- plotByDatasetAndCluster(liger_obj, axis.labels = c('UMAP 1', 'UMAP 2'),
+                                     return.plots = T, pt.size = 1)
+all.plots[[1]]
+
+ggsave(paste0(figure_dir, "UMAP_Sample.png"), width=7,height=7)
+
+
+all.plots[[2]]
+ggsave(paste0(figure_dir, "UMAP_AllFactors.png"), width=7,height=7)
+
+```
+
+## Export cell assignments. Will update cell assignments with finalized factor list + via scoring later
+```{r}
+liger_factorAssignments<- as.factor(liger_obj@clusters)
+df<- table(liger_factorAssignments)
+df<- df[df!=0]; df[order(df)]
+
+saveRDS(liger_factorAssignments, file=paste0(analysis_dir, "ligerFactor_Assignment_byLiger.Rds"))
+```
+
+## plot breakdown of cell assignments by sample/subtype
+## Helps to inform which factors to remove
+```{r}
+## read in liger assignments, add to seurat
+liger_assignments<- readRDS(paste0(analysis_dir, "ligerFactor_Assignment_byLiger.Rds"))
+myeloid_seurat_cellThresh$liger_factor_byLiger<- plyr::mapvalues(colnames(myeloid_seurat_cellThresh),
+                                                             names(liger_assignments), as.character(liger_assignments))
+
+
+## sample
+  colors_use<- distinctColorPalette(length(unique(myeloid_seurat_cellThresh$sampleid)))
+  names(colors_use)<-unique(myeloid_seurat_cellThresh$sampleid)
+  
+  ## create df for plotting
+  df<- as.data.frame(table(myeloid_seurat_cellThresh$liger_factor_byLiger, myeloid_seurat_cellThresh$sampleid))
+  colnames(df)<- c("factor", "sample", "ncells")
+  df<- df %>% group_by(factor) %>% mutate(perCells=ncells/sum(ncells)) %>% as.data.frame()
+  
+  ## plot
+  ggplot(df, aes(x=factor, y=perCells, fill=sample))+
+    geom_bar(stat="identity", position="stack")+
+    scale_fill_manual(values=colors_use)
+  ggsave(paste0(figure_dir, "FactorsByLiger_breakdownBySample.png"), width=6, height=5)
+  
+## subtype
+  colors_use<- c(Ependymoma="magenta3",
+         `Hemispheric-BCOR`="deepskyblue1",
+         `Hemispheric-H3G34R/V`="blue2",
+         `Hemispheric-HistoneWT`="lightsteelblue4",
+         `Midline-H3K27M`="olivedrab",
+         `Midline-HistoneWT`="grey78")
+    
+  ## create df for plotting
+  df<- as.data.frame(table(myeloid_seurat_cellThresh$liger_factor_byLiger, myeloid_seurat_cellThresh$NiceSubtype))
+  colnames(df)<- c("factor", "subtype", "ncells")
+  df<- df %>% group_by(factor) %>% mutate(perCells=ncells/sum(ncells)) %>% as.data.frame()
+  
+  ## plot
+  ggplot(df, aes(x=factor, y=perCells, fill=subtype))+
+    geom_bar(stat="identity", position="stack")+
+    scale_fill_manual(values=colors_use)
+  ggsave(paste0(figure_dir, "FactorsByLiger_breakdownBySubtype.png"), width=6, height=5)
+  
+tmp<-table(liger_assignments); tmp[tmp!=0]
+```
+
+## Alternative approach for identifying marker genes + annotating cells:
+Assign cells by liger annotations, then use seurat to identify marker genes
+Score cells for the seurat-derived marker genes, assign max
+These marker genes/annotations referred to as "liger_factor_bySeurat". 
+Genes/annotations taken directly from liger referred to as "liger_factor_byLiger"
+This approach used downstream
+```{r}
+factors_remove<- c(5)
+
+## read in annotations directly from liger
+annotations_byLiger<- readRDS(paste0(analysis_dir, "ligerFactor_Assignment_ByLiger.Rds"))
+
+## Add to seurat
+myeloid_seurat_factorsBySeurat<- myeloid_seurat_cellThresh
+myeloid_seurat_factorsBySeurat$liger_factor_byLiger<- plyr::mapvalues(colnames(myeloid_seurat_factorsBySeurat), 
+                                                             names(annotations_byLiger), paste0("factor", annotations_byLiger))
+
+## Remove any factors
+factors_keep<- unique(myeloid_seurat_factorsBySeurat$liger_factor_byLiger)[!unique(myeloid_seurat_factorsBySeurat$liger_factor_byLiger) %in%
+                                                                         paste0("factor", factors_remove)]
+myeloid_seurat_factorsBySeurat<- subset(myeloid_seurat_factorsBySeurat, liger_factor_byLiger %in% factors_keep)
+
+## identify DEGs
+myeloid_seurat_factorsBySeurat<- SetIdent(myeloid_seurat_factorsBySeurat, value=myeloid_seurat_factorsBySeurat$liger_factor_byLiger)
+all_markers<- FindAllMarkers(myeloid_seurat_factorsBySeurat, min.pct = 0.2)
+all_markers_filtered<- all_markers[all_markers$p_val_adj<0.05 & all_markers$avg_log2FC>0.25,]
+print(table(all_markers_filtered$cluster))
+
+## Score all cells (from full seurat, no filtering) for DEGs
+marker_list<- split(all_markers_filtered, f=all_markers_filtered$cluster)
+marker_list<- lapply(marker_list, function(x){x$gene})
+cm_list<- NormCenter(myeloid_seurat@assays$RNA@counts)
+cm_mean<-rowMeans(log2(cm_list$raw_data + 1))
+scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, marker_list)))
+
+## Assign max, add to seurat
+scores$MaxProgram<- apply(scores, 1, function(x){names(x)[which.max(x)]})
+scores$MaxScore<- apply(scores[,!colnames(scores) == "MaxProgram"], 1, function(x){x[which.max(x)]})
+
+variable_name<- paste0("liger_bySeurat_intBy", integration, "_remove", paste(factors_remove, collapse="."))
+myeloid_seurat@meta.data[[variable_name]]<- plyr::mapvalues(colnames(myeloid_seurat),  rownames(scores), scores$MaxProgram)
+
+variable_name<- paste0("ligerScore_bySeurat_intBy", integration, "_remove", paste(factors_remove, collapse="."))
+myeloid_seurat@meta.data[[variable_name]]<- plyr::mapvalues(colnames(myeloid_seurat),  rownames(scores), scores$MaxScore)
+
+## save DEGs, scores, seurat
+write.csv(all_markers_filtered, file=paste0(analysis_dir, "liger_markers_bySeurat_remove",paste(factors_remove, collapse="."), ".csv" ))
+saveRDS(scores, file=paste0(analysis_dir, "liger_scores_bySeurat_remove",paste(factors_remove, collapse="."), ".Rds" ))
+saveRDS(myeloid_seurat, file=paste0(analysis_dir, "myeloid_seurat.Rds"))
+```
+
+
+## Correlate liger factors with NMF programs
+```{r}
+factors_remove<- c(5)
+
+## read in liger/nmf scores
+liger_scores<- readRDS( paste0(analysis_dir, "liger_scores_bySeurat_remove",paste(factors_remove, collapse="."), ".Rds" ))
+nmf_scores<- readRDS(paste0("../01a_NMF/analysis/de.novoNMF/", cohort, "/NMF_scores_annotByAdult10X_rank6-6.Rds"))
+nmf_scores<- nmf_scores$rank6
+
+## Merge together
+scores<- cbind(liger_scores[,!colnames(liger_scores) %in% c("MaxProgram", "MaxScore")],
+                   nmf_scores[,!colnames(nmf_scores)  %in% c("MaxProgram", "MaxScore")])
+
+## Correlate and plot heatmap
+scores_factor_hc = clusterNmfFactors(scores)
+scores_factor_cor = scores_factor_hc$cor_coef[scores_factor_hc$hc_obj$order, scores_factor_hc$hc_obj$order]
+
+## Heatmap of correlations
+hm_colors = rev((brewer.pal(n=9, name="RdBu")))
+hm_colors = colorRampPalette(colors = hm_colors)
+pheatmap(scores_factor_cor, color = hm_colors(100), 
+         cluster_rows = F, cluster_cols = F, 
+         annotation_names_row = F, annotation_names_col =T,
+         show_rownames = T, show_colnames = F,
+         filename = paste0(figure_dir, "Cor_Liger.NMF_remove",paste0(factors_remove, collapse = "."), ".png"),
+         width = 8, height = 4)
+
+## Dendrogram of hierarchical clustering 
+jpeg(filename=paste0(figure_dir, "HC_Liger.NMF_remove",paste0(factors_remove, collapse = "."), ".png"), width = 400, height = 600)
+plot(scores_factor_hc$hc_obj)
+dev.off()
+```
+
+## Using correlation above, annotate factors
+```{r}
+factors_remove<- c(5)
+variable_name<- paste0("liger_bySeurat_intBy", integration, "_remove", paste(factors_remove, collapse="."))
+
+## rename seurat
+myeloid_seurat<- readRDS(paste0(analysis_dir, "myeloid_seurat.Rds"))
+factors<- unique(myeloid_seurat@meta.data[[variable_name]])
+
+## names(factors)<- c("Phago_Lipid_Mg", "Monocytes", "Mo_TAM", "Stress_Response") ## pedOnly_nomuv63.withmuv91
+names(factors)<-c("IFN_Mg_TAM", "Monocytes", "Stress_Response.Inflammatory", "Mo_TAM", "SEPP1_Mo_TAM") ## pedOnly_nomuv63
+
+variable_name<- paste0("liger_bySeurat_intBy", integration, "_remove", paste(factors_remove, collapse="."))
+myeloid_seurat@meta.data[[gsub("liger", "ligerAnnot", variable_name)]]<- plyr::mapvalues(myeloid_seurat@meta.data[[variable_name]],
+                                                                                    factors, names(factors))
+
+## rename markers
+marker_genes<- read.csv(paste0(analysis_dir, "liger_markers_bySeurat_remove",paste(factors_remove, collapse="."), ".csv" ))
+marker_genes$cluster<- plyr::mapvalues(marker_genes$cluster, factors, names(factors))
+
+write.csv(marker_genes, file=paste0(analysis_dir, "ligerAnnots_markers_bySeurat_remove",paste(factors_remove, collapse="."), ".csv" ))
+saveRDS(myeloid_seurat, file=paste0(analysis_dir, "myeloid_seurat.Rds"))
+```
+
+## Overlap of gene sets between Liger/NMF
+```{r}
+factors_remove<- c(5)
+variable_name<- paste0("liger_bySeurat_intBy", integration, "_remove", paste(factors_remove, collapse="."))
+liger_markers<- read.csv(paste0(analysis_dir, "ligerAnnots_markers_bySeurat_remove",paste(factors_remove, collapse="."),
+                                    ".csv" ))
+
+## read in NMF markers
+rank<- "6"
+nmf_markers<- read.csv(paste0("../01a_NMF/analysis/de.novoNMF/",cohort,  "/top_DE_genes_10Xannotated_NMF_rank", 
+                               gsub("byScore", "", rank), ".csv"))
+  
+  ## For stress_response/inflammatory- merge genesets to be able to compare to Stress_Response.Inflammatory liger program
+  stress_inflamm_cluster<- nmf_markers[nmf_markers$cluster %in% c("Stress_Response", "Inflammatory"),]
+  stress_inflamm_cluster$cluster<- "Stress_Response.Inflammatory"
+  stress_inflamm_cluster<- stress_inflamm_cluster[!duplicated(stress_inflamm_cluster$gene),]
+  nmf_markers<- rbind(stress_inflamm_cluster, nmf_markers[!nmf_markers$cluster %in% c("Stress_Response", "Inflammatory"),])
+
+## Create lists matching up liger/nmf marker genes
+shared_programs<- unique(nmf_markers$cluster)[unique(nmf_markers$cluster) %in% unique(liger_markers$cluster)]
+matched_markers<- lapply(shared_programs,function(x){
+  list(NMF=nmf_markers[nmf_markers$cluster==x, "gene"],
+       Liger=liger_markers[liger_markers$cluster==x, "gene"])
+})
+names(matched_markers)<- shared_programs
+
+## Plot venn diagram
+all_plots<- lapply(names(matched_markers), function(x){
+  list_use<- matched_markers[[x]]
+  ggVennDiagram::ggVennDiagram(list_use,edge_size = 0, label_alpha = 0, label_size = 6, label="count")+
+    scale_fill_gradient(low="white", high="red")+
+    theme(legend.position = "none")+
+    ggtitle(paste0("Overlap of ", x,  " DEGs"))
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=2)
+ggsave(paste0(figure_dir, "Venn_NMF.vs.Liger_markerGenes_remove", paste(factors_remove, collapse="."),".png"),
+         width=8, height=12)
+```
+
+## Confusion matrix to show how well NMF/Liger align
+```{r}
+factors_remove<- c(5); nmf_rank<- 6
+liger_variable<- paste0("ligerAnnot_bySeurat_intBy", integration, "_remove", paste(factors_remove, collapse="."))
+nmf_variable<- paste0("NMF_rank", nmf_rank, "_annotByAdult10X")
+myeloid_seurat<- readRDS(paste0(analysis_dir, "myeloid_seurat.Rds"))
+
+## Any replacements to be made in annotations
+nmf_replace<- list(c("Stress_Response", "Stress.Inflamm"),
+                   c("Inflammatory", "Stress.Inflamm"))
+liger_replace<- list(c("Stress_Response.Inflammatory","Stress.Inflamm" ))
+
+## Table with any replacements made
+df<- myeloid_seurat@meta.data[,c(liger_variable, nmf_variable ) ]
+
+for(i in nmf_replace){
+  df[[nmf_variable]]<- gsub(i[1], i[2],df[[nmf_variable]])
+}
+for(i in liger_replace){
+  df[[liger_variable]]<- gsub(i[1], i[2],df[[liger_variable]])
+}
+colnames(df)<- c("LigerAnnot", "NMFAnnot")
+
+## Confusion matrix
+cmat<- df
+cmat$Match<- ifelse(cmat$LigerAnnot==cmat$NMFAnnot, "Match", "Mismatch")
+cmat_table<- as.data.frame(table(cmat$LigerAnnot, cmat$Match))
+colnames(cmat_table)<- c("LigerAnnot", "MatchNMF", "NCells")
+
+## Normalize by size of program
+cmat_table<- cmat_table %>% group_by(LigerAnnot) %>% mutate(PerCells=NCells/sum(NCells)) %>% as.data.frame()
+
+## plot proportion of cells that match
+ggplot(cmat_table, aes(x=LigerAnnot, y=MatchNMF, fill=PerCells))+
+  geom_tile()+
+  scale_fill_gradient(low="white", high="red")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))+
+  ylab("Proportion match NMF annot")+ xlab("Liger Annotation")
+ggsave(paste0(figure_dir, "CMat_PercentLigerMatchNMFAnnot_remove", paste(factors_remove, collapse="."),".png"),
+       width=5, height=3)
+
+## For cells that don't match- plot percentage of cells in other programs
+cmat_mismatch<- cmat[cmat$Match=="Mismatch",]
+cmat_mismatch<- as.data.frame(table(cmat_mismatch$LigerAnnot, cmat_mismatch$NMFAnnot))
+colnames(cmat_mismatch)<- c("LigerAnnot", "NMFAnnot", "NCells")
+
+  ## Convert to percentage
+  cmat_mismatch<- cmat_mismatch %>% group_by(LigerAnnot) %>% mutate(PerCells=NCells/sum(NCells)) %>% as.data.frame()
+
+  ## Order NMF/Liger the same way for nicer plotting  
+  cmat_mismatch$LigerAnnot<- factor(cmat_mismatch$LigerAnnot, levels=c("IFN_Mg_TAM", "Mo_TAM","Monocytes",
+                                                                       "SEPP1_Mo_TAM",  "Stress.Inflamm"))
+  cmat_mismatch$NMFAnnot<- factor(cmat_mismatch$NMFAnnot, levels=rev(c("IFN_Mg_TAM", "Mo_TAM","Monocytes",
+                                                                       "SEPP1_Mo_TAM",  "Stress.Inflamm")))
+  ## plot
+  ggplot(cmat_mismatch, aes(x=LigerAnnot, y=NMFAnnot, fill=PerCells))+
+    geom_tile()+
+    scale_fill_gradient(low="white", high="red")+
+    theme(axis.text.x = element_text(angle=45, hjust=1))+
+    ylab("Proportion assigned to\n\"wrong\" NMF program")+ xlab("Liger Annotation")
+  ggsave(paste0(figure_dir, "CMat_Mismatch_NMFWrongAssignment_remove", paste(factors_remove, collapse="."),".png"),
+         width=5, height=4)
+```
+
+
+## plot breakdown of cell assignments by sample/subtype
+```{r}
+myeloid_seurat<- readRDS(paste0(analysis_dir, "myeloid_seurat.Rds"))
+factors_remove<- c(5)
+variable_name<- paste0("ligerAnnot_bySeurat_intBy", integration, "_remove", paste(factors_remove, collapse="."))
+
+## sample
+  colors_use<- distinctColorPalette(length(unique(myeloid_seurat$sampleid)))
+  names(colors_use)<-unique(myeloid_seurat$sampleid)
+  
+  ## create df for plotting
+  df<- as.data.frame(table(myeloid_seurat@meta.data[[variable_name]], myeloid_seurat$sampleid))
+  colnames(df)<- c("factor", "sample", "ncells")
+  df<- df %>% group_by(factor) %>% mutate(perCells=ncells/sum(ncells)) %>% as.data.frame()
+  
+  ## plot
+  ggplot(df, aes(x=factor, y=perCells, fill=sample))+
+    geom_bar(stat="identity", position="stack")+
+    scale_fill_manual(values=colors_use)+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle = 45, hjust=1),
+          axis.text = element_text(face="bold", color="black"),
+          axis.title = element_text(face="bold", color="black"))+
+    xlab("")+ylab("Proportion of cells")
+  ggsave(paste0(figure_dir, "FactorsBySeurat_breakdownBySample.png"), width=6, height=5)
+  
+## subtype
+  colors_use<- c(Ependymoma="magenta3",
+           `Hemispheric-BCOR`="deepskyblue1",
+           `Hemispheric-H3G34R/V`="blue2",
+           `Hemispheric-HistoneWT`="lightsteelblue4",
+           `Midline-H3K27M`="olivedrab",
+           `Midline-HistoneWT`="grey78")
+  
+  ## create df for plotting
+  df<- as.data.frame(table(myeloid_seurat@meta.data[[variable_name]], myeloid_seurat$NiceSubtype))
+  colnames(df)<- c("factor", "subtype", "ncells")
+  df<- df %>% group_by(factor) %>% mutate(perCells=ncells/sum(ncells)) %>% as.data.frame()
+  
+  ## plot
+  ggplot(df, aes(x=factor, y=perCells, fill=subtype))+
+    geom_bar(stat="identity", position="stack")+
+    scale_fill_manual(values=colors_use)+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle = 45, hjust=1),
+          axis.text = element_text(face="bold", color="black"),
+          axis.title = element_text(face="bold", color="black"))+
+    xlab("")+ylab("Proportion of cells")
+  ggsave(paste0(figure_dir, "FactorsBySeurat_breakdownBySubtype.png"), width=6, height=5)
+```
+
+
+## Plot liger marker genes
+```{r}
+factors_remove<- c(5)
+marker_genes<- read.csv(paste0(analysis_dir, "ligerAnnots_markers_bySeurat_remove",paste(factors_remove, collapse="."), ".csv" ))
+variable_name<- paste0("ligerAnnot_bySeurat_intBy", integration, "_remove", paste(factors_remove, collapse="."))
+myeloid_seurat<- readRDS(paste0(analysis_dir, "myeloid_seurat.Rds"))
+
+marker_genes$cluster<- gsub("_", "\n", marker_genes$cluster)
+
+add_lines<-TRUE
+n_markers<-10
+
+## Subset to top markers for each nmf- top 10
+## If any genes are top markers for multiple clusters- remove, then find top 10 again
+top_markers<- marker_genes %>% group_by(cluster) %>% slice_max(order_by = avg_log2FC, n = n_markers) %>% as.data.frame()
+if(sum(duplicated(top_markers$gene))!=0){
+  duplicated<- top_markers$gene[duplicated(top_markers$gene)]
+  print(paste0("Shared top markers: ", paste(duplicated, collapse=",")))
+  marker_genes<- marker_genes[!marker_genes$gene %in% duplicated,]
+  top_markers<- marker_genes %>% group_by(cluster) %>% slice_max(order_by = avg_log2FC, n = n_markers) %>% as.data.frame()
+}
+
+
+## Pseudobulk
+myeloid_seurat$ShortSubtype<- gsub("\\\n", "-", myeloid_seurat$ShortSubtype)
+myeloid_seurat$PB_variable<- paste0(myeloid_seurat$ShortSubtype, "_", 
+                                gsub("_", "\n", myeloid_seurat@meta.data[[variable_name]]))
+pb<- pseudobulk_byVariable(myeloid_seurat@assays$RNA@counts, myeloid_seurat@meta.data, "PB_variable")
+
+## center and score
+pb_list<- NormCenter(pb)
+pb_center<- pb_list$center_data
+
+## Plot
+p<- myHeatmap(pb_center, GOI=top_markers$gene, min.value = -3, max.value = 3, 
+              orderFactors = unique(top_markers$cluster))+
+  scale_fill_gradient2(high="red", low="blue", mid="white", name="Centered log2(TPM)")
+
+## Add horizontal lines around each set of nmf genes
+if(add_lines){
+  tmp<- split(top_markers, f=top_markers$cluster)
+  lastGene<- lapply(tmp, function(x){
+    x$tmp<- 1:nrow(x)
+    x<- x[x$gene %in% rownames(pb), ]
+    return(x[max(x$tmp), "gene"])
+  })
+  linePositions<- as.data.frame(pb_center[top_markers$gene,])
+  linePositions$tmp<- 1:nrow(linePositions)
+  linePositions<- linePositions[unlist(lastGene),"tmp"]
+  linePositions<- linePositions[1:length(linePositions)-1]+ 0.5
+  
+  p+geom_hline(yintercept = linePositions, linetype="dashed",size=1)
+}else{p}
+
+  
+ggsave(paste0(figure_dir, "Heatmap_factorsBySeurat_remove", paste(factors_remove, collapse="."), ".png"), width=12, height=12)
+```
+
+## UMAP
+```{r}
+myeloid_seurat<- readRDS(paste0(analysis_dir, "myeloid_seurat.Rds"))
+factors_remove<- c(5)
+variable_name<- paste0("ligerAnnot_bySeurat_intBy", integration, "_remove", paste(factors_remove, collapse="."))
+
+colors_use<-c("purple", "turquoise3",  "red","navy",  "orange") 
+names(colors_use)<- as.character(unique(myeloid_seurat@meta.data[[variable_name]]))
+
+DimPlot(myeloid_seurat, group.by = variable_name)+scale_color_manual(values=colors_use)+ggtitle("")
+ggsave(paste0(figure_dir, "UMAP_annot_remove", paste(factors_remove, collapse="."), ".png"), width=6, height=4)
+
+## Plot each program one at a time
+seurat_tmp<- myeloid_seurat
+all_plots<- lapply(as.character(unique(myeloid_seurat@meta.data[[variable_name]])), function(x){
+  seurat_tmp$tmp<- ifelse(seurat_tmp@meta.data[[ variable_name]]==x,
+                          x, "Other")
+  p<-DimPlot(seurat_tmp, group.by = "tmp")+scale_color_manual(values=c(colors_use, Other="grey"))+ggtitle(x)+NoLegend()
+  return(p)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol = 3)
+ggsave(paste0(figure_dir, "UMAP_indv_annot_remove", paste(factors_remove, collapse="."), ".png"), width=18, height=6)
+```
+
+## GO terms
+```{r}
+factors_remove<- c(5)
+myeloid_seurat<- readRDS(paste0(analysis_dir, "myeloid_seurat.Rds"))
+marker_genes<- read.csv(paste0(analysis_dir, "ligerAnnots_markers_bySeurat_remove",paste(factors_remove, collapse="."), ".csv" ))
+
+## GO term ORA
+OrgDb = "org.Hs.eg.db"
+dataset = "hsapiens_gene_ensembl"
+
+## Read in df for converting symbol --> ensembl
+all_genes_Ens.Sym<- readRDS(paste0("/Users/jlabelle/Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Marker_genes/", 
+                                   "allGenes_Ensembl.Symbol.Rds"))
+
+## Convert input genes to ensembl. Not all genes found in all_genes_Ens.Sym bc not all Symbols match Ensembl
+## These genes removed
+allOE_genes<- rownames(myeloid_seurat@assays$RNA@counts)[rownames(myeloid_seurat@assays$RNA@counts) %in%
+                                                       all_genes_Ens.Sym$hgnc_symbol]
+allOE_genes<- plyr::mapvalues(allOE_genes,all_genes_Ens.Sym$hgnc_symbol, all_genes_Ens.Sym$ensembl_gene_id, warn_missing = FALSE)
+  
+## Run GO: Convert marker genes to ensembl IDs too, then run OR analysis (GO)
+go_result = list()
+for (i in unique(marker_genes$cluster)){
+  print(i)
+  genes<- marker_genes[marker_genes$cluster==i, "gene"]
+  if(length(genes)!=1){
+    sigOE_genes = genes[genes %in% all_genes_Ens.Sym$hgnc_symbol]
+    sigOE_genes<- plyr::mapvalues(sigOE_genes, all_genes_Ens.Sym$hgnc_symbol, 
+                                  all_genes_Ens.Sym$ensembl_gene_id, warn_missing = FALSE)
+    go_result[[i]] = go_analysis(sigOE_genes, allOE_genes)
+    }
+} 
+
+## Plot and save
+go_plots<- plotGO(go_result = go_result, n_terms = 15)
+cowplot::plot_grid(plotlist=go_plots, ncol=2)
+ggsave(paste0(figure_dir, "GO_NMF.png"), width=18, height=12)
+```
+

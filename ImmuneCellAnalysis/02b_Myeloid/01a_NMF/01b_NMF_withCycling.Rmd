@@ -1,0 +1,404 @@
+---
+title: "NMF with cycling set as program"
+author: "Jenna LaBelle"
+date: "11/11/2021"
+output: html_document
+---
+
+## Purpose:
+Set cycling cells as a separate "program". Re-generate all program data with this updated program list (seurat object, scores, markers)
+
+## Approach:
+Proliferating myeloid cells were already identified by correlating with adult GBM 10X data, but the subset was too small to be represented by NMF program. Take these cells and assign to cycling "program". Set as ident, then identify markers, score, add to seurat.
+
+
+```{r}
+library(Seurat) 
+library(clusterProfiler)
+library(biomaRt)
+library(stringr)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/NMF/Myeloid/")
+
+analysis_dir_tmp<- paste0(working_dir, "/analysis/NMF_withCycling/")
+figure_dir_tmp<- paste0(working_dir, "/figures/NMF_withCycling/")
+
+if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp)};if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+
+
+source(paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/", "/Scripts/plotutils.R"))
+source(paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/", "/Scripts/seurat3utils.R"))
+source(paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/", "/Scripts/color.R"))
+
+tests <- c("wilcox", "t", "roc", "MAST", "bimod")
+test <- tests[2]
+```
+
+## Read in seurat object + original markers + original annotations
+```{r}
+cohort<-"pedOnly_nomuv63"
+
+## Current seurat object
+myeloid_seurat<-readRDS(paste0("../../Preprocessing/Counts_Preprocess/analysis/detailed_annotation/",
+                               cohort, "/myeloid_seurat_noDC.B.Rds"))
+
+
+analysis_dir<- paste0(analysis_dir_tmp, cohort, "/")
+figure_dir<- paste0(figure_dir_tmp, cohort, "/")
+if(!dir.exists(figure_dir)){dir.create(figure_dir)};if(!dir.exists(analysis_dir)){dir.create(analysis_dir)}
+```
+
+## Create new variable in metadata with cycling cells included
+```{r}
+rank_use<-6
+variable_name<- paste0("NMF_rank", rank_use, "byScore_annotByAdult10X")
+new_variable_name<-  paste0("NMF_rank", rank_use, "_annotByAdult10X_withCycling")
+
+myeloid_seurat@meta.data[[new_variable_name]]<-ifelse(myeloid_seurat$prol_tam=="highScore_prolTAM", "Cycling",
+                                                                         myeloid_seurat@meta.data[[variable_name]])
+
+saveRDS(myeloid_seurat, file=paste0("../../Preprocessing/Counts_Preprocess/analysis/detailed_annotation/",
+                               cohort, "/myeloid_seurat_noDC.B.Rds"))
+```
+
+## Plot cycling genes to support cycling annotation
+```{r}
+all_plots<- lapply(c("cycling_score", "TOP2A"), function(x){
+  FeaturePlot(myeloid_seurat, features=x)+scale_color_gradient(low="grey", high="red")
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=2)
+ggsave(paste0(figure_dir, "CyclingScore_TOP2A.png"), width=10, height=4.5)
+```
+
+## Identify new marker genes based on NMF + cycling
+```{r}
+rank_use<-6
+variable_name<- paste0("NMF_rank", rank_use, "_annotByAdult10X_withCycling")
+
+## Set ident to programs with cycling
+myeloid_seurat<-SetIdent(myeloid_seurat, value = myeloid_seurat@meta.data[[variable_name]])
+
+## Identify marker genes
+all_markers<- FindAllMarkers(myeloid_seurat, min.pct = 0.1, logfc.threshold = 0.5, 
+                                           max.cells.per.ident = 1500, test.use = test, 
+                                           return.thresh = 0.1 / nrow(myeloid_seurat), verbose = T)
+top100genes <-all_markers %>% filter(avg_log2FC > 0) %>% group_by(cluster) %>% top_n(100, avg_log2FC)
+
+write.csv(top100genes, file = paste0(analysis_dir,  "top_DE_genes_10Xannotated_NMF_rank", rank_use, ".csv"))
+```
+
+## Score cells for new marker genes, assign max
+```{r}
+rank_use<- 6
+marker_genes<- read.csv(paste0(analysis_dir,  "top_DE_genes_10Xannotated_NMF_rank", rank_use, ".csv"))
+marker_list<- split(marker_genes, f=marker_genes$cluster); marker_list<- lapply(marker_list, function(x){x$gene})
+
+variable_name<-paste0("NMF_rank", rank_use, "_annotByAdult10X_withCycling")
+new_variable_name<- paste0("NMF_rank", rank_use, "byScore_annotByAdult10X_withCycling")
+
+myeloid_seurat<- readRDS(paste0("../../Preprocessing/Counts_Preprocess/analysis/detailed_annotation/",
+                               cohort, "/myeloid_seurat_noDC.B.Rds"))
+
+## Score for programs with cycling
+cm_list<- NormCenter(myeloid_seurat@assays$RNA@counts)
+cm_mean<- rowMeans(log2(cm_list$raw_data + 1))
+scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, marker_list)))
+scores$MaxProgram<- apply(scores, 1, function(x){names(x)[which.max(x)]})
+scores$MaxScore<- apply(scores[,colnames(scores) != "MaxProgram"], 1, function(x){x[which.max(x)]})
+
+## Add max program to seurat
+myeloid_seurat@meta.data[[new_variable_name]]<- plyr::mapvalues(colnames(myeloid_seurat), rownames(scores), scores$MaxProgram)
+
+saveRDS(scores, file=paste0(analysis_dir, "NMF_scores_rank",rank_use,".Rds"))
+saveRDS(myeloid_seurat, file=paste0("../../Preprocessing/Counts_Preprocess/analysis/detailed_annotation/",
+                               cohort, "/myeloid_seurat_noDC.B.Rds"))
+```
+
+
+
+## colors for all follow up
+```{r}
+## pedOnly_nomuv63
+color_annots<- list(rank6=c(SEPP1_Mo_TAM ="orange", Inflammatory="red", IFN_Mg_TAM="purple", Stress_Response="olivedrab4",
+                            Monocytes="turquoise3", Mo_TAM="navy", Cycling="grey22"))
+saveRDS(color_annots, paste0(analysis_dir, "annot_colors.Rds"))
+```
+
+## Plot heatmaps of top marker gene expression
+```{r}
+rank_use<- "6"
+add_lines<- TRUE
+variable_name<- paste0("NMF_rank", rank_use, "byScore_annotByAdult10X_withCycling")
+
+## Read in NMF marker genes
+marker_genes<- read.csv(paste0(analysis_dir,  "top_DE_genes_10Xannotated_NMF_rank", rank, ".csv"))
+marker_genes$cluster<- gsub("_", "\n", marker_genes$cluster)
+
+## Subset to top markers for each nmf- top 10
+## If any genes are top markers for multiple clusters- remove, then find top 10 again
+top_markers<- marker_genes %>% group_by(cluster) %>% slice_max(order_by = avg_log2FC, n = 10) %>% as.data.frame()
+if(sum(duplicated(top_markers$gene))!=0){
+  duplicated<- top_markers$gene[duplicated(top_markers$gene)]
+  print(paste0("Shared top markers: ", paste(duplicated, collapse=",")))
+  marker_genes<- marker_genes[!marker_genes$gene %in% duplicated,]
+  top_markers<- marker_genes %>% group_by(cluster) %>% slice_max(order_by = avg_log2FC, n = 10) %>% as.data.frame()
+}
+
+  ## optional: manually add in SPP1 to show where it falls
+  top_markers<- rbind(top_markers,marker_genes[marker_genes$gene=="SPP1" & marker_genes$cluster=="IFN\nMg\nTAM",])
+  geneRemove<- top_markers[top_markers$cluster=="IFN\nMg\nTAM", "gene"][10]
+  top_markers<- top_markers[top_markers$gene!=geneRemove,]
+  top_markers<- top_markers[order(top_markers$cluster),]
+
+## Pseudobulk
+myeloid_seurat$ShortSubtype<- gsub("\\\n", "-", myeloid_seurat$ShortSubtype)
+myeloid_seurat@meta.data[[variable_name]]<- gsub("\\.", "\n",gsub("_", "\n", myeloid_seurat@meta.data[[variable_name]]))
+myeloid_seurat$PB_variable<- paste0(myeloid_seurat$ShortSubtype, "_", 
+                                    myeloid_seurat@meta.data[[variable_name]])
+pb<- pseudobulk_byVariable(myeloid_seurat@assays$RNA@counts, myeloid_seurat@meta.data, "PB_variable")
+
+## center and score
+pb_list<- NormCenter(pb)
+pb_center<- pb_list$center_data
+
+## Plot
+p<- myHeatmap(pb_center, GOI=top_markers$gene, min.value = -3, max.value = 3, 
+              orderFactors = unique(top_markers$cluster))+
+  scale_fill_gradient2(high="red", low="blue", mid="white", name="Centered log2(TPM)")
+
+## Add horizontal lines around each set of nmf genes
+if(add_lines){
+  tmp<- split(top_markers, f=top_markers$cluster)
+  lastGene<- lapply(tmp, function(x){
+    x$tmp<- 1:nrow(x)
+    x<- x[x$gene %in% rownames(pb), ]
+    return(x[max(x$tmp), "gene"])
+  })
+  linePositions<- as.data.frame(pb_center[top_markers$gene,])
+  linePositions$tmp<- 1:nrow(linePositions)
+  linePositions<- linePositions[unlist(lastGene),"tmp"]
+  linePositions<- linePositions[1:length(linePositions)-1]+ 0.5
+  
+  p+geom_hline(yintercept = linePositions, linetype="dashed",size=1)
+}else{p}
+
+  
+ggsave(paste0(figure_dir, "Heatmap_TopNMFgenes_annotBy10X_rank", rank, "_withSPP1.png"), width=12, height=12)
+
+```
+
+## UMAP with annotations
+```{r}
+rank_use<-6
+variable_name<- paste0("NMF_rank", rank_use, "byScore_annotByAdult10X_withCycling")
+colors_use<-color_annots[[paste0("rank", rank_use)]]
+myeloid_seurat<-readRDS(paste0("../../Preprocessing/Counts_Preprocess/analysis/detailed_annotation/", cohort, "/myeloid_seurat_noDC.B.Rds"))
+
+DimPlot(myeloid_seurat, group.by =variable_name)+scale_color_manual(values=colors_use)
+ggsave(paste0(figure_dir, "UMAP_byAdult10XAnnot_rank", rank_use, ".png"), width=6, height=4)
+
+## Plot each program one at a time
+seurat_tmp<- myeloid_seurat
+all_plots<- lapply(as.character(unique(myeloid_seurat@meta.data[[variable_name]])), function(x){
+  seurat_tmp$tmp<- ifelse(seurat_tmp@meta.data[[variable_name]]==x,
+                          x, "Other")
+  p<-DimPlot(seurat_tmp, group.by = "tmp")+scale_color_manual(values=c(colors_use, Other="grey"))+ggtitle(x)+NoLegend()
+  return(p)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol = 2)
+ggsave(paste0(figure_dir, "UMAP_indv_byAdult10XAnnot_rank", rank_use, ".png"), width=8, height=14)
+```
+
+## Density plots
+```{r}
+## Read in scores for programs
+rank_use<-6
+scores<-readRDS(paste0(analysis_dir, "NMF_scores_rank",rank_use,".Rds"))
+variable_name<- paste0("NMF_rank", rank_use, "byScore_annotByAdult10X_withCycling")
+
+## Create df for plotting
+myeloid_df<-myeloid_seurat@meta.data[,c("sampleid", "NiceSubtype", variable_name)]
+sum(rownames(scores)==rownames(myeloid_df)); nrow(scores); nrow(myeloid_df)
+myeloid_df<- cbind(myeloid_df, scores[,!grepl("Max", colnames(scores))] )
+
+## get number of cells per subtype, add to df
+nCells<- as.data.frame(table(myeloid_seurat$NiceSubtype))
+myeloid_df$NCells<- plyr::mapvalues(myeloid_seurat$NiceSubtype, nCells$Var1, nCells$Freq)
+myeloid_df$JustSubtype<- myeloid_df$NiceSubtype
+myeloid_df$NiceSubtype<- paste0(myeloid_df$NiceSubtype, "\n", "nCells=",myeloid_df$NCells)
+
+colors_use<- c(Ependymoma="magenta3",
+           `Hemispheric-BCOR`="deepskyblue1",
+           `Hemispheric-H3G34R/V`="blue2",
+           `Hemispheric-HistoneWT`="lightsteelblue4",
+           `Midline-H3K27M`="chartreuse3",
+           `Midline-HistoneWT`="grey78")
+names(colors_use)<- plyr::mapvalues(names(colors_use), myeloid_df$JustSubtype, myeloid_df$NiceSubtype, warn_missing=FALSE)
+
+
+
+## Plot each nmf program
+all_plots<- list()
+for(i in as.character(unique(myeloid_seurat@meta.data[[variable_name]]))){
+  df<- myeloid_df[,c(i, "NiceSubtype")]
+  colnames(df)<- c("score", "NiceSubtype")
+  p<-ggplot(df, aes(x=score, fill=NiceSubtype))+
+    geom_density(alpha=0.6)+
+    ggtitle(i)+
+    scale_fill_manual(values=colors_use)+
+    theme_classic()+
+    theme(legend.title = element_blank(),
+          legend.position = "none",
+          plot.title = element_text(size=20, face="bold", hjust=0.5))
+
+  all_plots[[i]]<-p
+}
+
+## add legend separately
+legend<-ggplot(df, aes(x=score, fill=NiceSubtype))+
+    geom_density(alpha=0.6)+
+    ggtitle(i)+
+    scale_fill_manual(values=colors_use)+
+    theme_classic()+
+    theme(legend.title = element_blank(),
+          legend.key.size = unit(1.5, 'cm'),
+          legend.text = element_text(size=20))
+all_plots$legend<-  as_ggplot(get_legend(legend))
+all_plots<- all_plots[c(1:3,8,4:7)]
+cowplot::plot_grid(plotlist = all_plots, ncol=4)
+
+ggsave(paste0(figure_dir, "Myeloid_DensityOfNMFBySubtype.png"), width=20, height=8)
+
+```
+
+## Histogram of scores- bimodal or gradient?
+```{r}
+rank_use<-6
+colors_use<-color_annots[[paste0("rank", rank_use)]]
+
+
+## Read in scores for programs
+scores<-readRDS(paste0(analysis_dir, "NMF_scores_rank",rank_use,".Rds"))
+
+all_plots<- lapply(colnames(scores[!grepl("Max", colnames(scores))]), function(x){
+  df<- scores[,c(x, "MaxProgram")]; colnames(df)<- c("ProgramScore", "MaxProgram")
+  ggplot(df, aes(x=ProgramScore, fill=MaxProgram))+
+    geom_histogram()+
+    scale_fill_manual(values=colors_use)+
+    ggtitle(x)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "Histogram_ProgramScores.png"), width=15, height=9)
+```
+
+## Breakdown percentage of programs in subtypes
+```{r}
+rank_use<- 6
+colors_use<-color_annots[[paste0("rank", rank_use)]]
+variable_name<- paste0("NMF_rank", rank_use, "byScore_annotByAdult10X_withCycling")
+
+## Create df for plotting
+myeloid_df<-myeloid_seurat@meta.data[,c("sampleid", "NiceSubtype",variable_name)]
+myeloid_bd<- as.data.frame(table(myeloid_df$NiceSubtype, myeloid_df[[ variable_name]]))
+colnames(myeloid_bd)<- c("Subtype", "Program", "NCells")
+
+## Convert n cells to percentage
+myeloid_bd<- myeloid_bd %>% group_by(Subtype) %>% mutate(PerCells=NCells/sum(NCells)) %>% as.data.frame()
+
+## Add on broad subtype
+myeloid_bd$BroadSubtype<- plyr::mapvalues(myeloid_bd$Subtype, myeloid_seurat$NiceSubtype, myeloid_seurat$NiceSubtype_Merge,warn_missing = FALSE)
+myeloid_bd$Subtype<- gsub("Hemispheric-", "", gsub("Midline-", "", myeloid_bd$Subtype))
+
+## Plot
+ggplot(myeloid_bd, aes(x=Subtype, y=PerCells, fill=Program))+
+  geom_bar(position = "stack", stat="identity")+
+  scale_fill_manual(values=colors_use)+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle=45, hjust=1, color="black", face="bold"),
+        axis.text.y = element_text(color="black", face="bold"),
+        axis.title.y = element_text(color="black", face="bold"))+
+  ylab("Proportion of cells in program")+xlab("")+
+  facet_grid(cols=vars(BroadSubtype), scale="free_x", space="free_x")
+ggsave(paste0(figure_dir, "ProgramBreakdown_BySubtype_rank", rank_use, ".png"), width=6.2, height=4)  
+
+
+```
+
+## Visualize how sample-specific each program is
+## Normalize based on ncells in each sample, plot program breakdown by sample
+```{r}
+rank<- 6
+variable_name<- paste0("NMF_rank", rank_use, "byScore_annotByAdult10X_withCycling")
+
+bd<- as.data.frame(table(myeloid_seurat$sampleid, myeloid_seurat@meta.data[[variable_name]]))
+colnames(bd)<- c("Sample", "Program", "Ncells")
+
+## Add on number of total cells per sample
+nCells_perSample<- table(myeloid_seurat$sampleid)
+bd$Ncells_perSample<- as.numeric(as.character(plyr::mapvalues(bd$Sample, names(nCells_perSample), nCells_perSample)))
+
+## Normalize Ncells per program per sample by number of total cells per sample
+## Add on norm factor, then multiple nCells per program per sample by norm factor
+bd$NormFactor<- max(bd$Ncells_perSample)/bd$Ncells_perSample
+bd$Ncells_normalized<-bd$Ncells * bd$NormFactor
+bd %>% group_by(Sample) %>% summarise(sum(Ncells_normalized))
+
+## Normalize ncells per program by program size
+bd <- bd %>% group_by(Program) %>% mutate(Percells_normalized=Ncells_normalized/sum(Ncells_normalized)) %>% as.data.frame()
+bd <- bd %>% group_by(Program) %>% mutate(Percells=Ncells/sum(Ncells)) %>% as.data.frame()
+
+## Plot
+colors_use<- distinctColorPalette(length(unique(bd$Sample)))
+names(colors_use)<-unique(bd$Sample)
+
+  ## without normalization
+  ggplot(bd, aes(x=Program, y=Percells, fill=Sample))+
+    geom_bar(stat="identity", position="stack")+
+    theme_classic()+
+    scale_fill_manual(values=colors_use)+
+    theme(axis.text.x = element_text(angle=45, hjust=1),
+          axis.text = element_text(face="bold", color="black"),
+          axis.title.y = element_text(face="bold", color="black"))+
+    xlab("")+ylab("Proportion of program by sample")
+  ggsave(paste0(figure_dir, "ProgramBreakdown_bySample_rank", rank, ".png"), width=6, height=5)
+
+  ## with normalization
+  ggplot(bd, aes(x=Program, y=Percells_normalized, fill=Sample))+
+    geom_bar(stat="identity", position="stack")+
+    theme_classic()+
+    scale_fill_manual(values=colors_use)+
+    theme(axis.text.x = element_text(angle=45, hjust=1),
+          axis.text = element_text(face="bold", color="black"),
+          axis.title.y = element_text(face="bold", color="black"))+
+    xlab("")+ylab("Proportion of program by sample\nnormalized by sample cell count")
+  ggsave(paste0(figure_dir, "ProgramBreakdown_bySample_normalizedBySampleSize_rank", rank, ".png"), width=6, height=5)
+```
+
+## Breakdowns for scCoda- scCoda doesn't work for this cohort due to small cell sizes across subtypes
+```{r}
+sccoda_dir<- paste0("../../scCoda/data/",cohort, "/")
+if(!dir.exists(sccoda_dir)){dir.create(sccoda_dir)}
+
+## ped tcells
+meta<- myeloid_seurat@meta.data
+rank<- 6
+variable_name<- paste0("NMF_rank", rank_use, "byScore_annotByAdult10X_withCycling")
+
+## Program by subtype
+bd<- as.data.frame.matrix(table(meta$sampleid, meta[[variable_name]]))
+bd$Subtype<- plyr::mapvalues(rownames(bd), meta$sampleid, meta$NiceSubtype, warn_missing = FALSE)
+bd$Sample<- rownames(bd)
+bd$Subtype<- gsub("-", "_", bd$Subtype)
+write.csv(bd, paste0(sccoda_dir,"Ped_Myeloid_NMFProgramsWithCycling.csv"), row.names = FALSE)
+
+```

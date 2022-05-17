@@ -1,0 +1,220 @@
+---
+title: "CompareProgramProportions.Rmd"
+author: "Jenna LaBelle"
+date: "11/11/2021"
+output: html_document
+---
+
+## Purpose:
+For NMF programs identified from merged adult/ped myeloid cells (Ped.Adult_merged_NMF.Rmd), compare proportions
+
+## Approach:
+Score ped and adult myeloid cells for all programs identified in Ped.Adult_merged_NMF.Rmd. Three options for these programs are explored.
+
+```{r}
+library(Seurat) 
+library(clusterProfiler)
+library(biomaRt)
+library(stringr)
+library(ggpubr)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/02b_Myeloid/03_CompareToAdult/")
+
+analysis_dir_tmp<- paste0(working_dir, "/analysis/CompareProgramProportions_MergedAdult.PedNMF/")
+figure_dir_tmp<- paste0(working_dir, "/figures/CompareProgramProportions_MergedAdult.PedNMF/")
+
+if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp)};if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+```
+
+## Read in merged adult/ped seurat object (Merge_AssessIntegration.Rmd) and marker genes from combined ped/adult NMF (NMF/Adult/Myeloid/Ped.Adult_merged_NMF.Rmd)
+```{r}
+cohort<- "pedOnly_nomuv63"
+myeloid_seurat<- readRDS(paste0("analysis/Merge_AssessIntegration/",cohort,"/adult_withMUV.FALSE/myeloid_seurat_Ped.AdultGBM.IDHMut_merged.Rds" ))
+
+figure_dir<- paste0(figure_dir_tmp, cohort, "/"); analysis_dir<- paste0(analysis_dir_tmp, cohort, "/")
+if(!dir.exists(figure_dir)){dir.create(figure_dir)};if(!dir.exists(analysis_dir)){dir.create(analysis_dir)}
+
+marker_options<- readRDS(paste0("../01b_Ped.Adult.NMF/analysis/Ped.Adult_NMF/", cohort,"/AdultWithMUV.FALSE/Adult.Ped_Markers_option1.Rds" ))
+  ## pedOnly_nomuv63.withmuv91:
+    ## marker options : ideally, will be able to use either the 2nd or 3rd options. if not, will go with the first.
+    ## Keep NMF2: programs directly from NMF of ped/adult used. NMF2 renamed as Phago_IFN due to correlation with both programs.
+    ## FullPhagoIFN: remove NMF2, replace with ped Phago and IFN programs
+    ## SubsetPhagoIFN: remove NMF2, replace with ped Phago and IFN genes that are ALSO found in NMF2
+  ## pedOnly_nomuv63: only a single option, keeps all programs
+
+## normalize count matrix
+cm_list<- NormCenter(myeloid_seurat@assays$RNA@counts)
+cm_mean<- rowMeans(log2(cm_list$raw_data + 1))
+```
+
+## Score for each of the options
+```{r}
+all_scores<- lapply(marker_options, function(x){
+  scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, x)))
+  scores$MaxProgram<- apply(scores, 1, function(x){names(x)[which.max(x)]})
+  scores$MaxScore<- apply(scores[,colnames(scores) != "MaxProgram"], 1, function(x){x[which.max(x)]})
+  return(scores)
+})
+names(all_scores)<- names(marker_options)
+
+## Rename program annotations
+colnames(all_scores$KeepAll)<- gsub("IFN_Mg_TAM", "IFN_TAM", gsub("Mo_TAM", "Hypoxic_TAM", gsub("Stress_Response", "Microglia", colnames(all_scores$KeepAll))))
+all_scores$KeepAll$MaxProgram<-  gsub("IFN_Mg_TAM", "IFN_TAM", gsub("Mo_TAM", "Hypoxic_TAM", gsub("Stress_Response", "Microglia", all_scores$KeepAll$MaxProgram)))
+
+saveRDS(all_scores, paste0(analysis_dir, "Score_for_ped.adultPrograms_options.Rds"))
+```
+
+## Add to seurat, plot
+```{r}
+all_scores<- readRDS(paste0(analysis_dir, "Score_for_ped.adultPrograms_options.Rds"))
+
+## Select option to use downstream
+option_use<- "KeepAll"
+scores<- all_scores[[option_use]]
+
+colors_use<-c("red","olivedrab4", "navy","turquoise3",  "magenta", "orange")
+names(colors_use)<- c("IFN_TAM", "Inflammatory", "Hypoxic_TAM", "Monocytes", "NMF3", "Microglia")
+
+## Add to seurat object
+myeloid_seurat<- AddMetaData(myeloid_seurat, scores)
+
+## UMAP of max program
+DimPlot(myeloid_seurat, group.by = "MaxProgram")+scale_color_manual(values=colors_use)
+ggsave(paste0(figure_dir, "UMAP_MaxPedProgram_", option_use, ".png"), width=6, height=5)
+
+
+## Proportion of programs in ped/adult
+df<- as.data.frame(table(myeloid_seurat$MaxProgram, myeloid_seurat$Age))
+colnames(df)<- c("Program", "Age", "Ncells")
+df<- df %>% group_by(Age) %>% mutate(PerCells=Ncells/sum(Ncells)) %>% as.data.frame()
+ggplot(df, aes(x=Age, y=PerCells, fill=Program))+
+  geom_bar(stat="identity", position="stack")+
+  theme_classic()+
+  scale_fill_manual(values=colors_use)+
+  ylab("Proportion of cells in program")+ xlab("")+
+  theme(axis.text = element_text(color="black", face="bold"),
+        axis.title = element_text(color="black", face="bold"))
+ggsave(paste0(figure_dir, "Age.BreakdownByPedProgram_", option_use, ".png"), width=4, height=4)
+
+## Proportion of programs in ped/adult  by sample
+df<- as.data.frame(table(myeloid_seurat$MaxProgram, myeloid_seurat$sampleid))
+colnames(df)<- c("Program", "Sample", "Ncells")
+
+  ## add on age
+  df$Age<- plyr::mapvalues(df$Sample, myeloid_seurat$sampleid, myeloid_seurat$Age, warn_missing = FALSE)
+  
+  ## Add on subtype- used for ordering
+  df$Subtype<- plyr::mapvalues(df$Sample, myeloid_seurat$sampleid, myeloid_seurat$NiceSubtype, warn_missing = FALSE)
+  subtype_order<- unique(df$Subtype); names(subtype_order)<- 1:length(subtype_order)
+  df$Order<- as.numeric(as.character(plyr::mapvalues(df$Subtype, subtype_order, names(subtype_order))))
+  
+
+  ## plot
+  df<- df %>% group_by(Sample) %>% mutate(PerCells=Ncells/sum(Ncells)) %>% as.data.frame()
+  ggplot(df, aes(x=reorder(Sample,Order), y=PerCells, fill=Program))+
+    geom_bar(stat="identity", position="stack")+
+    theme_classic()+
+    scale_fill_manual(values=colors_use)+
+    ylab("Proportion of cells\nin program")+ xlab("")+
+    theme(axis.text = element_text(color="black", face="bold"),
+          axis.text.x = element_text(angle=45, hjust=1),
+          axis.title = element_text(color="black", face="bold"))+
+    facet_grid(cols=vars(Age), scale="free_x", space="free_x")
+  ggsave(paste0(figure_dir, "Age.BreakdownByProgram_", option_use, "_bySample.png"), width=9, height=2.5)
+  
+## Proportion of programs in ped/adult GBM, by sample
+seurat_tmp<- subset(myeloid_seurat, NiceSubtype %in% c("GBM", "Hemispheric-HistoneWT"))
+df<- as.data.frame(table(seurat_tmp$MaxProgram, seurat_tmp$sampleid))
+colnames(df)<- c("Program", "Sample", "Ncells")
+
+  ## add on age
+  df$Age<- plyr::mapvalues(df$Sample, seurat_tmp$sampleid, seurat_tmp$Age, warn_missing = FALSE)
+
+  ## plot
+  df<- df %>% group_by(Sample) %>% mutate(PerCells=Ncells/sum(Ncells)) %>% as.data.frame()
+  ggplot(df, aes(x=Sample, y=PerCells, fill=Program))+
+    geom_bar(stat="identity", position="stack")+
+    theme_classic()+
+    scale_fill_manual(values=colors_use)+
+    ylab("Proportion of cells in program")+ xlab("")+
+    theme(axis.text = element_text(color="black", face="bold"),
+          axis.text.x = element_text(angle=45, hjust=1),
+          axis.title = element_text(color="black", face="bold"))+
+    facet_grid(cols=vars(Age), scale="free_x", space="free_x")
+  ggsave(paste0(figure_dir, "Age.BreakdownByProgram_", option_use, "_GBM_bySample.png"), width=8, height=4)
+
+## Density plots
+  ## Create df for plotting
+  myeloid_df<-myeloid_seurat@meta.data[,c("sampleid", "Age",as.character(unique(myeloid_seurat$MaxProgram)) )]
+  
+  
+  ## get number of cells per subtype, add to df
+  nCells<- as.data.frame(table(myeloid_seurat$Age))
+  myeloid_df$NCells<- plyr::mapvalues(myeloid_seurat$Age, nCells$Var1, nCells$Freq)
+  myeloid_df$JustAge<- myeloid_df$Age
+  myeloid_df$Age<- paste0(myeloid_df$Age, "\n", "nCells=",myeloid_df$NCells)
+  
+  #colors_use<-c(`Ped\nnCells=1105`="red", `Adult\nnCells=1821`="navy")
+  colors_use<-c(`Ped\nnCells=958`="red", `Adult\nnCells=1821`="navy")
+  
+  ## Plot each nmf program
+  all_plots<- list()
+  for(i in as.character(unique(myeloid_seurat$MaxProgram))){
+    df<- myeloid_df[,c(i, "Age")]
+    colnames(df)<- c("score", "Age")
+    p<-ggplot(df, aes(x=score, fill=Age))+
+      geom_density(alpha=0.6)+
+      ggtitle(i)+
+      scale_fill_manual(values=colors_use)+
+      theme_classic()+
+      theme(legend.title = element_blank(),
+            legend.position = "none",
+            plot.title = element_text(size=20, face="bold", hjust=0.5))
+  
+    all_plots[[i]]<-p
+  }
+  
+  cowplot::plot_grid(plotlist = all_plots, ncol=4)
+  
+  ggsave(paste0(figure_dir, "DensityOfNMFByAge_", option_use, ".png"), width=18, height=8)
+  
+saveRDS(myeloid_seurat, paste0("analysis/Merge_AssessIntegration/",cohort,"/myeloid_seurat_Ped.AdultGBM.IDHMut_merged.Rds" ))
+```
+
+## Breakdowns for scCoda-
+```{r}
+sccoda_dir<- paste0("../../scCoda/data/",cohort, "/")
+if(!dir.exists(sccoda_dir)){dir.create(sccoda_dir)}
+
+## ped tcells
+meta<- myeloid_seurat@meta.data
+
+## Program by Age
+bd<- as.data.frame.matrix(table(meta$sampleid, meta$MaxProgram))
+
+## In a sample, can't have more than 50% of cell types be 0
+nPrograms<- ncol(bd)
+bd$nPrograms<- apply(bd, 1, function(x){sum(x>1)})
+bd$PF<- bd$nPrograms>(nPrograms/2)
+bd<- bd[bd$PF,]; bd$PF<-NULL; bd$nPrograms<-NULL
+
+## Add on subtype to compare proportions
+bd$Subtype<- plyr::mapvalues(rownames(bd), meta$sampleid, meta$Age, warn_missing = FALSE)
+bd$Sample<- rownames(bd)
+bd$Subtype<- gsub("-", "_", bd$Subtype)
+
+
+
+write.csv(bd, paste0(sccoda_dir,"Ped.Adult_Myeloid_NMFPrograms.csv"), row.names = FALSE)
+
+```

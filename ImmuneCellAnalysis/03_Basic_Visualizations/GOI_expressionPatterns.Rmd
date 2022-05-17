@@ -1,0 +1,592 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+```{r}
+base_dir = "/Users/jlabelle/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/03_Basic_Visualizations/")
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+
+library(Seurat)
+library(ggplot2)
+library(ggpubr)
+library(randomcoloR)
+
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+```
+
+## Set data directories
+```{r}
+cohort<- "pedOnly_nomuv63"; rank_use<- 8; sharedBy="union"
+
+figure_dir<- paste0("figures/GOI_expressionPatterns/", cohort, "/")
+if(!dir.exists(figure_dir)){dir.create(figure_dir)}
+
+
+tcell_data_dir<- paste0("../02a_Tcells/02_Ped.Adult/03_Visualize.Reannotate_programs/analysis/Reannotate_programs/",
+                        "rank", rank_use, "_sharedBy", sharedBy, "/")
+myeloid_data_dir<- paste0("../01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/",
+                          cohort, "/")
+adult_myeloid_data_dir<-"../01_Preprocessing/03_PreprocessAdultDatasets/analysis/Preprocess_AdultMyeloid/"
+ped.adult_myeloid_data_dir<-paste0("../02b_Myeloid/03_CompareToAdult/analysis/Merge_AssessIntegration/",
+                                   cohort, "/adult_withMUV.FALSE/")
+immune_data_dir<- paste0("../01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/", cohort, "/")
+tumor_dir<- "../../../TumorCellAnnotation/AllSubtypesTogether/analysis/Merge_allSubtypes/" ## for tumor data
+```
+
+
+
+## Read in processed seurat objects- all immune (ped), myeloid (ped, adult), tcell (ped, adult), tumor (ped)
+```{r}
+## All immune (myeloid + tcell)- only for ped
+ped_immune_seurat<- readRDS(paste0(immune_data_dir, "tcell.myeloid_seurat_harmony.Rds"))
+
+## Tcell (all, cd4, cd8)- for ped and adult + ped/adult merged
+  ## Ped
+  ped_tcell_seurat<- readRDS(paste0(tcell_data_dir, "ped_seurat_tcell_harmony.Rds"))
+  ped_cd8_seurat<- readRDS(paste0(tcell_data_dir, "ped_seurat_cd8_harmony.Rds"))
+  ped_cd4_seurat<- readRDS(paste0(tcell_data_dir, "ped_seurat_cd4_harmony.Rds"))
+  
+  ## Adult
+  adult_tcell_seurat<- readRDS(paste0(tcell_data_dir, "adult_seurat_tcell_harmony.Rds"))
+  adult_cd8_seurat<- readRDS(paste0(tcell_data_dir, "adult_seurat_cd8_harmony.Rds"))
+  adult_cd4_seurat<- readRDS(paste0(tcell_data_dir, "adult_seurat_cd4_harmony.Rds"))
+  
+  ## Ped/Adult merged
+  pedAdult_tcell_seurat<-readRDS(paste0(tcell_data_dir, "ped.adult_seurat_tcell_harmony.Rds"))
+  pedAdult_cd8_seurat<- readRDS(paste0(tcell_data_dir, "ped.adult_seurat_cd8_harmony.Rds"))
+  pedAdult_cd4_seurat<- readRDS(paste0(tcell_data_dir, "ped.adult_seurat_cd4_harmony.Rds"))
+
+## Myeloid - for ped and adult + ped/adult merged
+  ## Ped
+  ped_myeloid_seurat<- readRDS(paste0(myeloid_data_dir, "myeloid_seurat_noDC.B_harmony.Rds"))
+  
+  ## Adult
+  load(paste0(adult_myeloid_data_dir,  "GBMNeftel_IDHmut2018_myeloid_merged_seurat.Robj"))
+  adult_myeloid_seurat<- adult_seurat; rm(adult_seurat)
+  
+  ## Ped/Adult merged
+  pedAdult_myeloid_seurat<- readRDS(paste0(ped.adult_myeloid_data_dir, "myeloid_seurat_Ped.AdultGBM.IDHMut_merged.Rds"))
+
+## Tumor- for ped only
+load(paste0(tumor_dir, "AllTumorSeuratObj.Robj"))
+tumor_seurat<- tumor_merged; rm(tumor_merged)
+
+
+```
+
+
+## Set column name for programs to use downstream
+```{r}
+tcell_program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
+myeloid_program_name<- "NMF_rank6_annotByAdult10X"
+
+```
+
+## Optional: remove Inhibitory from CD8- may not be real CD8 program
+```{r}
+figure_dir<- paste0(figure_dir, "removeCD8.Inhibitory/")
+if(!dir.exists(figure_dir)){dir.create(figure_dir)}
+
+ped_cd8_seurat$tmp<- ped_cd8_seurat@meta.data[[tcell_program_name]]
+ped_cd8_seurat<- subset(ped_cd8_seurat, tmp != "Inhibitory")
+ped_cd8_seurat$tmp<- NULL
+
+adult_cd8_seurat$tmp<- adult_cd8_seurat@meta.data[[tcell_program_name]]
+adult_cd8_seurat<- subset(adult_cd8_seurat, tmp != "Inhibitory")
+adult_cd8_seurat$tmp<- NULL
+
+pedAdult_cd8_seurat$tmp<- pedAdult_cd8_seurat@meta.data[[tcell_program_name]]
+pedAdult_cd8_seurat<- subset(pedAdult_cd8_seurat, tmp != "Inhibitory")
+pedAdult_cd8_seurat$tmp<- NULL
+```
+
+## PTGER2/PGE enzymes
+```{r}
+analysis_name<- "PTGER2"
+
+figure_dir_use<- paste0(figure_dir, analysis_name, "/"); if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
+
+## PTGER2 in CD8
+  ## by sample
+  VlnPlot(ped_cd8_seurat, features=c("PTGER2"), group.by = "sampleid", sort=TRUE)+
+    NoLegend()+xlab("")
+  ggsave(paste0(figure_dir_use, "Vln_PTGER2_CD8_bySample.png"), width=6, height=3)
+  
+  ## by clonality
+  VlnPlot(ped_cd8_seurat, features=c("PTGER2"), group.by = "sampleid", split.by = "clonal", sort=TRUE, split.plot=TRUE)
+  ggsave(paste0(figure_dir_use, "Vln_PTGER2_CD8_byClonal.png"), width=6, height=3)
+  
+  ## by program
+  VlnPlot(ped_cd8_seurat, features=c("PTGER2"), group.by = tcell_program_name, sort=TRUE)+
+    NoLegend()+xlab("")
+  ggsave(paste0(figure_dir_use, "Vln_PTGER2_CD8_byprogram.png"), width=4, height=3)
+  
+  ## by program, for samples that express PTGER2
+  samples_express<- c("BT1478", "BT1857", "BT1733", "MUV078")
+  seurat_tmp<- subset(ped_cd8_seurat, sampleid %in% samples_express)
+  
+  VlnPlot(seurat_tmp, features=c("PTGER2"), group.by = tcell_program_name, sort=TRUE)+
+    NoLegend()+xlab("")
+  ggsave(paste0(figure_dir_use, "Vln_PTGER2_CD8_byprogram_onlySamplesThatExpressPTGER2.png"), width=3, height=3)
+  
+  DotPlot(seurat_tmp, features=c("PTGER2"), group.by =tcell_program_name)+
+    xlab("")+ylab("")
+  ggsave(paste0(figure_dir_use, "DotPlot_PTGER2_CD8_byprogram_onlySamplesThatExpressPTGER2.png"), width=4, height=3)
+  
+## PGE enzymes in Myeloid
+  DotPlot(ped_myeloid_seurat, features=c("PTGES2", "PTGS1", "PTGS2"), group.by = "sampleid") + DotPlot(ped_myeloid_seurat, features=c("PTGES2", "PTGS1", "PTGS2"), group.by = myeloid_program_name)
+  ggsave(paste0(figure_dir_use, "DotPlot_PTGEREnzmyes_Myeloid_bySample.Program.png"), width=12, height=4)
+  
+## PTGER4 in CD8
+  ## by sample
+  VlnPlot(ped_cd8_seurat, features=c("PTGER4"), group.by = "sampleid", sort=TRUE)+
+    NoLegend()+xlab("")
+  ggsave(paste0(figure_dir_use, "Vln_PTGER4_CD8_bySample.png"), width=6, height=3)
+  
+  ## by clonality
+    VlnPlot(ped_cd8_seurat, features=c("PTGER4"), group.by = "sampleid", split.by = "clonal", sort=TRUE, split.plot=TRUE)+
+      ylab("") + xlab("")
+  ggsave(paste0(figure_dir_use, "Vln_PTGER4_CD8_bySample.png"), width=6, height=3)
+  
+   ## by program
+  VlnPlot(ped_cd8_seurat, features=c("PTGER4"), group.by = tcell_program_name, sort=TRUE)+
+    NoLegend()+xlab("")
+  ggsave(paste0(figure_dir_use, "Vln_PTGER4_CD8_byprogram.png"), width=3, height=3)
+  
+  ## In myeloid
+  VlnPlot(ped_myeloid_seurat, features=c("PTGER4"), group.by = "sampleid", sort=TRUE)+
+    NoLegend()+xlab("")
+  ggsave(paste0(figure_dir_use, "Vln_PTGER4_Myeloid_bySample.png"), width=6, height=3)
+  
+  ## In tumor
+  VlnPlot(tumor_seurat, features=c("PTGER4"), group.by = "sample", sort=TRUE)+
+    NoLegend()+xlab("")
+  ggsave(paste0(figure_dir_use, "Vln_PTGER4_Tumor_bySample.png"), width=6, height=3)
+  
+  ## In adult/ped CD8 T cells
+  VlnPlot(pedAdult_cd8_seurat, features=c("PTGER2"), group.by = "Age", sort=TRUE)+
+    NoLegend()+xlab("")
+  ggsave(paste0(figure_dir_use, "Vln_PTGER4_CD8_byAge.png"), width=4, height=3)
+  
+  ## With adult, by subtype + age (over 25, 4-25, under 4)
+    under4<- c("BT1478", "BT1857", "BT1733", "MUV078")
+    df<- pedAdult_cd8_seurat@meta.data
+    df$PTGER2<- pedAdult_cd8_seurat@assays$RNA@data["PTGER2",]
+    df$Age<- plyr::mapvalues(rownames(df), colnames(pedAdult_cd8_seurat), pedAdult_cd8_seurat$Age)
+    df$Age<- ifelse(df$sampleid %in% under4, "Under4",df$Age)
+    df$Age<- gsub("Ped", "Ped_4-25", df$Age)
+    
+    ## Call SPP1/CD44 as expressed or not
+    df<- df[,c("sampleid", "PTGER2", "Age", "clonal")]
+    df$PTGER2_expressed<- ifelse(df$PTGER2>2, "Expressed", "NotExpressed")
+    df$clonal<- gsub("not clonal", "nonclonal", df$clonal)
+    
+    
+    ## Determine mean expression/mean percent expressed for each age/program
+    df$UniqueID<- paste0(df$Age, "__", df$clonal)
+    df_summary<- df %>% group_by(UniqueID) %>% summarise(NormalizedExpression=mean(PTGER2),
+                                                         PercentExpressed=sum(PTGER2_expressed =="Expressed")/n()) %>%
+      as.data.frame()
+    
+    ## Split uniqueID back into age/program
+    df_summary$Age<- unlist(lapply(strsplit(df_summary$UniqueID, split="__"),function(x){x[1]}))
+    df_summary$Clonality<- unlist(lapply(strsplit(df_summary$UniqueID, split="__"),function(x){x[2]}))
+    
+    ## Plot
+    ggplot(df_summary, aes(x=Clonality, y=Age, color=NormalizedExpression, size=PercentExpressed))+
+      geom_point()+
+      theme_bw()+
+      #facet_grid(cols=vars(Age), space="free_x", scale="free_x")+
+      scale_color_gradient(low="white", high="red")+
+      theme(axis.text.x = element_text(angle=45, hjust=1),
+            axis.text = element_text(face="bold", color="black"))+
+      xlab("")+ylab("")
+    ggsave(paste0(figure_dir_use, "PTGER2_ByAgeGroup.clonality.png"), width=4, height=4)
+  
+  
+## 4 samples express PTGER2 in cd8- may be age linked? plot ages
+    ## Remove samples with < 10 cells
+    nCells<- table(ped_cd8_seurat$sampleid)
+    samples_keep<- names(nCells)[nCells>5]
+    seurat_tmp<-subset(ped_cd8_seurat, sampleid %in% samples_keep)
+    
+    ## Get mean PTGER2 expression by sample
+    df<- as.data.frame(seurat_tmp@assays$RNA@data["PTGER2",])
+    colnames(df)<-"PTGER2"
+    df$sample<- plyr::mapvalues(rownames(df), colnames(seurat_tmp), seurat_tmp$sampleid)
+    df<- df[rownames(df) != df$sample,]
+    df<- df %>% group_by(sample) %>% summarise(meanPTGER=mean(PTGER2)) %>% as.data.frame()
+    
+    ## Add on age
+    df$age<- as.numeric(as.character(plyr::mapvalues(df$sample, seurat_tmp$sample, seurat_tmp$age_numeric,
+                                                     warn_missing = FALSE)))
+    
+    ## Add on age grou
+    df$AgeGroup<- ifelse(df$age<4, "under4", "over4")
+    
+    ggplot(df, aes(x=age, y=meanPTGER, color=AgeGroup))+
+      geom_point()+
+      theme_classic()+
+      geom_hline(yintercept = 1, linetype="dashed")+
+      geom_vline(xintercept = 4, linetype="dashed")+
+      ylab("mean PTGER2 log2(TPM)")+
+      xlab("Age (years)")+
+      theme(axis.text = element_text(face="bold", color="black"),
+            axis.title = element_text(face="bold", color="black"))
+    ggsave(paste0(figure_dir_use, "Age.vs.PTGER2expression_excludeUnder5Cells.png"), width=5, height=4)
+
+## Plot PTGER2 expression vs age in CD8, removing any samples without at least 10 CD8 cells + also adding in adult
+    ## Remove samples with < 10 cells
+    nCells<- table(pedAdult_cd8_seurat$sampleid)
+    samples_keep<- names(nCells)[nCells>5]
+    seurat_tmp<-subset(pedAdult_cd8_seurat, sampleid %in% samples_keep)
+    
+    ## Get mean PTGER2 expression by sample
+    df<- as.data.frame(seurat_tmp@assays$RNA@data["PTGER2",])
+    colnames(df)<-"PTGER2"
+    df$sample<- plyr::mapvalues(rownames(df), colnames(seurat_tmp), seurat_tmp$sampleid)
+    df<- df[rownames(df) != df$sample,]
+    df<- df %>% group_by(sample) %>% summarise(meanPTGER=mean(PTGER2)) %>% as.data.frame()
+    
+    ## Add on age
+    df$age<- as.numeric(as.character(plyr::mapvalues(df$sample, seurat_tmp$sample, seurat_tmp$age_numeric,
+                                                     warn_missing = FALSE)))
+    
+    ## Add on cohort
+    df$cohort<- plyr::mapvalues(df$sample, seurat_tmp$sampleid, seurat_tmp$Age, warn_missing = FALSE)
+    
+    ggplot(df, aes(x=age, y=meanPTGER, color=cohort))+
+      geom_point()+
+      theme_classic()+
+      geom_hline(yintercept = 1, linetype="dashed")+
+      geom_vline(xintercept = 4, linetype="dashed")+
+      ylab("mean PTGER2 log2(TPM)")+
+      xlab("Age (years)")+
+      theme(axis.text = element_text(face="bold", color="black"),
+            axis.title = element_text(face="bold", color="black"))
+    ggsave(paste0(figure_dir_use, "Age.vs.PTGER2expression_includeAdult_excludeUnder5Cells.png"), width=5, height=4)
+    
+## Plot PTGER2 expression vs age in clonal CD8, removing any samples without at least 5 clonal CD8 cells + also adding in adult
+    ## Remove samples with < 10 cells
+    clonal_cd8<- subset(pedAdult_cd8_seurat, clonal=="clonal")
+    nCells<- table(clonal_cd8$sampleid)
+    samples_keep<- names(nCells)[nCells>=5]
+    seurat_tmp<-subset(clonal_cd8, sampleid %in% samples_keep)
+    
+    ## Get mean PTGER2 expression by sample
+    df<- as.data.frame(seurat_tmp@assays$RNA@data["PTGER2",])
+    colnames(df)<-"PTGER2"
+    df$sample<- plyr::mapvalues(rownames(df), colnames(seurat_tmp), seurat_tmp$sampleid)
+    df<- df[rownames(df) != df$sample,]
+    df<- df %>% group_by(sample) %>% summarise(meanPTGER=mean(PTGER2)) %>% as.data.frame()
+    
+    ## Add on age
+    df$age<- as.numeric(as.character(plyr::mapvalues(df$sample, seurat_tmp$sample, seurat_tmp$age_numeric,
+                                                     warn_missing = FALSE)))
+    
+    ## Add on cohort
+    df$cohort<- plyr::mapvalues(df$sample, seurat_tmp$sampleid, seurat_tmp$Age, warn_missing = FALSE)
+    
+    ggplot(df, aes(x=age, y=meanPTGER, color=cohort))+
+      geom_point()+
+      theme_classic()+
+      geom_hline(yintercept = 1, linetype="dashed")+
+      geom_vline(xintercept = 4, linetype="dashed")+
+      ylab("mean PTGER2 log2(TPM)")+
+      xlab("Age (years)")+
+      theme(axis.text = element_text(face="bold", color="black"),
+            axis.title = element_text(face="bold", color="black"))
+    ggsave(paste0(figure_dir_use, "Age.vs.PTGER2expression_includeAdult_excludeUnder10Cells.png"), width=5, height=4)
+    
+    
+```
+
+## SPP1/CD44
+```{r}
+analysis_name<- "SPP1.CD44"
+figure_dir_use<- paste0(figure_dir, analysis_name, "/"); if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
+
+seurat_use<- ped_myeloid_seurat
+df<- seurat_use@meta.data
+
+
+## Add on SPP1/CD44 expression
+df$SPP1<- seurat_use@assays$RNA@data["SPP1",]
+df$CD44<- seurat_use@assays$RNA@data["CD44",]
+
+## Call SPP1/CD44 as expressed or not
+df<- df[,c(myeloid_program_name, "SPP1", "CD44")]
+df$SPP1_expressed<- ifelse(df$SPP1>2, "Expressed", "NotExpressed")
+df$CD44_expressed<- ifelse(df$CD44>2, "Expressed", "NotExpressed")
+
+## Determine mean expression/mean percent expressed for each age/program
+df$UniqueID<- paste0(df$Age,"___", df[[myeloid_program_name]])
+df_summary<- df %>% group_by(UniqueID) %>% summarise(meanSPP1=mean(SPP1),
+                                                     meanCD44=mean(CD44),
+                                                     meanSPP1_expr=sum(SPP1_expressed =="Expressed")/n(),
+                                                     meanCD44_expr=sum(CD44_expressed =="Expressed")/n()) %>%
+  as.data.frame()
+
+## reformat
+spp1<- df_summary[,c("UniqueID", "meanSPP1", "meanSPP1_expr")]; colnames(spp1)<- c("UniqueID", "meanExpr", "meanPercent")
+cd44<- df_summary[,c("UniqueID", "meanCD44", "meanCD44_expr")]; colnames(cd44)<- c("UniqueID", "meanExpr", "meanPercent")
+spp1$gene<- "SPP1"; cd44$gene<- "CD44"
+
+df_reformat<- rbind(spp1, cd44)
+
+## Split age/program back
+#df_reformat$Age<- unlist(lapply(strsplit(df_reformat$UniqueID, split="___"),function(x){x[1]}))
+df_reformat$Program<- unlist(lapply(strsplit(df_reformat$UniqueID, split="___"),function(x){x[2]}))
+
+## Plot
+colnames(df_reformat)<- c("UniqueID", "NormalizedExpression", "PercentExpressed", "gene", "Program")
+ggplot(df_reformat, aes(x=Program, y=gene, color=NormalizedExpression, size=PercentExpressed))+
+  geom_point()+
+  theme_bw()+
+  #facet_grid(cols=vars(Age), space="free_x", scale="free_x")+
+  scale_color_gradient(low="white", high="red")+
+  theme(axis.text.x = element_text(angle=45, hjust=1),
+        axis.text = element_text(face="bold", color="black"))+
+  xlab("")+ylab("")
+ggsave(paste0(figure_dir_use, "SPP1.CD44_Myeloid_ped_byProgram.png"), width=6, height=3)
+```
+
+## SELPLG
+```{r}
+analysis_name<- "SELPLG"
+figure_dir_use<- paste0(figure_dir, analysis_name, "/"); if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
+
+## SELPLG in CD8 programs/samples/clonality
+DotPlot(ped_cd_seurat, group.by = tcell_program_name, features="SELPLG", scale=FALSE)
+ggsave(paste0(figure_dir_use, "DotPlot_SELPLG_CD8_byProgram.png"), width = 5, height=4)
+
+VlnPlot(ped_cd8_seurat, group.by = "sampleid", features="SELPLG")+NoLegend()
+ggsave(paste0(figure_dir_use, "VlnPlot_SELPLG_CD8_bySample.png"), width = 7, height=3.5)
+
+DotPlot(ped_cd8_seurat, group.by = "clonal", features="SELPLG", scale=FALSE)
+ggsave(paste0(figure_dir_use, "DotPlot_SELPLG_CD8_byClonal.png"), width=5, height=3)
+
+
+## SELPLG in CD4 programs/samples
+DotPlot(ped_cd4_seurat, group.by = tcell_program_name, features="SELPLG", scale=FALSE)
+ggsave(paste0(figure_dir_use, "DotPlot_SELPLG_CD4_byProgram.png"), width = 5, height=4)
+
+VlnPlot(ped_cd4_seurat, group.by = "sampleid", features="SELPLG")+NoLegend()
+ggsave(paste0(figure_dir_use, "VlnPlot_SELPLG_CD4_bySample.png"), width = 7, height=3.5)
+
+
+## By age
+pedAdult_cd8_seurat$clonal<- gsub("not clonal", "nonclonal", pedAdult_cd8_seurat$clonal)
+DotPlot(pedAdult_cd8_seurat, group.by = "Age", features="SELPLG", scale=FALSE)
+
+pedAdult_cd8_seurat$clonal.Age<- paste0( pedAdult_cd8_seurat$Age,"_", pedAdult_cd8_seurat$clonal)
+DotPlot(pedAdult_cd8_seurat, group.by = "clonal.Age", features="SELPLG", scale=FALSE, scale.max=70, scale.min=40)+
+  scale_color_gradient(low="white", high="blue", limits=c(3.75,4.25))
+ggsave(paste0(figure_dir_use, "DotPlot_SELPLG_CD8_byAge.Clonal.png"), width=5, height=3)
+
+## Plot SELPLG expression vs age in CD8, removing any samples without at least 10 CD8 cells + also adding in adult
+    ## Remove samples with < 10 cells
+    nCells<- table(pedAdult_cd8_seurat$sampleid)
+    samples_keep<- names(nCells)[nCells>5]
+    seurat_tmp<-subset(pedAdult_cd8_seurat, sampleid %in% samples_keep)
+    
+    ## Get mean PTGER2 expression by sample
+    df<- as.data.frame(seurat_tmp@assays$RNA@data["SELPLG",])
+    colnames(df)<-"SELPLG"
+    df$sample<- plyr::mapvalues(rownames(df), colnames(seurat_tmp), seurat_tmp$sampleid)
+    df<- df[rownames(df) != df$sample,]
+    df<- df %>% group_by(sample) %>% summarise(meanSELPLG=mean(SELPLG)) %>% as.data.frame()
+    
+    ## Add on age
+    df$age<- as.numeric(as.character(plyr::mapvalues(df$sample, seurat_tmp$sample, seurat_tmp$age_numeric,
+                                                     warn_missing = FALSE)))
+    
+    ## Add on cohort
+    df$cohort<- plyr::mapvalues(df$sample, seurat_tmp$sampleid, seurat_tmp$Age, warn_missing = FALSE)
+    
+    ggplot(df, aes(x=age, y=meanSELPLG, color=cohort))+
+      geom_point()+
+      theme_classic()+
+      geom_hline(yintercept = 1, linetype="dashed")+
+      geom_vline(xintercept = 4, linetype="dashed")+
+      ylab("mean SELPLG log2(TPM)")+
+      xlab("Age (years)")+
+      theme(axis.text = element_text(face="bold", color="black"),
+            axis.title = element_text(face="bold", color="black"))+
+      ylim(0,4)
+    ggsave(paste0(figure_dir_use, "Age.vs.SELPLGexpression_includeAdult_excludeUnder5Cells.png"), width=5, height=4)
+```
+
+## ANXA1
+```{r}
+analysis_name<- "ANXA1"
+figure_dir_use<- paste0(figure_dir, analysis_name, "/"); if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
+
+## ANXA1 in CD8 programs/samples/clonality
+DotPlot(ped_cd8_seurat, group.by = tcell_program_name, features="ANXA1", scale=FALSE)
+ggsave(paste0(figure_dir_use, "DotPlot_ANXA1_CD8_byProgram.png"), width = 5, height=4)
+
+VlnPlot(ped_cd8_seurat, group.by = "sampleid", features="ANXA1")+NoLegend()
+ggsave(paste0(figure_dir_use, "VlnPlot_ANXA1_CD8_bySample.png"), width = 7, height=3.5)
+
+DotPlot(ped_cd8_seurat, group.by = "clonal", features="ANXA1", scale=FALSE)
+ggsave(paste0(figure_dir_use, "DotPlot_ANXA1_CD8_byClonal.png"), width=5, height=3)
+
+## ANXA1 in CD4 programs/samples
+DotPlot(ped_cd4_seurat, group.by = tcell_program_name, features="ANXA1", scale=FALSE)
+ggsave(paste0(figure_dir_use, "DotPlot_ANXA1_CD4_byProgram.png"), width = 5, height=4)
+
+VlnPlot(ped_cd4_seurat, group.by = "sampleid", features="ANXA1")+NoLegend()
+ggsave(paste0(figure_dir_use, "VlnPlot_ANXA1_CD4_bySample.png"), width = 7, height=3.5)
+
+
+## By age
+pedAdult_cd8_seurat$clonal<- gsub("not clonal", "nonclonal", pedAdult_cd8_seurat$clonal)
+DotPlot(pedAdult_cd8_seurat, group.by = "Age", features="ANXA1", scale=FALSE)
+
+pedAdult_cd8_seurat$clonal.Age<- paste0( pedAdult_cd8_seurat$Age,"_", pedAdult_cd8_seurat$clonal)
+DotPlot(pedAdult_cd8_seurat, group.by = "clonal.Age", features="ANXA1", scale=FALSE, scale.max=70, scale.min=40)+
+  scale_color_gradient(low="white", high="blue", limits=c(4.5,5))
+ggsave(paste0(figure_dir_use, "DotPlot_ANXA1_CD8_byAge.Clonal.png"), width=5, height=3)
+
+
+## Plot ANXA1 expression vs age in CD8, removing any samples without at least 10 CD8 cells + also adding in adult
+    ## Remove samples with < 10 cells
+    nCells<- table(pedAdult_cd8_seurat$sampleid)
+    samples_keep<- names(nCells)[nCells>5]
+    seurat_tmp<-subset(pedAdult_cd8_seurat, sampleid %in% samples_keep)
+    
+    ## Get mean PTGER2 expression by sample
+    df<- as.data.frame(seurat_tmp@assays$RNA@data["ANXA1",])
+    colnames(df)<-"ANXA1"
+    df$sample<- plyr::mapvalues(rownames(df), colnames(seurat_tmp), seurat_tmp$sampleid)
+    df<- df[rownames(df) != df$sample,]
+    df<- df %>% group_by(sample) %>% summarise(meanANXA1=mean(ANXA1)) %>% as.data.frame()
+    
+    ## Add on age
+    df$age<- as.numeric(as.character(plyr::mapvalues(df$sample, seurat_tmp$sample, seurat_tmp$age_numeric,
+                                                     warn_missing = FALSE)))
+    
+    ## Add on cohort
+    df$cohort<- plyr::mapvalues(df$sample, seurat_tmp$sampleid, seurat_tmp$Age, warn_missing = FALSE)
+    
+    ggplot(df, aes(x=age, y=meanANXA1, color=cohort))+
+      geom_point()+
+      theme_classic()+
+      geom_hline(yintercept = 1, linetype="dashed")+
+      geom_vline(xintercept = 4, linetype="dashed")+
+      ylab("mean ANXA1 log2(TPM)")+
+      xlab("Age (years)")+
+      theme(axis.text = element_text(face="bold", color="black"),
+            axis.title = element_text(face="bold", color="black"))+
+      ylim(0,4)
+    ggsave(paste0(figure_dir_use, "Age.vs.ANXA1expression_includeAdult_excludeUnder5Cells.png"), width=5, height=4)
+```
+
+## Cellchat interactions: tumor to cd8
+```{r}
+analysis_name<- "cellChat_tumor.cd8"
+figure_dir_use<- paste0(figure_dir, analysis_name, "/"); if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
+
+## receptors in cd8, by program
+DotPlot(cd8_seurat, features=c("TIGIT", "AXL", "LILRB3"), group.by = "NMF_rank4_annot")+
+  ylab("")+xlab("")+
+  scale_color_gradient(low="white", high="red")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))
+ggsave(paste0(figure_dir_use, "TIGIT.AXL.LILRB3_CD8_byProgram.png"), width=4.5, height=4)
+
+## ligand in tumor, by sample
+DotPlot(tumor_seurat, features=c("PVR", "PROS1", "ANGPTL2"), group.by = "sample")
+ggsave(paste0(figure_dir_use, "Ligands_inTumor_bySample.png"), width=6, height=6)
+
+## ligand in tumor, by cell type
+DotPlot(tumor_seurat, features=c("PVR", "PROS1", "ANGPTL2"), group.by = "CellAnnot")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))
+ggsave(paste0(figure_dir_use, "Ligands_inTumor_byProgram.png"), width=6, height=6)
+
+## ligand in tumor, by subtype
+DotPlot(tumor_seurat, features=c("PVR", "PROS1", "ANGPTL2"), group.by = "subtype")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))
+ggsave(paste0(figure_dir_use, "Ligands_inTumor_bySubtype.png"), width=5, height=5)
+```
+
+## Cellchat interactions: tumor to myeloid
+```{r}
+analysis_name<- "cellChat_tumor.myeloid"
+figure_dir_use<- paste0(figure_dir, analysis_name, "/"); if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
+
+## receptors in myeloid, by program
+color_annots<- c(SEPP1_Mo_TAM ="orange", Inflammatory="red", IFN_Mg_TAM="purple", Stress_Response="olivedrab4",
+                            Monocytes="turquoise3", Mo_TAM="navy")
+VlnPlot(myeloid_seurat, features=c("CCR1"), group.by = "NMF_rank6_annotByAdult10X", sort=TRUE)+
+  scale_fill_manual(values=color_annots)+
+  xlab("")+NoLegend()
+ggsave(paste0(figure_dir_use, "CCR1_inMyeloid_byProgram.png"), width=4, height=4)
+
+## ligand in tumor, by sample
+DotPlot(tumor_seurat, features="CCL5", sort=TRUE, group.by = "sample")+NoLegend()+xlab("")
+ggsave(paste0(figure_dir_use, "CCL5_inTumor_bySample.png"), width=6, height=3.5)
+
+## ligand in tumor, by cell type
+DotPlot(tumor_seurat, features="CCL5",  group.by = "CellAnnot")+NoLegend()+xlab("")+
+   theme(axis.text.x = element_text(angle=45, hjust=1))
+ggsave(paste0(figure_dir_use, "CCL5_inTumor_byCellType.png"), width=3, height=6)
+
+## ligand in tumor, by subtype
+tumor_seurat$subtype_tmp<- gsub("epn", "EPN",
+                                gsub("hemiHistoneWT" ,"GBM", 
+                                     gsub("hemiHistoneMut", "Hemispheric_G34RV",
+                                          gsub("midlineHistoneMut", "Midline_K27M",
+                                               gsub("midlineHistoneWT", "Midline_HistoneWT", tumor_seurat$subtype)))))
+DotPlot(tumor_seurat, features=c("CCL5"), group.by = "subtype_tmp")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))+ylab("")+xlab("")
+ggsave(paste0(figure_dir_use, "Ligands_inTumor_bySubtype.png"), width=5, height=4)
+```
+
+## Canonical inhibitory molecules
+```{r}
+analysis_name<- "canonical_inhibitory"
+figure_dir_use<- paste0(figure_dir, analysis_name, "/"); if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
+
+## cd8 by nmf
+DotPlot(cd8_seurat, features=c("PDCD1", "CTLA4", "TIGIT", "KLRB1", "LAG3", "HAVCR2", "CD244", "CD200"), 
+        group.by = "NMF_rank4_annot")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))
+ggsave(paste0(figure_dir_use, "CD8_ByNMF.png"), width=5, height=4)
+
+## cd8 by subtype
+DotPlot(cd8_seurat, features=c("PDCD1", "CTLA4", "TIGIT", "KLRB1", "LAG3","CD244", "CD200"), group.by = "NiceSubtype")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))
+ggsave(paste0(figure_dir_use, "CD8_BySubtype.png"), width=6, height=4)
+
+
+## By age
+all_plots<- lapply(c("PDCD1", "CTLA4", "TIGIT", "KLRB1", "LAG3","CD244", "CD200"), function(x){
+  VlnPlot(merged_cd8, features=x, group.by = "Age", pt.size = .01)+NoLegend()+
+    theme(axis.text.x = element_text(angle=45, hjust=1))+
+    xlab("")+ylab("Log(TPM)")+
+    scale_fill_manual(values=c(Adult="blue", Ped="red"))
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=2)
+ggsave(paste0(figure_dir_use, "Ped.Adult.CD8_ByAge.png"), width=5, height=8)
+
+## ped/adult tcell by age
+merged_cd8$NiceSubtype<- factor(merged_cd8$NiceSubtype, levels=c("GBM", "IDH-G", "Ependymoma", "Hemispheric-BCOR",
+                                                                 "Hemispheric-H3G34R/V", "Hemispheric-HistoneWT",
+                                                                 "Midline-H3K27M", "Midline-HistoneWT"))
+DotPlot(merged_cd8, features=c("PDCD1", "CTLA4", "TIGIT", "KLRB1", "LAG3","CD244", "CD200"), group.by = "NiceSubtype",
+        scale=FALSE)+
+  theme(axis.text.x = element_text(angle=45, hjust=1))+
+  xlab("")+ylab("")
+ggsave(paste0(figure_dir_use, "Ped.Adult.CD8_BySubtype.png"), width=7, height=4)
+```
+
+

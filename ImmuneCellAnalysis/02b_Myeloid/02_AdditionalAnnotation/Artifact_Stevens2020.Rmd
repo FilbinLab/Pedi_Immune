@@ -1,0 +1,218 @@
+---
+title: "Artifact"
+output: html_document
+---
+## Purpose:
+Using the geneset in the 2020 Stevens paper, try to determine whether any myeloid programs are actually stress artifacts due to enzymatic digestion
+
+## Approach:
+Score myeloid cells for artifact geneset, visualize by NMF program using: violin plot, correlation heatmap, histogram. Stress_Response shows some correlation with artifact, but doesn't seem strong enough to remove this program as an artifact
+
+```{r}
+library(Seurat) 
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/02b_Myeloid/02_AdditionalAnnotation/")
+
+integration<-""
+analysis_dir_tmp<- paste0(working_dir, "/analysis/Artifact_Stevens2020/", integration)
+figure_dir_tmp<- paste0(working_dir, "/figures/Artifact_Stevens2020/", integration)
+data_dir_tmp<- paste0("../../01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/",integration)
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(nmf_helper)
+
+
+if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp)}
+if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp)}
+```
+
+## Read in ped myeloid seurat object
+```{r}
+use_harmony_forVis<- "_harmony" ## "_harmony" to use, "" to not use
+if(use_harmony_forVis=="_harmony"){
+  figure_dir_tmp<- paste0(figure_dir_tmp, "Harmony/"); if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp)}
+}else{figure_dir_tmp<- figure_dir}
+
+
+cohort<- "pedOnly_nomuv63"
+figure_dir<- paste0(figure_dir_tmp, cohort, "/")
+analysis_dir<- paste0(analysis_dir_tmp, cohort, "/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir)}
+
+
+data_dir<- paste0(data_dir_tmp, cohort, "/")
+seurat_obj<- readRDS(paste0(data_dir, "myeloid_seurat_noDC.B", use_harmony_forVis,".Rds"))
+
+## Load in scores for programs
+rank_use<-6
+all_scores<- readRDS(paste0("../01a_NMF/analysis/de.novoNMF/",cohort, "/NMF_scores_annotByAdult10X_rank6-6.Rds"))
+scores<- all_scores[[paste0("rank", rank_use)]]
+
+## Load in marker genes for programs
+rank_use<-6
+program_markers<- read.csv(paste0("../01a_NMF/analysis/de.novoNMF/",cohort, "/top_DE_genes_10Xannotated_NMF_rank",rank_use, ".csv"))
+marker_list<- split(program_markers, f=program_markers$cluster); marker_list<- lapply(marker_list, function(x){x$gene})
+```
+
+ ## Read in artifact genes
+```{r}
+marker_dir<- "../../../../../../Marker_genes/"
+artifact_genes<- read.table(paste0(marker_dir, "Stevens2020_biorxiv_MicrogliaArtifactGenes.txt"))
+artifact_genes<- toupper(artifact_genes$V1)
+sum(artifact_genes %in% rownames(seurat_obj)); length(artifact_genes)
+```
+
+## Overlap of stress_response genes / artifact genes
+```{r}
+library(ggVennDiagram)
+ggVennDiagram(list(artifact=artifact_genes, stress_response=marker_list$Stress_Response))+
+  scale_fill_gradient(low="white", high="red")+
+  scale_color_manual(values = c("black", "black"))
+ggsave(paste0(figure_dir, "GeneOverlap_artifcat.v.stress_response.png"), width=3, height=2.5)
+
+ marker_list$Stress_Response[marker_list$Stress_Response %in% artifact_genes]
+```
+
+## Plot  artifact genes- expressed at all higher in stress response?
+```{r}
+## Markers found in artifact, not here
+VlnPlot(myeloid_seurat, features=c("CCL4", "CCL3", "NFKBIZ"), group.by = "NMF_rank6_annotByAdult10X", sort=TRUE, ncol = 3)
+
+## Markers with expression values shown in Stevens 2020- expressed at much higher levels in artifact cluster. is that marked expresseion reflected here?
+VlnPlot(myeloid_seurat, features=c("FOS", "JUN", "DUSP1", "HSPA1A", "ZFP36"), 
+        group.by = "NMF_rank6_annotByAdult10X", sort=TRUE, ncol = 2)
+ggsave(paste0(figure_dir, "ArtifactMarkers_ReplicatingFigure1D.png"), width=7, height=10)
+```
+
+ 
+## Score myeloid cells for artifcat gene set
+```{r}
+cm_list<- NormCenter(seurat_obj@assays$RNA@counts)
+cm_mean<- rowMeans(log2(cm_list$raw_data + 1))
+artifact_score<- scoreSignature(cm_list$center_data, cm_mean, artifact_genes)
+
+## add onto seurat object
+seurat_obj$artifact_score<- as.numeric(plyr::mapvalues(colnames(seurat_obj), names(artifact_score), artifact_score))
+
+saveRDS(seurat_obj, file = paste0(data_dir, "myeloid_seurat_noDC.B", use_harmony_forVis,".Rds"))
+```
+
+## Plot artifact score by myeloid cell type
+```{r}
+VlnPlot(seurat_obj, features="artifact_score", group.by="NMF_rank6_annotByAdult10X", sort=TRUE)
+ggsave(paste0(figure_dir, "Vln_ArtifactScoreByNMF.png"), width=6, height=4)
+```
+
+## Correlate artifact score with nmf scores
+```{r}
+## Make df of just scores. Rename NMF with annotations
+all_scores<- cbind(scores[,!grepl("Max", colnames(scores))], artifact_score=seurat_obj$artifact_score)
+
+## NMF factor correlation based on cell score 
+scores_factor_hc = clusterNmfFactors(all_scores)
+scores_factor_cor = scores_factor_hc$cor_coef[scores_factor_hc$hc_obj$order, scores_factor_hc$hc_obj$order]
+
+## Heatmap of correlations
+hm_colors = rev((brewer.pal(n=9, name="RdBu")))
+hm_colors = colorRampPalette(colors = hm_colors)
+pheatmap(scores_factor_cor, color = hm_colors(100), 
+         cluster_rows = F, cluster_cols = F, 
+         annotation_names_row = F, annotation_names_col =T,
+         show_rownames = T, show_colnames = F,
+         filename = paste0(figure_dir, "Cor_MyeloidNMF_Artifact.png"),
+         width = 6, height = 3)
+```
+
+## UMAP of artifact scores
+```{r}
+p1<- FeaturePlot(seurat_obj, features="artifact_score")+
+  scale_color_gradient(low = "white", high="red")
+
+## Add on highest score for each cell, including NMF + artifact
+all_scores$MaxProgram<- apply(all_scores, 1, function(x){names(which.max(x))})
+all_scores$MaxProgram<- gsub("artifact_score", "Artifact", all_scores$MaxProgram)
+seurat_obj$MaxProgram_WithArtifact<- plyr::mapvalues(colnames(seurat_obj), rownames(all_scores), all_scores$MaxProgram)
+
+colors_use<- c("green", "orange", "blue", "violetred", "cyan", "red", "black")
+names(colors_use)<- colnames(all_scores)[!grepl("MaxProgram", colnames(all_scores))]
+p2<- DimPlot(seurat_obj, group.by="MaxProgram_WithArtifact", cols = colors_use)
+
+## highlight stress response
+seurat_obj$stress_response<- ifelse(seurat_obj$NMF_rank6_annotByAdult10X == "Stress_Response", "Stress_Response", "Other")
+p3<- DimPlot(seurat_obj, group.by="stress_response")+scale_color_manual(values=c(Stress_Response="red", Other="grey"))
+
+p1+p3+p2
+ggsave(paste0(figure_dir, "UMAP_ArtifactScore_MaxProgram.png"),width=6, height=18)
+```
+
+## Is there a subset of the stress_response cells that express the artifact signature higher?
+That is, is only a subset of these cells actually an artifact, while the rest are a "real" program?
+Or are they all artifact
+```{r}
+## Cycle through each program, plot histogram of artifact scores
+all_plots<- lapply(unique(seurat_obj$NMF_rank6_annotByAdult10X), function(x){
+  tmp_seurat<- subset(seurat_obj, NMF_rank6_annotByAdult10X == x)
+  df<-tmp_seurat@meta.data
+  p<-ggplot(df, aes(x=artifact_score))+geom_histogram()+ggtitle(x)+xlim(-3, 3)
+  return(p)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=2)
+ggsave(paste0(figure_dir, "histogram_artifactScores_byNMF.png"), width=8, height=9)
+
+## Histogram of all cells- pretty uniform distribution, no clear outliers
+df<- seurat_obj@meta.data
+ggplot(df, aes(x=artifact_score))+geom_histogram()+xlim(-3, 3)+ggtitle("all_programs")
+ggsave(paste0(figure_dir, "histogram_artifactScores_allCells.png"), width=4, height=3)
+```
+
+
+## Does artifact score correlate with % of mg_tam cells in that program?
+```{r}
+## make df with % of mg_tam cells in each program
+bd_celltype<- as.data.frame(table(seurat_obj$NMF_rank6_annotByAdult10X,
+                                  seurat_obj$MgMoProlMonocyte_annot))
+colnames(bd_celltype)<- c("Program", "CellType", "Ncells")
+bd_celltype<- bd_celltype %>% group_by(Program) %>% mutate(PerCells=Ncells/sum(Ncells)) %>% as.data.frame()
+bd_celltype<- bd_celltype[bd_celltype$CellType=="Adult_Mg_TAM",]
+
+## Add on mean artifact score by program
+mean_artifact<-seurat_obj@meta.data %>% group_by(NMF_rank6_annotByAdult10X) %>% summarise(mean_artifact=mean(artifact_score)) %>% as.data.frame()
+bd_celltype$mean_artifact<- as.numeric(as.character(plyr::mapvalues(bd_celltype$Program, 
+                                                       mean_artifact$NMF_rank6_annotByAdult10X, mean_artifact$mean_artifact)))
+
+## Plot
+ggplot(bd_celltype, aes(x=PerCells, y=mean_artifact, label=Program))+
+  geom_point()+
+  geom_label_repel()+
+  ylab("mean artifact score")+
+  xlab("Proportion of Mg_TAMs")
+```
+
+
+## For visualization purposes- remove stress_response as artifact, re-cluster
+```{r}
+## Remove stress_response
+no_stress_seurat<- subset(seurat_obj,NMF_rank6_annotByAdult10X!="Stress_Response" )
+
+## re-run seurat pipeline
+no_stress_meta<- no_stress_seurat@meta.data
+if(use_harmony_forVis=="_harmony"){
+  no_stress_seurat<-RunFullSeurat(no_stress_seurat@assays$RNA@counts,RunHarmony = TRUE,samples =  no_stress_seurat$sampleid)
+}else{
+  no_stress_seurat<-RunFullSeurat_Immune(no_stress_seurat@assays$RNA@counts, no_stress_seurat$sampleid)
+}
+
+no_stress_seurat<-AddMetaData(no_stress_seurat, no_stress_meta[,!colnames(no_stress_meta) %in% colnames(no_stress_seurat@meta.data)])
+
+## Plot
+DimPlot(no_stress_seurat, group.by="NMF_rank6_annotByAdult10X")
+```
+

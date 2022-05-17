@@ -1,0 +1,261 @@
+---
+title: "CompareProgramProportions.Rmd"
+author: "Jenna LaBelle"
+date: "11/11/2021"
+output: html_document
+---
+
+## Purpose:
+Compare proportion of cells assigned to ped NMF programs in adult vs ped myeloid cells
+
+## Approach:
+Score adult for ped myeloid programs. Assign max, then compare proportions
+
+
+```{r}
+library(Seurat) 
+library(clusterProfiler)
+library(biomaRt)
+library(stringr)
+library(ggpubr)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/02b_Myeloid/03_CompareToAdult/")
+
+integration<- "HarmonyInt/"
+analysis_dir_tmp<- paste0(working_dir, "/analysis/Macrophage.Microglia/", integration)
+figure_dir_tmp<- paste0(working_dir, "/figures/Macrophage.Microglia/", integration)
+data_dir_tmp<- paste0("../../01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/")
+
+if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp)};if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+```
+
+## Read in seurat objects + marker genes
+Seurat object from Merge_AssessIntegration (merged adult/ped myeloid)
+```{r}
+cohort<- "pedOnly_nomuv63"
+figure_dir<- paste0(figure_dir_tmp, cohort, "/"); analysis_dir<- paste0(analysis_dir_tmp, cohort, "/")
+data_dir<- paste0(data_dir_tmp, cohort, "/")
+if(!dir.exists(figure_dir)){dir.create(figure_dir)};if(!dir.exists(analysis_dir)){dir.create(analysis_dir)}
+
+## adult
+load(paste0("../../01_Preprocessing/03_PreprocessAdultDatasets/", 
+                                "analysis/Preprocess_AdultMyeloid/", "GBMNeftel_IDHmut2018_myeloid_merged_seurat.Robj"))
+adult_seurat<- gbm_idhmut_myeloid_seurat; rm(gbm_idhmut_myeloid_seurat)
+
+## ped
+ped_seurat<-readRDS(paste0(data_dir, "myeloid_seurat_noDC.B.Rds"))
+
+## macrophage/myeloid marker genes
+gene_set_dir<- "../../../../../../Marker_genes/"
+microglia_genes = read.table(paste0(gene_set_dir, "Microglia_markers.txt"))
+macrophage_genes = read.table(paste0(gene_set_dir, "Macrophage_markers.txt"))
+tam_genes = list("microglia" = microglia_genes$V1, "macrophage" = macrophage_genes$V1)
+
+## motam/mgtam
+gene_set_dir<- "../../../../../../Marker_genes/"
+gene_sets = read.csv(paste0(gene_set_dir, "Nature2021Movahedi_MoTAM.vs.MgTAM.csv"))
+gene_list<- split(gene_sets, f=gene_sets$cluster)
+gene_list<- lapply(gene_list, function(x){
+  tmp<- x[order(x$avg_logFC,decreasing = TRUE),]
+  return(tmp$gene[1:25])
+})
+
+## set gene set to use downstream
+tam_genes<- tam_genes
+analysis_name<- "Macrophage.Microglia"
+
+```
+
+## Score adult
+```{r}
+## Norm and center counts
+cm = GetAssayData(adult_seurat, slot = "counts")
+cm_norm = log2(cm/10+1)
+cm_mean = log2(rowMeans(cm)+1)
+cm_center = cm_norm-rowMeans(cm_norm)
+
+
+## Score for microglia/macrophage markers
+tam_score = scoreNmfGenes(cm_center, cm_mean, tam_genes)
+tam_score = data.frame(t(tam_score))
+```
+
+## Add score and annotation to adult seurat obj
+```{r}
+adult_seurat = AddMetaData(adult_seurat, tam_score$microglia, "microglia_score")
+adult_seurat = AddMetaData(adult_seurat, tam_score$macrophage, "macrophage_score")
+
+#adult_seurat = AddMetaData(adult_seurat, tam_score$mgTAM, col.name="Mg_TAM")
+#adult_seurat = AddMetaData(adult_seurat, tam_score$moTAM, "Mo_TAM")
+
+##  assign as macrophage/microglia if score is high enough
+mg_annot = ifelse(adult_seurat$microglia_score < 0 & adult_seurat$macrophage_score < 0,
+                  "undetermined",
+                  ifelse(adult_seurat$microglia_score > adult_seurat$macrophage_score,
+                        "microglia", "macrophage"))
+adult_seurat = AddMetaData(adult_seurat, mg_annot, "MM_annot")
+
+## alternative: assign microglia/macrophage if scores are high
+score_thresh<- 0.5
+adult_seurat$AltMM_annot<- ifelse(adult_seurat$microglia_score>score_thresh & 
+                                    adult_seurat$macrophage_score >score_thresh, "HighBoth",
+                                ifelse(adult_seurat$microglia_score>score_thresh, "Microglia",
+                                       ifelse(adult_seurat$macrophage_score>score_thresh, "Macrophage", "NotHighForEither")))
+
+save(adult_seurat, file=paste0("../../01_Preprocessing/03_PreprocessAdultDatasets/", 
+                                "analysis/Preprocess_AdultMyeloid/", "GBMNeftel_IDHmut2018_myeloid_merged_seurat.Robj"))
+```
+
+## Compare proportion of microglia/macrophage in adult vs ped
+```{r}
+all_scores<- data.frame(macrophage_score=c(ped_seurat$macrophage_score, adult_seurat$macrophage_score),
+                        microglia_score=c(ped_seurat$microglia_score, adult_seurat$microglia_score),
+                        MM_annot=c(ped_seurat$MM_annot, adult_seurat$MM_annot),
+                        AltMM_annot=c(ped_seurat$AltMM_annot, adult_seurat$AltMM_annot),
+                        sample=c(ped_seurat$sampleid, adult_seurat$sampleid),
+                        Age=c(rep("Ped", ncol(ped_seurat)), rep("Adult", ncol(adult_seurat))))
+
+## Plot adult vs ped, all samples grouped together
+  ## Create df with number of macrophages/microglia for adult and ped
+  df<- as.data.frame(table(all_scores$Age, all_scores$MM_annot))
+  colnames(df)<- c("Age", "CellType", "NCells")
+  
+  ## Normalize by cohort size
+  df<- df %>% group_by(Age) %>% mutate(PerCells=NCells/sum(NCells)) %>% as.data.frame()
+  
+  ggplot(df, aes(x=Age, y=PerCells, fill=CellType))+
+    geom_bar(stat="identity", position="stack")+
+    theme_classic()+
+    scale_fill_manual(values=c(microglia="red", macrophage="blue", undetermined="grey"))
+  ggsave(paste0(figure_dir, "Adult.vs.Ped_nMacrophage.Microglia.png"), width=3, height=3)
+
+## Plot adult vs ped, by sample
+  
+  ## Create df with number of macrophages/microglia for adult and ped
+  df<- as.data.frame(table(all_scores$sample, all_scores$MM_annot))
+  colnames(df)<- c("Sample", "CellType", "NCells")
+  df$Age<- plyr::mapvalues(df$Sample, all_scores$sample, all_scores$Age, warn_missing = FALSE)
+  
+  ## Normalize by cohort size
+  df<- df %>% group_by(Sample) %>% mutate(PerCells=NCells/sum(NCells)) %>% as.data.frame()
+  
+  ## order by proportion of macrophages
+  tmp<- df[df$CellType=="macrophage",]
+  tmp<- tmp[order(tmp$PerCells),]
+  tmp$Order<- 1:nrow(tmp)
+  df$Order<- as.numeric(as.character(plyr::mapvalues(df$Sample, tmp$Sample, tmp$Order)))
+  
+  df$CellType<- factor(df$CellType, levels=rev(c("macrophage", "microglia", "undetermined")))
+  ggplot(df, aes(x=reorder(Sample, Order), y=PerCells, fill=CellType))+
+    geom_bar(stat="identity", position="stack")+
+    theme_classic()+
+    scale_fill_manual(values=c(microglia="red", macrophage="blue", undetermined="grey"))+
+    facet_grid(cols = vars(Age), scale="free_x", space="free_x")+
+    theme(axis.text.x = element_text(angle=45, hjust=1))+
+    xlab("")
+  ggsave(paste0(figure_dir, "Adult.vs.Ped_nMacrophage.Microglia_bySample.png"), width=8, height=3)
+  
+## By scores
+  ggplot(all_scores, aes(x=macrophage_score, y=microglia_score, color=Age))+
+    geom_point(aes(alpha=0.9))+
+    theme_classic()+
+    scale_color_manual(values=c(Ped="red", Adult="blue"))+
+    geom_hline(yintercept = 0)+geom_vline(xintercept = 0)+
+    facet_grid(cols = vars(Age))
+  ggsave(paste0(figure_dir, "Adult.vs.Ped_MM_scores_dotplot.png"), width=6, height=3)
+  
+## By change in scores
+  all_scores$mm_change<- all_scores$macrophage_score-all_scores$microglia_score
+  ggplot(all_scores, aes(x=mm_change, fill=Age))+
+    geom_histogram()+
+    theme_classic()+
+    scale_fill_manual(values=c(Ped="red", Adult="blue"))+
+    facet_grid(cols = vars(Age))+
+    geom_vline(xintercept = 0)+
+    xlab("negative = high microglia\npositive = high macrophage")
+   ggsave(paste0(figure_dir, "Adult.vs.Ped_MM_scores_histogram.png"), width=6, height=3)
+```
+
+## Plot heatmap of macrophage/microglia scores (based on 2017 Science IDHmut paper, figure 5C)
+```{r}
+## Make dataframe of scores based on ped/adult seurat objects
+all_scores<- data.frame(macrophage_score=c(ped_seurat$macrophage_score, adult_seurat$macrophage_score),
+                        microglia_score=c(ped_seurat$microglia_score, adult_seurat$microglia_score),
+                        sample=c(ped_seurat$sampleid, adult_seurat$sampleid),
+                        Age=c(rep("Ped", ncol(ped_seurat)), rep("Adult", ncol(adult_seurat))),
+                        Subtype=c(ped_seurat$NiceSubtype, adult_seurat$TumorType))
+
+## Add on score represetning both macrophage/microglia score
+all_scores$MM_score<- all_scores$macrophage_score-all_scores$microglia_score
+
+## Set number of bins to use
+nbins<- 50
+bins<- seq(from=min(all_scores$MM_score), to=max(all_scores$MM_score), length.out=nbins)
+
+## For each subtype, calculate % of cells that fall into each bin
+all_bin_scores<- lapply(unique(all_scores$Subtype), function(x){
+  print(x)
+  scores<- all_scores[all_scores$Subtype==x,]
+  nCells<- nrow(scores)
+  
+  ## Cycle through each score bin, determine how many cells in this subtype fall into each bin
+  bin_scores<- lapply(1:length(bins), function(y){
+    current_bin<- bins[y]
+    if(y==1){previous_bin<- -100}else{
+      previous_bin<- bins[y-1]
+    }
+    sum(scores$MM_score>previous_bin & scores$MM_score<=current_bin)/nCells *100
+  })
+  
+  ## Merge % of cells for each bin into single df
+  names(bin_scores)<- paste0("bin", 1:25)
+  bin_scores<- as.data.frame.matrix(do.call("rbind", bin_scores))
+  
+  ## Add in column with actual bins, subtype
+  bin_scores$MM_score<- bins
+  bin_scores$Subtype<- x
+  colnames(bin_scores)<- c("PercentCellsInBin", "Bin", "Subtype")
+  print(sum(bin_scores$PercentCellsInBin))
+  return(bin_scores)
+  })
+all_bins_df<- do.call("rbind", all_bin_scores)
+
+## Add on Age
+all_bins_df$Age<- plyr::mapvalues(all_bins_df$Subtype, all_scores$Subtype, all_scores$Age,
+                                  warn_missing = FALSE)
+## colors
+color_bin<- round(length(unique(all_bins_df$PercentCellsInBin))/5, 0)
+
+yellow_red <- colorRampPalette(c("yellow", "red"))
+
+## order subtypes
+all_bins_df$Subtype<- factor(all_bins_df$Subtype, levels=rev(c("IDHmut", "GBM",
+                                                               "Midline-H3K27M",
+                                                           "Midline-HistoneWT", "Ependymoma", "Hemispheric-BCOR",
+                                                           "Hemispheric-H3G34R/V",
+                                                           "Hemispheric-HistoneWT")))
+ggplot(all_bins_df, aes(x=Bin, y=Subtype))+
+ #geom_tile(aes(fill = as.factor(PercentCellsInBin)), colour = "white")+
+  geom_raster(aes(fill = as.factor(PercentCellsInBin)), interpolate = TRUE)+
+  #scale_fill_gradient2(low="white",  mid="yellow", high="red", midpoint = 5)+
+  scale_fill_manual(values=c(rep("white", color_bin),yellow_red(color_bin *4)))+
+  #facet_grid(rows=vars(Age), scale="free_y", space="free_y")+
+  theme_classic()+
+  theme(legend.position = "none",
+        axis.text = element_text(color="black", face="bold"))+
+  xlab("Microglia-like    - to -    Macrophage-like")+
+  ylab("")
+ggsave(paste0(figure_dir, "Heatmap_macrophage.to.microglia_gradient.png"), width=7, height=2.5)
+```
+
+

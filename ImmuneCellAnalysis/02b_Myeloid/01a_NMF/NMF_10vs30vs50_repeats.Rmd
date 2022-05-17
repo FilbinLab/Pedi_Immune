@@ -1,0 +1,156 @@
+---
+title: "Compare NMF repeats"
+author: "Orr Ashenberg"
+date: "12/17/2020"
+output: html_document
+---
+
+## Purpose:
+Run NMF with multiple repeats, assess how similar programs are. Use to determine the number of repeats to use downstream
+
+## Approach:
+Run NMF (using the deNovoNMF.Rmd file) with 10x/30x/50x repeats. Compare results here (how annotations match up, etc). 10x repeats not really any different from 30x/50x, so used 10x downstream.
+
+```{r}
+library(Seurat) 
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/02b_Myeloid/01a_NMF/")
+
+analysis_dir<- paste0(working_dir, "/analysis/NMF_test10x.30x.50x_repeats/compare_repeats/")
+figure_dir<- paste0(working_dir, "/figures/NMF_test10x.30x.50x_repeats/compare_repeats/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir)};if(!dir.exists(analysis_dir)){dir.create(analysis_dir)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+library(reticulate) 
+use_python("/Users/jlabelle/miniconda3/bin/python", required = T)  # specify python in my conda env for scrublet
+use_condaenv("base", conda = "/Users/jlabelle/miniconda3/condabin/conda")  # reticulate library to load the conda environnment for running
+library(Seurat)
+
+source(paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/", "/Scripts/plotutils.R"))
+source(paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/", "/Scripts/seurat3utils.R"))
+source(paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/", "/Scripts/color.R"))
+
+tests <- c("wilcox", "t", "roc", "MAST", "bimod")
+test <- tests[2]
+```
+
+## Read in seurat object + marker genes for 10x/30x/50x repetions
+```{r}
+## Current seurat object
+myeloid_seurat<-readRDS(paste0("../../01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/",integration, "/",
+                               cohort, "/myeloid_seurat_noDC.B.Rds"))
+
+rank6_10x<- read.csv(paste0(analysis_dir, "../10x_repeat1/top_DE_genes_NMF_rank6.csv"))
+rank6_30x<- read.csv(paste0(analysis_dir, "../30x_repeat1/top_DE_genes_NMF_rank6.csv"))
+rank6_50x<- read.csv(paste0(analysis_dir, "../50x_repeat1/top_DE_genes_NMF_rank6.csv"))
+
+```
+
+## Correlate scores for 10x/30x/50x programs
+```{r}
+## Create gene lists for each repeat. Name with number of repeats
+rank6_10x_list<- split(rank6_10x, f=rank6_10x$cluster); rank6_10x_list<-lapply(rank6_10x_list, function(x){x$gene})
+rank6_30x_list<- split(rank6_30x, f=rank6_30x$cluster); rank6_30x_list<-lapply(rank6_30x_list, function(x){x$gene})
+rank6_50x_list<- split(rank6_50x, f=rank6_50x$cluster); rank6_50x_list<-lapply(rank6_50x_list, function(x){x$gene})
+
+names(rank6_10x_list)<- paste0("r10X_NMF", names(rank6_10x_list))
+names(rank6_30x_list)<- paste0("r30X_NMF", names(rank6_30x_list))
+names(rank6_50x_list)<- paste0("r50X_NMF", names(rank6_50x_list))
+
+all_markers<- c(rank6_10x_list, rank6_30x_list, rank6_50x_list)
+
+## Score myeloid cells for all gene lists
+cm_list<- NormCenter(myeloid_seurat@assays$RNA@counts)
+cm_mean<- rowMeans(log2(cm_list$raw_data + 1))
+scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, all_markers)))
+
+## Correlate and plot heatmap
+scores_factor_hc = clusterNmfFactors(scores)
+scores_factor_cor = scores_factor_hc$cor_coef[scores_factor_hc$hc_obj$order, scores_factor_hc$hc_obj$order]
+
+## Heatmap of correlations
+hm_colors = rev((brewer.pal(n=9, name="RdBu")))
+hm_colors = colorRampPalette(colors = hm_colors)
+pheatmap(scores_factor_cor, color = hm_colors(100), 
+         cluster_rows = F, cluster_cols = F, 
+         annotation_names_row = F, annotation_names_col =T,
+         show_rownames = T, show_colnames = F,
+         filename = paste0(figure_dir, "Cor_repeat10x.30x.50x.png"),
+         width = 8, height = 4)
+
+## Dendrogram of hierarchical clustering 
+jpeg(filename=paste0(figure_dir, "HC_repeat10x.30x.50x.png"), width = 400, height = 600)
+plot(scores_factor_hc$hc_obj)
+dev.off()
+```
+
+## Score myeloid cells for all programs
+```{r}
+## Rename programs based on heatmap above- programs that cluster together named as same NMF
+annots_10x<- c("NMF3", "NMF6", "NMF5", "NMF1", "NMF4","NMF2"); names(annots_10x)<- as.character(1:6)
+annots_30x<- c("NMF3", "NMF4", "NMF2", "NMF1", "NMF6", "NMF5"); names(annots_30x)<- as.character(1:6)
+annots_50x<-c("NMF1", "NMF6", "NMF3", "NMF4", "NMF2", "NMF5"); names(annots_50x)<- as.character(1:6)
+
+## Alternative: Rename clusters based on correlation with original
+#annots_10x<- c("Phago_Lipid_Mg", "Inflammatory", "Stress_Response", "NMF4", "IFN_Response", "MES_Mono"); names(annots_10x)<- as.character(1:6)
+#annots_30x<- c("Phago_Lipid_Mg", "IFN_Response", "MES_Mono", "NMF4", "Inflammatory", "Stress_Response"); names(annots_30x)<- as.character(1:6)
+#annots_50x<- c("NMF1", "Inflammatory", "Phago_Lipid_Mg", "IFN_Response", "MES_Mono", "Stress_Response"); names(annots_50x)<- as.character(1:6)
+
+rank6_10x$cluster<- paste0("10x_", plyr::mapvalues(rank6_10x$cluster, names(annots_10x), annots_10x))
+rank6_30x$cluster<- paste0("30x_",plyr::mapvalues(rank6_30x$cluster, names(annots_30x), annots_30x))
+rank6_50x$cluster<- paste0("50x_",plyr::mapvalues(rank6_50x$cluster, names(annots_50x), annots_50x))
+
+## create lists of genes
+rank6_10x<- split(rank6_10x, f=rank6_10x$cluster); rank6_10x<- lapply(rank6_10x, function(x){x$gene})
+rank6_30x<- split(rank6_30x, f=rank6_30x$cluster); rank6_30x<- lapply(rank6_30x, function(x){x$gene})
+rank6_50x<- split(rank6_50x, f=rank6_50x$cluster); rank6_50x<- lapply(rank6_50x, function(x){x$gene})
+
+## score myeloid cells for all
+cm_list<- NormCenter(myeloid_seurat@assays$RNA@counts)
+cm_mean<- rowMeans(log2(cm_list$raw_data + 1))
+
+scores_10x<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, rank6_10x)))
+scores_30x<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, rank6_30x)))
+scores_50x<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, rank6_50x)))
+
+## assign cells to max score
+scores_10x$MaxProgram<- apply(scores_10x, 1, function(x){names(x)[which.max(x)]})
+scores_30x$MaxProgram<- apply(scores_30x, 1, function(x){names(x)[which.max(x)]})
+scores_50x$MaxProgram<- apply(scores_50x, 1, function(x){names(x)[which.max(x)]})
+
+## Add to seurat object
+myeloid_seurat$MaxProgram_10x<- plyr::mapvalues(colnames(myeloid_seurat), rownames(scores_10x), scores_10x$MaxProgram)
+myeloid_seurat$MaxProgram_30x<- plyr::mapvalues(colnames(myeloid_seurat), rownames(scores_30x), scores_30x$MaxProgram)
+myeloid_seurat$MaxProgram_50x<- plyr::mapvalues(colnames(myeloid_seurat), rownames(scores_50x), scores_50x$MaxProgram)
+
+## how well do assignments match
+table(myeloid_seurat$MaxProgram_10x, myeloid_seurat$MaxProgram_30x)
+table(myeloid_seurat$MaxProgram_30x, myeloid_seurat$MaxProgram_50x)
+```
+
+## How similar are gene lists between 10x/30x?
+```{r}
+programs<- c("Phago_Lipid_Mg", "Inflammatory", "Stress_Response", "NMF", "IFN_Response", "MES_Mono")
+sapply(programs, function(x){
+  genes_10x<- unlist(unname(rank6_10x[grepl(x, names(rank6_10x))]))
+  genes_30x<- unlist(unname(rank6_30x[grepl(x, names(rank6_30x))]))
+  print(sum(genes_10x %in% genes_30x)/min(length(genes_10x), length(genes_30x)))
+})
+
+programs<- c("Phago_Lipid_Mg", "Inflammatory", "Stress_Response", "NMF", "IFN_Response", "MES_Mono")
+sapply(programs, function(x){
+  genes_30x<- unlist(unname(rank6_30x[grepl(x, names(rank6_30x))]))
+  genes_50x<- unlist(unname(rank6_50x[grepl(x, names(rank6_50x))]))
+  print(sum(genes_30x %in% genes_50x)/min(length(genes_30x), length(genes_50x)))
+})
+```
+
