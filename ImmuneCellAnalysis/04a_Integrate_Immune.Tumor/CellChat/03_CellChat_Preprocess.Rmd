@@ -1,0 +1,72 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+```{r}
+library(CellChat)
+library(NMF)
+library(circlize)
+library(patchwork)
+library(Seurat) 
+library(ggh4x)
+
+options(stringsAsFactors = FALSE)
+
+base_dir = "/Users/jlabelle/"
+script_dir = paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/")
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/04a_Integrate_Immune.Tumor/CellChat/")
+analysis_dir<- paste0(working_dir, "/analysis/")
+figure_dir<- paste0(working_dir, "/figures/")
+data_dir<- "fromO2/"
+
+cellchatHelper<- paste0(script_dir, "CellChat_HelperFunctions.R")
+source(cellchatHelper)
+
+
+## Load in list of all cell types across all subtypes
+nCellTypes<- readRDS(paste0(analysis_dir, "nCellTypes_bySample.Rds"))
+
+library(RColorBrewer)
+myPalette <- colorRampPalette(rev(brewer.pal(11, "Spectral")))
+
+## Load in subtype info
+subtypes<- read.csv("../../../../Subtypes.csv")
+
+## read in cell type info
+#cellTypes_bySubtype<- readRDS("../../Preprocessing/analysis/WithNewSamples/cellTypes_bySubtype.rds")
+```
+
+
+## Load in each analysis, extract results, and merge
+```{r}
+## Settings for extracting results, converting to simple df
+PathwaysRemove<-c("HLA", "COL", "LAMININ", "MHC-I")
+sigThreshold<- 1
+senderCells<- unique(nCellTypes$CellType)
+receiverCells<- unique(nCellTypes$CellType)
+
+## List of results
+files<- list.files(data_dir)
+
+## Ran myeloid --> tcell and tcell --> myeloid- this produces same results
+## Remove 1 here
+files<- files[files!="myeloid_tcell"]
+
+## Cycle through each output,
+all_output<- lapply(files, function(x){
+  print(x)
+  cc_output<- readRDS(paste0(data_dir, x))
+  sigLRs<- Extract_res_allComparisons(cc_output, PathwaysRemove, sigThreshold, senderCells, receiverCells, subtypes)
+  sigLRs$analysis<- gsub("all_cellChat_interact_", "", gsub(".Rds", "", x))
+  return(sigLRs)
+})
+all_sigLRs<- do.call("rbind", all_output)
+saveRDS(all_sigLRs, file=paste0(analysis_dir, "all_LRs.Rds"))
+write.csv(all_sigLRs, file=paste0(analysis_dir, "all_LRs.csv"))
+```
+
+
+

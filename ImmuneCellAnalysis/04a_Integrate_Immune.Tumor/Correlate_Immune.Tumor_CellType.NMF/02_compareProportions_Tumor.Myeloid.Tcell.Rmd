@@ -1,0 +1,484 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+## Purpose:
+Compare proportions/scores for myeloid, tcell, and tumor programs. Do certain programs/cell types correlate with others? 
+
+## Approach:
+Using program proportions/scores by sample processed in 01_Preprocess_proportionFiles.Rmd, compare the following using linear regression and pearson correlation:
+1. Proportion of cd8 clonal cells vs cd8/cd4/myeloid/tumor programs 
+2. Proportion of cd8/cd4/myeloid/tumor vs cd8/cd4/myeloid/tumor programs
+3. Mean scores by sample for cd8/cd4 vs myeloid programs 
+
+
+```{r}
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/", 
+                     "04a_Integrate_Immune.Tumor/Correlate_Immune.Tumor_CellType.NMF/")
+
+library(Seurat)
+library(ggplot2)
+library(ggpubr)
+library(randomcoloR)
+
+figure_dir_tmp<- paste0("figures/")
+analysis_dir_tmp<- paste0("analysis/")
+
+if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp, recursive = TRUE)}
+if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+source(paste0(working_dir, "HelperFunctions.R"))
+```
+
+## Set analysis/figure directories. Read in processed files with program proportions, mean scores, and sample metadata
+processed in 01_Preprocess_proportionFiles.Rmd
+```{r}
+cohort<- "pedOnly_nomuv63"
+figure_dir<- paste0(figure_dir_tmp, cohort, "/");analysis_dir<- paste0(analysis_dir_tmp, cohort, "/")
+if(!dir.exists(figure_dir)){dir.create(figure_dir)}; if(!dir.exists(analysis_dir)){dir.create(analysis_dir)}
+
+## Proportion list
+prop_list<- readRDS(paste0(analysis_dir, "program_proportions_tumor.myeloid.cd4.cd8.cd8Clonal.Rds"))
+
+## Mean scores by sample
+score_list<- readRDS(paste0(analysis_dir, "program_scores_myeloid.cd4.cd8.Rds"))
+
+## Sample metadata
+sample_meta<- readRDS(paste0(analysis_dir, "all_sample_metadata.Rds"))
+
+
+```
+
+## 1. Proportion of cd8 clonal cells vs cd8/cd4/myeloid/tumor programs 
+```{r}
+figure_dir_use<- paste0(figure_dir, "clonal/")
+if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
+
+## Input
+ind_data<- "cd8"
+dep_data<- "clonal_cd8"
+colors_use<- c("cyan", "olivedrab", "navy", "violetred", "orange", "gold", "purple", "grey") ## Colors- for independent variable
+confounders_test<- c("age_numeric", "Subtype")
+
+## Merge together
+ind_df<- prop_list[[ind_data]]
+dep_df<- prop_list[[dep_data]]
+ind_df<- ind_df %>% dplyr::rename(indProgram=Program, indPerCells=perCells) %>% dplyr::select(-Ncells)
+dep_df<- dep_df %>% dplyr::rename(depProgram=Program, depPerCells=perCells) %>% dplyr::select(-Ncells)
+df<- merge(ind_df, dep_df, by="Sample")
+
+## Add on sample metadata
+df<- merge(df, sample_meta, by="Sample")
+
+
+## Determine potential confounders
+## RESULTS: subtype and age sig (or close), control for this downstream.
+test_covariates<- lm_checkForConfounders(df,confounder_columns = confounders_test ,
+                                         dep_value_column = "depPerCells")
+pvalues<- lapply(test_covariates, function(x){x$min_pvalue})
+controlFor=c("Subtype", "age_numeric")
+
+## Remove any cell types with no cells in any sample used in this analysis
+nCells<- df %>% dplyr::group_by_at("indProgram") %>% dplyr::summarise(nCells=sum(indPerCells)) %>% as.data.frame()
+cellType_remove<- as.character(nCells$indProgram[nCells$nCells==0])
+df<- df[!df$indProgram %in% cellType_remove, ]
+
+## Set colors
+ind_programs<-unique(df$indProgram)
+names(colors_use)<-ind_programs
+
+## linear regression model for each comparison of interest- return pvalue and r2 for each cell type
+all_lm<- linearRegression_multiplePrograms(df, 
+                                           dep_value_column="depPerCells",
+                                           ind_value_column="indPerCells",
+                                           dep_splitter_column="depProgram",
+                                           ind_splitter_column="indProgram",
+                                           controlFor=controlFor)
+
+
+all_plots<- plot_Proportions_withLm.res(df, programs=ind_programs, program_variable_name = "indProgram",
+                                        colors_use=colors_use, lm_res=all_lm$model_res,
+                                        independent_variable = "indPerCells",
+                                        dependent_variable = "depPerCells",
+                                        ind_variable_plot_name = ind_data,
+                                        dep_variable_plot_name = dep_data,
+                                        pvalue.x=15,r.x=18)
+cowplot::plot_grid(plotlist=all_plots, ncol=1)
+ggsave(paste0(figure_dir_use,ind_data, ".vs.", dep_data, "_modelWith", 
+             paste(controlFor, collapse = "."), ".png"), width=5, height=12)
+
+```
+
+## 2. Proportion of cd8/cd4/myeloid/tumor vs cd8/cd4/myeloid/tumor programs
+```{r}
+figure_dir_use<- paste0(figure_dir, "byProportion/")
+if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
+
+## Input
+ind_data<- "myeloid"
+dep_data<- "cd4"
+colors_use<- c("cyan", "olivedrab", "navy", "violetred", "orange", "gold", "purple", "grey") ## Colors- for independent variable
+confounders_test<- c("age_numeric", "Subtype")
+
+## Merge together
+ind_df<- prop_list[[ind_data]]
+dep_df<- prop_list[[dep_data]]
+ind_df<- ind_df %>% dplyr::rename(indProgram=Program, indPerCells=perCells) %>% dplyr::select(-Ncells)
+dep_df<- dep_df %>% dplyr::rename(depProgram=Program, depPerCells=perCells) %>% dplyr::select(-Ncells)
+df<- merge(ind_df, dep_df, by="Sample")
+
+## Add on sample metadata
+df<- merge(df, sample_meta, by="Sample")
+
+## Remove any cell types with no cells in any sample used in this analysis
+nCells<- df %>% dplyr::group_by_at("indProgram") %>% dplyr::summarise(nCells=sum(indPerCells)) %>% as.data.frame()
+cellType_remove<- as.character(nCells$indProgram[nCells$nCells==0])
+df<- df[!df$indProgram %in% cellType_remove, ]
+
+nCells<- df %>% dplyr::group_by_at("depProgram") %>% dplyr::summarise(nCells=sum(depPerCells)) %>% as.data.frame()
+cellType_remove<- as.character(nCells$depProgram[nCells$nCells==0])
+df<- df[!df$depProgram %in% cellType_remove, ]
+
+## Run pearson corrleation for all combinations
+cor_df<- correlateProportions(df=df, dep_value_column = "depPerCells", ind_value_column = "indPerCells",
+                              dep_splitter_column = "depProgram",ind_splitter_column = "indProgram")
+
+
+
+## Linear regression for all combinations
+  ## Determine which variables to control for
+  ## RESULTS: according to this, need to control for age/subtype (also sex, but only sig for 1, so decided not to)
+  dependent_programs<-as.character(unique(df$depProgram))
+  test_covariates<- lapply(dependent_programs, function(x){
+    message(x)
+    tmp_input_df<- df[df$depProgram==x,]
+    model_res<-lm_checkForConfounders(tmp_input_df, 
+                                      confounder_columns =  c("age_numeric", "Subtype"),
+                                      dep_value_column =  "depPerCells")
+    pvalues<- lapply(model_res, function(y){y$min_pvalue})
+    return(unlist(pvalues))
+  } ); names(test_covariates)<-dependent_programs
+  control_for<- c( "Subtype",  "age_numeric")
+  
+  ## Run lm for all comparisons, controling for age/sex/subtype
+  all_lm<- linearRegression_multiplePrograms(df=df, dep_value_column="depPerCells",ind_value_column="indPerCells",
+                                             dep_splitter_column="depProgram", ind_splitter_column="indProgram",
+                                             controlFor = control_for)
+  all_lm_res<- all_lm$model_res
+
+
+## Merge pearson correlation and lm results
+  ## Add unique id to correlation/lm for merging
+  cor_df$ind_v_dep<- paste0(cor_df$ind_variable, "_vs_", cor_df$dep_variable)
+  all_lm_res$ind_v_dep<- paste0(all_lm_res$ind_variable, "_vs_", all_lm_res$dep_variable)
+  
+  ## Order the same way by unique id
+  cor_df<- cor_df[order(cor_df$ind_v_dep),]
+  all_lm_res<- all_lm_res[order(all_lm_res$ind_v_dep),]
+  sum(all_lm_res$ind_v_dep == cor_df$ind_v_dep); length(unique(all_lm_res$ind_v_dep)); length(unique(cor_df$ind_v_dep))
+  cor_lm_results<- merge(cor_df[,c("PearsonCorrelation", "ind_v_dep")],
+                         all_lm_res[,c("pvalue", "r2", "ind_v_dep")],
+                         by="ind_v_dep")
+  
+  ## Split unique id back into indepedent/dependent
+  cor_lm_results$independent_variable<- sapply(strsplit(cor_lm_results$ind_v_dep, split = "_vs_"), function(x){x[1]})
+  cor_lm_results$dependent_variable<- sapply(strsplit(cor_lm_results$ind_v_dep, split = "_vs_"), function(x){x[2]})
+
+  ## Add on cutoff for pvalue- will change shape if <0.1
+  cor_lm_results$`sig(<0.1)`<- ifelse(cor_lm_results$pvalue<=0.1, "sig", "notSig")  
+  
+
+  
+## Plot
+ggplot(cor_lm_results, aes(x=independent_variable, y=dependent_variable, color=PearsonCorrelation, size=pvalue, shape=`sig(<0.1)`))+
+  geom_point()+
+  scale_color_gradient2(low="blue", mid="white", high="red", midpoint = 0)+
+  scale_size(trans = 'reverse', breaks=c(0, .05, .1, .25, .5, .75), labels=c(0, .05, .1, .25, .5, .75))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle=45, hjust=1),
+        axis.text=element_text(color="black", face="bold"))+
+  ylab("")+ xlab("")+
+  ggtitle(paste0(ind_data, " vs ", dep_data, " program %"))
+ggsave(paste0(figure_dir_use, ind_data, ".vs.", dep_data, "_modelWith",
+              paste(control_for, collapse = "."),
+              ".png"), width=5, height=4)
+                        
+
+```
+## 2b: Alternative plot- heatmap by pearson correlation for multiple cell types
+```{r}
+figure_dir_use<- paste0(figure_dir, "byProportion/")
+if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
+
+## Input- use single independent and all dependent
+ind_data<- "tumor_noEPN" 
+dep_data<-names(prop_list)[names(prop_list) != ind_data & names(prop_list) !="tumor"]
+
+## Merge together
+ind_df<- prop_list[[ind_data]]
+dep_list<- prop_list[names(prop_list) %in% dep_data]
+
+  ## Add major cell type to dep data
+  dep_list<- lapply(names(dep_list), function(x){tmp<- dep_list[[x]]; tmp$Program=paste0(x, "_program", tmp$Program); return(tmp)})
+  
+  ## Merge dep into single df
+  dep_df<- do.call("rbind", dep_list)
+  
+  ## rename columns
+  ind_df<- ind_df %>% dplyr::rename(indProgram=Program, indPerCells=perCells) %>% dplyr::select(-Ncells)
+  dep_df<- dep_df %>% dplyr::rename(depProgram=Program, depPerCells=perCells) %>% dplyr::select(-Ncells)
+  
+  ## Merge
+  df<- merge(ind_df, dep_df, by="Sample")
+
+## Add on sample metadata
+df<- merge(df, sample_meta, by="Sample")
+
+## Remove any cell types with no cells in any sample used in this analysis
+nCells<- df %>% dplyr::group_by_at("indProgram") %>% dplyr::summarise(nCells=sum(indPerCells)) %>% as.data.frame()
+cellType_remove<- as.character(nCells$indProgram[nCells$nCells==0])
+df<- df[!df$indProgram %in% cellType_remove, ]
+
+nCells<- df %>% dplyr::group_by_at("depProgram") %>% dplyr::summarise(nCells=sum(depPerCells)) %>% as.data.frame()
+cellType_remove<- as.character(nCells$depProgram[nCells$nCells==0])
+df<- df[!df$depProgram %in% cellType_remove, ]
+
+## Run pearson corrleation for all combinations
+cor_df<- correlateProportions(df=df, dep_value_column = "depPerCells", ind_value_column = "indPerCells",
+                              dep_splitter_column = "depProgram",ind_splitter_column = "indProgram")
+
+## Split dependent variable into program + major cell type
+cor_df$dep_majorCellType<- apply(cor_df, 1, function(x){unlist(strsplit(x["dep_variable"], split="_program"))[1]})
+cor_df$dep_variable<- apply(cor_df, 1, function(x){unlist(strsplit(x["dep_variable"], split="_program"))[2]})
+  
+## Make major cell type names nicer
+cor_df$dep_majorCellType<- gsub("cd4", "CD4+", gsub("clonal_", "",
+                           gsub("cd8", "CD8+", 
+                           gsub("tumor_noEPN", "Tumor", 
+                           gsub("myeloid", "Myeloid",cor_df$dep_majorCellType)))))
+
+ggplot(cor_df, aes(x=ind_variable, y=dep_variable, fill=PearsonCorrelation))+
+  geom_tile()+
+      theme_bw()+
+  facet_grid(rows=vars(dep_majorCellType), scale="free_y", space="free_y")+
+  scale_fill_gradient2(low="blue",mid="white", high = "red")+
+   theme(axis.text.x = element_text(angle=45, hjust=1),
+        axis.text=element_text(color="black", face="bold"),
+        axis.title=element_text(color="black", face="bold"),
+        strip.text = element_text(color="black", face="bold"))+
+  xlab(paste0(gsub("_noEPN", "", ind_data), " cell types"))+ ylab("")
+
+ggsave(paste0(figure_dir_use, "Heatmap_PearsonCor_", ind_data, ".vs.",paste(dep_data, collapse = "."), ".png"), width=5, height=6)
+```
+
+
+## 3. Mean scores by sample for cd8/cd4 vs myeloid programs 
+```{r}
+figure_dir_use<- paste0(figure_dir, "byScores/")
+if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
+
+## Input
+ind_data<- "myeloid"
+dep_data<- "cd8"
+colors_use<- c("cyan", "olivedrab", "navy", "violetred", "orange", "gold", "purple", "grey") ## Colors- for independent variable
+confounders_test<- c("age_numeric", "Subtype")
+
+## Merge together
+ind_df<- score_list[[ind_data]]
+dep_df<- score_list[[dep_data]]
+ind_df<- ind_df %>% dplyr::rename(indProgram=Program, indMeanScore=MeanScore) 
+dep_df<- dep_df %>% dplyr::rename(depProgram=Program, depMeanScore=MeanScore) 
+df<- merge(ind_df, dep_df, by="Sample")
+
+## Add on sample metadata
+df<- merge(df, sample_meta, by="Sample")
+
+## Run pearson corrleation for all combinations
+cor_df<- correlateProportions(df=df, dep_value_column="depMeanScore",ind_value_column="indMeanScore",
+                                dep_splitter_column="depProgram",ind_splitter_column="indProgram")
+
+## then do lm test
+  ## Determine which variables to control for
+  ## RESULTS: according to this, need to control for age/subtype (also sex, but only sig for 1, so decided not to)
+  dependent_programs<-as.character(unique(df$depProgram))
+  test_covariates<- lapply(dependent_programs, function(x){
+    message(x)
+    tmp_input_df<- df[df$depProgram==x,]
+    model_res<-lm_checkForConfounders(tmp_input_df, 
+                                      confounder_columns =  c("age_numeric","Subtype"),
+                                      dep_value_column =  "depMeanScore")
+    pvalues<- lapply(model_res, function(y){y$min_pvalue})
+    return(unlist(pvalues))
+  } ); names(test_covariates)<-dependent_programs
+  control_for<- c( "Subtype", "age_numeric")
+
+  ## Run lm for all comparisons, controling for age/sex/subtype
+  all_lm<- linearRegression_multiplePrograms(df=df, dep_value_column="depMeanScore",ind_value_column="indMeanScore",
+                                             dep_splitter_column="depProgram",ind_splitter_column="indProgram",
+                                             controlFor = control_for)
+  all_lm_res<- all_lm$model_res
+                        
+  
+## Merge pearson correlation and lm results
+  ## Add unique id to correlation/lm for merging
+  cor_df$ind_v_dep<- paste0(cor_df$ind_variable, "_vs_", cor_df$dep_variable)
+  all_lm_res$ind_v_dep<- paste0(all_lm_res$ind_variable, "_vs_", all_lm_res$dep_variable)
+  
+  ## Order the same way by unique id
+  cor_df<- cor_df[order(cor_df$ind_v_dep),]
+  all_lm_res<- all_lm_res[order(all_lm_res$ind_v_dep),]
+  sum(all_lm_res$ind_v_dep == cor_df$ind_v_dep); length(unique(all_lm_res$ind_v_dep)); length(unique(cor_df$ind_v_dep))
+  cor_lm_results<- merge(cor_df[,c("PearsonCorrelation", "ind_v_dep")],
+                         all_lm_res[,c("pvalue", "r2", "ind_v_dep")],
+                         by="ind_v_dep")
+  
+  ## Split unique id back into indepedent/dependent
+  cor_lm_results$independent_variable<- sapply(strsplit(cor_lm_results$ind_v_dep, split = "_vs_"), function(x){x[1]})
+  cor_lm_results$dependent_variable<- sapply(strsplit(cor_lm_results$ind_v_dep, split = "_vs_"), function(x){x[2]})
+
+  ## Add on cutoff for pvalue- will change shape if <0.1
+  cor_lm_results$`sig(<0.1)`<- ifelse(cor_lm_results$pvalue<=0.1, "sig", "notSig")
+
+## Plot
+ggplot(cor_lm_results, aes(x=independent_variable, y=dependent_variable, color=PearsonCorrelation, size=pvalue, shape=`sig(<0.1)`))+
+  geom_point()+
+  scale_color_gradient2(low="blue", mid="white", high="red", midpoint = 0)+
+  scale_size(trans = 'reverse', breaks=c(0, .05, .1, .25, .5, .75), labels=c(0, .05, .1, .25, .5, .75))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle=45, hjust=1),
+        axis.text=element_text(color="black", face="bold"))+
+  ylab("")+ xlab("")+
+  ggtitle(paste0(ind_data, " vs ", dep_data))
+ggsave(paste0(figure_dir_use,ind_data,".vs.", dep_data, "_modelWith",
+              paste(control_for, collapse = "."), ".png"), width=5, height=4)
+```
+
+
+
+## NOT CURRENTLY IN USE ## 
+## Plot 2 proportions of 2 cell types of interest, with lm
+```{r}
+## input: list with 2 cell sets and 2 cell types of interest. Cell type 1 will be set as independent variable
+celltype_comparisons<- list(list(cellSet_1=tumor_cellType, cellSet_2=cd8_program,
+                                 cellType_1="Immune_Reactive", cellType_2= "CD8_Inhibitory"),
+                            list(cellSet_1=tumor_cellType, cellSet_2=myeloid_program,
+                                 cellType_1="MES2", cellType_2= "IFN_TAM"),
+                            list(cellSet_1=tumor_cellType, cellSet_2=myeloid_program,
+                                 cellType_1="MES2", cellType_2= "Monocytes"),
+                            list(cellSet_1=tumor_cellType, cellSet_2=myeloid_program,
+                                 cellType_1="GIPC-like", cellType_2= "SEPP1_Mo_TAM"),
+                            list(cellSet_1=tumor_cellType, cellSet_2=cd8_program,
+                                 cellType_1="OPC-like", cellType_2= "CD8_Inhibitory"),
+                            list(cellSet_1=tumor_cellType, cellSet_2=cd8_program,
+                                 cellType_1="OC-like", cellType_2= "CD8_NK"),
+                            list(cellSet_1=tumor_cellType, cellSet_2=cd8_program,
+                                 cellType_1="OC-like", cellType_2= "CD8_Memory"),
+                            list(cellSet_1=tumor_cellType, cellSet_2=cd8_program,
+                                 cellType_1="OC-like", cellType_2= "CD8_Cytotoxic"),
+                            list(cellSet_1=tumor_cellType, cellSet_2=cd8_program,
+                                 cellType_1="MES2", cellType_2= "CD8_NK"),
+                            list(cellSet_1=tumor_cellType, cellSet_2=cd8_program,
+                                 cellType_1="GIPC-like", cellType_2= "CD8_Inhibitory"),
+                            list(cellSet_1=tumor_cellType, cellSet_2=cd4_program,
+                                 cellType_1="GIPC-like", cellType_2= "CD4_Inhibitory"),
+                            list(cellSet_1=tumor_cellType, cellSet_2=cd4_program,
+                                 cellType_1="OPC-like", cellType_2= "CD4_Inhibitory"),
+                             list(cellSet_1=tumor_cellType, cellSet_2=cd4_program,
+                                 cellType_1="OC-like", cellType_2= "CD4_Cytotoxic"))
+names(celltype_comparisons)<- paste0("c", 1:length(celltype_comparisons))
+
+## Merge cell type comparisons into single df, add on metadata
+all_comparisons_df<- lapply(celltype_comparisons, function(x){
+  ## Subset to same samples
+  cellSet_1<- x$cellSet_1[x$cellSet_1$Sample %in% x$cellSet_2$Sample,]
+  cellSet_2<- x$cellSet_2[x$cellSet_2$Sample %in% x$cellSet_1$Sample,]
+  print(paste0(length(unique(cellSet_2$Sample)), " shared samples"))
+  
+  ## Subset to cell types of interest
+  cellSet_1<- cellSet_1[cellSet_1$CellType==x$cellType_1,]
+  cellSet_2<- cellSet_2[cellSet_2$Program == x$cellType_2,]
+  
+  ## Merge
+  cellSet_merge<- merge(cellSet_1, cellSet_2, by="Sample")
+  
+  ## Add on metadata
+  cellSet_merge<- merge(cellSet_merge, sample_meta, by="Sample")
+  cellSet_merge$Subtype<- C(factor(cellSet_merge$Subtype), treatment)
+  cellSet_merge$age<- as.integer(cellSet_merge$age)
+  
+  return(cellSet_merge)
+})
+
+## Determine which variables to control for
+lm_covariates_test<- lapply(all_comparisons_df, function(x){
+  print(as.character(unique(x$CellType)))
+  ## qq plot
+  qqnorm(x$perCells_CellType, main = paste0("QQplot: Tumor ", unique(x$CellType))); qqline(x$perCells_CellType)
+  
+  sex_tmp<- x[x$sex != "NA",]
+  model_sex<-summary(lm(perCells_CellType ~ sex, sex_tmp)) 
+  model_subtype<-summary(lm(perCells_CellType ~  Subtype, x)) 
+  model_age<- summary(lm(perCells_CellType ~  age, x)) 
+  
+  cov_res<- data.frame(sex=model_sex$coefficients["sexM", "Pr(>|t|)"],
+                       subtype=min(model_subtype$coefficients[-1, "Pr(>|t|)"]), ## just report minimum- will control for if any is less than <0.05
+                       age=model_age$coefficients["age", "Pr(>|t|)"],
+                       celltype=unique(x$CellType))
+  cov_res$control_for<- paste(apply(cov_res[,1:3], 1, function(y){names(y)[y<0.05]}), collapse="_")
+  
+  return(cov_res)
+})  
+cov_res<- do.call("rbind", lm_covariates_test)
+
+## Run lm, controlling for any covariates
+all_model_res<- lapply(all_comparisons_df, function(x){
+  model<-lm(perCells_ImmuneProgram ~ perCells_CellType + Subtype, x)
+  model_summary<- summary(model)
+  model_res<- data.frame(pvalue=model_summary$coefficients["perCells_CellType", "Pr(>|t|)"],
+                         r2=model_summary$r.squared, 
+                         call=as.character(model$call)[2],
+                         independent_v=as.character(unique(x$CellType)))
+  return(model_res)
+})
+all_model_res<- do.call("rbind", all_model_res)
+
+
+## Plot
+all_plots<- lapply(names(all_comparisons_df), function(x){
+  model_res<- all_model_res[x,]
+  df<- all_comparisons_df[[x]]
+  cellType_1<- unique(df$CellType); cellType_2<- unique(df$Program)
+  ## Correlate 2 cell types of interest
+  cellSet_cor<- round(cor(df$perCells_CellType, df$perCells_ImmuneProgram),2)
+  
+  p<- ggplot(df, aes(x=perCells_CellType, y=perCells_ImmuneProgram))+
+    geom_point()+
+    ggtitle(paste0(cellType_1, " vs ", cellType_2), 
+            subtitle = paste0("Pearson correlation: ", cellSet_cor, "\n", "p value: ", round(model_res$pvalue, 6)))+
+    xlab(paste0("Proportion of ", cellType_1))+
+    ylab(paste0("Proportion of ", cellType_2))+
+    geom_smooth(se=FALSE, method="lm", color="red", linetype="dashed")
+    #annotate("text", label=paste0("Pearson correlation: ", cellSet_cor), x=mean(df$perCells_CellType), y=mean(df$perCells_ImmuneProgram))+
+    #annotate("text", label=paste0("p value: ", round(model_res$pvalue, 4)), x=mean(df$perCells_CellType)+10, y=mean(df$perCells_ImmuneProgram)+10)
+  return(p)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=4)
+ggsave(paste0(figure_dir, "pairwiseComparisons_Tumor.vs.CD8.CD4.Myeloid.png"), width=16, height=14)
+
+
+
+
+
+```
+
+
+

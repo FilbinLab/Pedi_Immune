@@ -1,0 +1,181 @@
+---
+title: "PrepSeuratObjectsForCellChat"
+output: html_document
+---
+
+```{r}
+library(CellChat)
+library(Seurat) 
+
+options(stringsAsFactors = FALSE)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/04a_Integrate_Immune.Tumor/CellChat/")
+
+analysis_dir<- paste0(working_dir, "/analysis/CellChat/")
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+```
+
+## Read in seurat objects: ped tcells, myeloid cells, tumor cells
+```{r}
+rank_use<-8
+sharedBy<- "union"
+cohort<- "pedOnly_nomuv63"
+
+tcell_data_dir<- paste0("../../02a_Tcells/02_Ped.Adult/03_Visualize.Reannotate_programs/analysis/Reannotate_programs/",
+                         "rank", rank_use, "_sharedBy", sharedBy, "/")
+myeloid_data_dir<- paste0("../../01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/", cohort, "/")
+
+tcell_seurat<- readRDS(paste0(tcell_data_dir, "ped_seurat_tcell_harmony.Rds"))
+myeloid_seurat<- readRDS(paste0(myeloid_data_dir, "myeloid_seurat_noDC.B_harmony.Rds"))
+load("../../../../TumorCellAnnotation/AllSubtypesTogether/analysis/Merge_allSubtypes/AllTumorSeuratObj.Robj")
+tumor_seurat<- tumor_merged; rm(tumor_merged)
+```
+
+
+## Merge 3 seurat objects together
+```{r}
+## Add common column for: 
+## 1) high level cell type (tcell, myeloid, tumor)
+tcell_seurat$highLevel_annot<- "Tcell"
+myeloid_seurat$highLevel_annot<- "Myeloid"
+tumor_seurat$highLevel_annot<- "Tumor"
+
+## 2) detailed (myeloid, cd4/cd8 clonal/nonclonal, tumor cell type)
+## For myeloid: may replace this with microglia/macrophage/monocyte distinction
+tcell_seurat$detailed_annotForCellChat<- paste0(tcell_seurat$detailed_annot_byNMFrank8_mergedByunion, ".",
+                                                tcell_seurat$clonal)
+myeloid_seurat$detailed_annotForCellChat<-"Myeloid"
+tumor_seurat$detailed_annotForCellChat<- gsub("cycling", "Cycling", tumor_seurat$CellAnnot)
+
+## Add on any other colums needed before merging
+tumor_seurat$sampleid<- tumor_seurat$sample
+
+## Check that scaling is the same for all
+head(colSums(myeloid_seurat@assays$RNA@counts))/head(colSums(tcell_seurat@assays$RNA@counts))
+head(colSums(myeloid_seurat@assays$RNA@counts))/head(colSums(tumor_seurat@assays$RNA@counts))
+
+## Match metadata to clean up merged seurat
+commonColumns<- colnames(tumor_seurat@meta.data)[colnames(tumor_seurat@meta.data) %in% c(colnames(myeloid_seurat@meta.data),
+                                                                                         colnames(tcell_seurat))]
+tumor_seurat@meta.data<- tumor_seurat@meta.data[,commonColumns]
+myeloid_seurat@meta.data<- myeloid_seurat@meta.data[,commonColumns]
+tcell_seurat@meta.data<- tcell_seurat@meta.data[,commonColumns]
+
+## Merge together
+merged_seurat<- merge(tumor_seurat, c(myeloid_seurat, tcell_seurat))
+
+## Run full seurat processing- not needed for cellChat, but nice for a high-level look
+merged_seurat_meta<- merged_seurat@meta.data
+merged_seurat<- RunFullSeurat(merged_seurat@assays$RNA@counts, RunHarmony = TRUE, samples=merged_seurat_meta$sampleid)
+merged_seurat<- AddMetaData(merged_seurat, merged_seurat_meta[,!colnames(merged_seurat_meta) %in% colnames(merged_seurat@meta.data)])
+
+saveRDS(merged_seurat, file=paste0(analysis_dir, "seurat_tumor.tcell.myeloid.Rds"))
+```
+
+## Split into 1 seurat object per sample
+```{r}
+all_seurat<- readRDS(paste0(analysis_dir, "seurat_tumor.tcell.myeloid.Rds"))
+
+## Number of cells per sample, save
+meta<- all_seurat@meta.data
+nCells_bySample<- as.data.frame(table(meta$detailed_annotForCellChat, meta$sample))
+colnames(nCells_bySample)<-c("CellType", "Sample", "NCells")
+saveRDS(nCells_bySample, file=paste0(analysis_dir, "nCellTypes_bySample.Rds"))
+
+## Cycle through each sample, split seurat object
+all_seurat_list<- lapply(unique(meta$sample), function(x){
+  seurat_tmp<- subset(all_seurat, sample==x)
+  print(paste0(x, " has ", ncol(seurat_tmp)," cells"))
+  return(seurat_tmp)
+})
+names(all_seurat_list)<- unique(meta$sample)
+
+saveRDS(all_seurat_list, file=paste0(analysis_dir, "seurat_list_bySample.Rds"))
+```
+
+
+## Write out comparison file- sender/receiver text file
+file_with_comparisons should be a text file with 3 columns that follow the structure: comparison_name sender receiver
+Can run all simultaneously, but takes too long to run- over 3 days
+Split into 3 comparison files, just so they can run simultaneously
+```{r}
+all_seurat<- readRDS(paste0(analysis_dir, "seurat_tumor.tcell.myeloid.Rds"))
+
+## Get list of all cell types by high level cell type
+tcell_types<- unique(all_seurat$detailed_annotForCellChat[all_seurat$highLevel_annot=="Tcell"])
+tcell_types<- tcell_types[!grepl("Unclear", tcell_types)]
+myeloid_types<- unique(all_seurat$detailed_annotForCellChat[all_seurat$highLevel_annot=="Myeloid"])
+tumor_types<- unique(all_seurat$detailed_annotForCellChat[all_seurat$highLevel_annot=="Tumor"])
+
+## Between high level cell type lists, get all pairwise combinations
+tcell_myeloid<- expand.grid(Sender=as.list(tcell_types), Receiver=as.list(myeloid_types))
+myeloid_tcell<- expand.grid(Sender=as.list(myeloid_types), Receiver=as.list(tcell_types))
+tumor_tcell<- expand.grid(Sender=as.list(tumor_types), Receiver=as.list(tcell_types))
+tumor_myeloid<- expand.grid(Sender=as.list(tumor_types), Receiver=as.list(myeloid_types))
+
+## For tumor/tcell, split into clonal/nonclonal
+tumor_clonal<- tumor_tcell[grepl("_clonal", tumor_tcell$Receiver),]
+tumor_nonclonal<- tumor_tcell[grepl("_nonclonal", tumor_tcell$Receiver),]
+
+## All together:
+all_comparisons<- do.call("rbind", list(tcell_myeloid, myeloid_tcell, tumor_clonal, tumor_nonclonal, tumor_myeloid))
+all_comparisons<- as.data.frame(apply(all_comparisons, 2, function(x){as.character(x)}))
+
+  ## Add column with analysis name
+  all_comparisons$name<- paste0(all_comparisons$Sender, "_to_", all_comparisons$Receiver)
+  all_comparisons<- all_comparisons[,c("name", "Sender", "Receiver")]
+  write.table(all_comparisons, file=paste0(analysis_dir, "all_comparisons.txt"), col.names = FALSE, quote = FALSE, row.names = FALSE)
+  
+## Separated to speed up run time (these files used)
+comparison_list<- list(tcell_myeloid=tcell_myeloid, myeloid_tcell=myeloid_tcell, 
+                       tumor_clonal=tumor_clonal, tumor_nonclonal=tumor_nonclonal, tumor_myeloid=tumor_myeloid)
+comparison_list<- lapply(comparison_list, function(x){
+  x$name<- paste0(x$Sender, "_to_", x$Receiver)
+  x<- x[,c("name", "Sender", "Receiver")]
+  x$Sender<- as.character(x$Sender);x$Receiver<- as.character(x$Receiver)
+  return(x)
+})
+for(i in names(comparison_list)){
+  tmp<- comparison_list[[i]]
+  write.table(tmp, file=paste0(analysis_dir, "comparisons_", i, ".txt"), col.names = FALSE, quote = FALSE, row.names = FALSE)
+}
+```
+
+## How many cells are actually input into cellchat for each interaction? 
+## To simplify analysis, remove an interactions that do not have at least 1 sample with >10 cells in both interactor
+## These interactions will not be run in cell chat anyways
+```{r}
+comparisons<- read.table(paste0(analysis_dir,"all_comparisons.txt" ))
+
+## Cycle through each sample, determine whether it has enough cells to run each interaction
+cell_counts<- lapply(all_seurat_list, function(x){
+  nCells<- as.data.frame(table(x$detailed_annotForCellChat))
+  comp_counts<- lapply(comparisons$V1, function(comp){
+    tmp<- comparisons[comparisons$V1==comp,]
+    PF<- sum(nCells[nCells$Var1==tmp$V2, "Freq"]>10 & nCells[nCells$Var1==tmp$V3, "Freq"]>10)==1
+    if(PF){
+      total_counts<- nCells[nCells$Var1==tmp$V2, "Freq" ] + nCells[nCells$Var1==tmp$V3, "Freq" ] 
+    }else{total_counts<-0}
+    return(total_counts)
+  })
+  names(comp_counts)<- comparisons$V1
+  comp_counts<- lapply(comp_counts, function(x){ifelse(length(x)==0, 0, x)})
+  comp_counts<- as.data.frame(unlist(comp_counts))
+  colnames(comp_counts)<-unique(x$sample)
+  return(comp_counts)
+})
+cell_counts<- do.call("cbind", cell_counts)
+
+## Number of samples that would be run for each interaction
+nSamples_interaction<- apply(cell_counts,1, function(x){sum(x>0)})
+
+## Interactions with 0 samples that would not be run- remove here for simplicity
+interactions_remove<- names(nSamples_interaction)[nSamples_interaction==0]
+comparisons<- comparisons[!comparisons$V1 %in% interactions_remove,]
+write.table(all_comparisons, file=paste0(analysis_dir, "all_comparisons.txt"), col.names = FALSE, quote = FALSE, row.names = FALSE)
+```
+

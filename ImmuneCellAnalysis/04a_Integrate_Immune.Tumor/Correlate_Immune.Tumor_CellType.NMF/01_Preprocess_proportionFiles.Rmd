@@ -1,0 +1,155 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+## Purpose:
+Compare proportions/scores for myeloid, tcell, and tumor programs. Do certain programs/cell types correlate with others? Here, perform necessary preprocessing (generating proportions by sample)
+
+## Approach:
+Load in seurat objects + scores for myeloid, tcell, and tumor ped samples. Generate proportions by sample for each program/cell type within each major cell type.
+
+```{r}
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/", 
+                     "04a_Integrate_Immune.Tumor/Correlate_Immune.Tumor_CellType.NMF/")
+
+library(Seurat)
+library(ggplot2)
+library(ggpubr)
+library(randomcoloR)
+
+analysis_dir_tmp<- paste0("analysis/")
+data_dir_tmp<- paste0("../../01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/")
+if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+source(paste0(working_dir, "HelperFunctions.R"))
+```
+
+
+
+## Load in seurat objects + scores
+```{r}
+rank_use<- 8; sharedBy<- "union"; cohort<- "pedOnly_nomuv63"
+analysis_dir<- paste0(analysis_dir_tmp, cohort, "/")
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir)}
+
+tcell_data_dir<- paste0("../../02a_Tcells/02_Ped.Adult/03_Visualize.Reannotate_programs/analysis/Reannotate_programs/",
+                         "rank", rank_use, "_sharedBy", sharedBy, "/")
+myeloid_data_dir<- paste0("../../01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/", cohort, "/")
+tumor_data_dir<- "../../../../TumorCellAnnotation/AllSubtypesTogether/analysis/Merge_allSubtypes/"
+
+## Load in seurat objects
+tcell_seurat<- readRDS(paste0(tcell_data_dir, "ped_seurat_tcell_harmony.Rds"))
+cd4_seurat<- readRDS(paste0(tcell_data_dir, "ped_seurat_cd4_harmony.Rds"))
+cd8_seurat<- readRDS(paste0(tcell_data_dir, "ped_seurat_cd8_harmony.Rds"))
+myeloid_seurat<- readRDS(paste0(myeloid_data_dir, "myeloid_seurat_noDC.B_harmony.Rds"))
+load(paste0(tumor_data_dir, "AllTumorSeuratObj.Robj"))
+tumor_seurat<- tumor_merged; rm(tumor_merged)
+
+## Load in scores- currently don't have tumor cell scores, but may add this in
+myeloid_scores<- readRDS(paste0("../../02b_Myeloid/01a_NMF/analysis/de.novoNMF/", 
+                                cohort, "/NMF_scores_annotByAdult10X_rank6-6", ".Rds"))
+myeloid_scores<- myeloid_scores$rank6
+cd4_scores<- readRDS(paste0("../../02a_Tcells/02_Ped.Adult/02_detailed_annot/analysis/identifyCD4.CD8_byNMF/",
+                              "rank", rank_use, "_sharedBy", sharedBy, "/ped_cd4_program_scores.Rds"))
+cd8_scores<- readRDS(paste0("../../02a_Tcells/02_Ped.Adult/02_detailed_annot/analysis/identifyCD4.CD8_byNMF/",
+                                "rank", rank_use, "_sharedBy", sharedBy,"/ped_cd8_program_scores.Rds"))
+
+all_scores<- list(myeloid=myeloid_scores, cd4=cd4_scores, cd8=cd8_scores)
+```
+
+## Create sample metadata df- metadata for all samples (with at least 1 tcell or myeloid cell)
+```{r}
+## Use tcell metadata arbitrarly- same for all immune cell seurat objects
+sample_meta<- tcell_seurat@meta.data
+sample_meta<- sample_meta[!duplicated(sample_meta$sampleid),]
+sample_meta<- sample_meta[,c("sampleid", "age_numeric",  "NiceSubtype")]
+  
+## add in 1 myeloid sample
+sample_meta_myeloid<- myeloid_seurat@meta.data[!myeloid_seurat$sampleid %in% sample_meta$sampleid, ]
+sample_meta_myeloid$age_numeric<- gsub("yr", "", sample_meta_myeloid$age)
+sample_meta<- rbind(sample_meta, sample_meta_myeloid[1, c("sampleid", "age_numeric",  "NiceSubtype")])
+rownames(sample_meta)<- sample_meta$sampleid
+
+## Reformat variables to match
+sample_meta<- sample_meta %>% dplyr::rename("Sample"="sampleid",
+                                            "Subtype"="NiceSubtype") %>% as.data.frame()
+sample_meta$age_numeric<- as.numeric(sample_meta$age_numeric)
+sample_meta$Subtype<- factor(sample_meta$Subtype, levels=unique(sample_meta$Subtype))
+
+saveRDS(sample_meta, file=paste0(analysis_dir, "all_sample_metadata.Rds"))
+```
+
+## Calculate proportion of each program by sample present in myeloid, cd4, cd8, and tumor cells
+```{r}
+## Clonal CD8
+clonal_cd8_prop<- calculate_prop(cd8_seurat, programColumn="clonal")
+clonal_cd8_prop<- clonal_cd8_prop[clonal_cd8_prop$Program=="clonal",]
+
+## Myeloid
+myeloid_prop<- calculate_prop(myeloid_seurat, programColumn = "NMF_rank6_annotByAdult10X")
+
+## CD8
+cd8_prop<- calculate_prop(cd8_seurat, programColumn ="NMF_rank8_annot_mergedByunion_reAnnot" )
+
+## CD4
+cd4_prop<- calculate_prop(cd4_seurat, programColumn ="NMF_rank8_annot_mergedByunion_reAnnot" )
+
+## Tumor
+tumor_seurat$CellAnnot<- gsub("cycling", "Cycling", tumor_seurat$CellAnnot)
+tumor_prop<- calculate_prop(tumor_seurat, sampleColumn = "sample", programColumn = "CellAnnot")
+
+## Tumor without EPN
+tumor_seurat_noEPN<- subset(tumor_seurat, subtype!="epn")
+tumor_prop_noEPN<- calculate_prop(tumor_seurat_noEPN, sampleColumn = "sample", programColumn = "CellAnnot")
+
+## Create list with all proportions, save
+prop_list<- list(clonal_cd8=clonal_cd8_prop, cd8=cd8_prop, cd4=cd4_prop,
+                 myeloid=myeloid_prop, tumor=tumor_prop, tumor_noEPN=tumor_prop_noEPN)
+saveRDS(prop_list, file=paste0(analysis_dir, "program_proportions_tumor.myeloid.cd4.cd8.cd8Clonal.Rds"))
+```
+
+
+## Process scores for myeloid/tcell programs for use downstream
+```{r}
+## Create list of scores
+all_scores<- list(myeloid=myeloid_scores, cd4=cd4_scores, cd8=cd8_scores)
+
+## Add on sample
+all_scores<- lapply(all_scores, function(x){
+  x$Sample<- sapply(strsplit(rownames(x), split="CD"), function(y){y[1]})
+  return(x)
+})
+
+## Remove max program/max score column
+all_scores<- lapply(all_scores, function(x){x[,!grepl("Max", colnames(x))]})
+
+## Calculate mean score per sample per program
+mean_scores<- lapply(all_scores, function(x){
+  x<- x %>% group_by(Sample) %>% summarise(across(everything(), list(mean))) %>% as.data.frame()
+  colnames(x)<- gsub("_1", "", colnames(x))
+  return(x)
+})
+
+## Melt by sample (1 column for all programs)
+mean_scores<- lapply(mean_scores, function(x){
+  x<- melt(x, id="Sample")
+  colnames(x)<- c("Sample", "Program", "MeanScore")
+  return(x)
+})
+
+## Save
+saveRDS(mean_scores, file=paste0(analysis_dir, "program_scores_myeloid.cd4.cd8.Rds"))
+```
+
+
+
+
