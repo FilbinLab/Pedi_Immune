@@ -1,0 +1,266 @@
+---
+title: "QC_ToSeurat.Rmd"
+author: "Jenna LaBelle"
+date: "11/04/21"
+output: html_document
+---
+
+## Purpose:
+Majority of cohort processed/tracer run by Orr. 5 samples were sequenced later and were not processed by Orr. For these 5 samples: Li and I ran Tracer, and I performed all preprocessing. These 5 samples are merged with the rest of the cohort here
+
+## Approach:
+Merge seurat objects for original cohort + 5 new samples. QC, add needed annotations
+
+```{r}
+library(Seurat) 
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/01_Preprocessing/02_Counts_Preprocess/")
+
+analysis_dir<- paste0(working_dir, "/analysis/merge_samples/")
+figure_dir<- paste0(working_dir, "/figures/merge_samples/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir)};if(!dir.exists(analysis_dir)){dir.create(analysis_dir)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+```
+
+## Read in data:
+Seurat objects:
+1. 5 samples not processed by Orr (BT1857/BT1873/MUV92/MUV94/MUV95)
+2. Rest of cohort processed by Orr
+
+Clonality info:
+1. 5 new samples, Tracer run/processed by me
+2. Rest of cohort, processed by Orr
+```{r}
+## Seurat objects
+  ## 5 samples
+  newSamples_seurat<- readRDS("analysis/newSamples/gcdata_filtered.Rds")
+  
+  ## By Orr
+  load(paste0("../../data/data_FromOrr/","2020_12_10_pedbrain_immune_no_batchcorrect.Rda"))
+  byOrr_seurat<- gcdata; rm(gcdata)
+  
+## Clonality info
+  load(paste0("../01_Tracer_Preprocess/analysis/clonalTcells_cluster.Rda"))
+  newSamples_clonal<- unlist(unname(clonal))
+  newSamples_clonotypes<- clonotypes.all; rm(clonal);  rm(clonotypes.cells); rm(tcell.reconstructed); rm(clonotypes.all)
+    
+  
+  load(paste0("../../data/data_FromOrr/", "2020_12_10_clonalTcells_cluster.Rda"))
+  byOrr_clonal<- unlist(unname(clonal))
+  byOrr_clonotypes<- clonotypes.all; rm(clonal); rm(clonotypes.all); rm(clonotypes.cells); rm(tcell.reconstructed); rm(gcdata)
+
+## Cycling markers
+cycling_genes<- read.table(paste0(base_dir,"Dropbox (Partners HealthCare)/FilbinLab/data_analysis/",
+                                "Marker_genes/regev_lab_cell_cycle_genes.txt"))
+
+## Subtypes
+subtypes<- read.csv("../../../../Subtypes.csv")
+```
+
+## Rename samples (MUV --> MUV0, replacing "." with "_")
+```{r}
+## Rename MUV samples
+newSamples_seurat<- RenameCells(newSamples_seurat,new.names=gsub("MUV", "MUV0",colnames(newSamples_seurat)))
+
+byOrr_seurat<- RenameCells(byOrr_seurat,new.names=gsub("MUV", "MUV0",colnames(byOrr_seurat)))
+byOrr_seurat@meta.data$sampleid<- gsub("MUV", "MUV0", byOrr_seurat@meta.data$sampleid)
+
+## Replace "." with "_" for all cell names, both in metadata and colnames
+newSamples_seurat<- RenameCells(newSamples_seurat,new.names=gsub("\\.", "_",colnames(newSamples_seurat)))
+byOrr_seurat<- RenameCells(byOrr_seurat,new.names=gsub("\\.", "_",colnames(byOrr_seurat)))
+```
+
+## Create single seurat object
+```{r}
+## Create merged count matrix
+byOrr_cm<- byOrr_seurat@assays$RNA@counts[order(rownames(byOrr_seurat)),]
+newSamples_cm<- newSamples_seurat@assays$RNA@counts[order(rownames(newSamples_seurat)),]
+sum(rownames(byOrr_cm)==rownames(newSamples_cm)); nrow(byOrr_cm); nrow(newSamples_cm)
+immune_cm<- cbind(byOrr_cm, newSamples_cm)
+
+## Create merged metadata- only common columns between 2 objects
+byOrr_meta<- byOrr_seurat@meta.data[,colnames(byOrr_seurat@meta.data) %in% colnames(newSamples_seurat@meta.data)]
+newSamples_meta<- newSamples_seurat@meta.data[,colnames(newSamples_seurat@meta.data) %in% colnames(newSamples_seurat@meta.data)]
+byOrr_meta<- byOrr_meta[,order(colnames(byOrr_meta))]
+newSamples_meta<- newSamples_meta[,order(colnames(newSamples_meta))]
+sum(colnames(byOrr_meta)==colnames(newSamples_meta)); ncol(byOrr_meta); ncol(newSamples_meta)
+immune_meta<- rbind(byOrr_meta, newSamples_meta)
+sum(rownames(immune_meta)==colnames(immune_cm)); nrow(immune_meta); ncol(immune_cm)
+
+## Create seurat object from merged count matrix
+immune_seurat<- CreateSeuratObject(counts = immune_cm, min.cells = 0,min.features = 0, project = "Pedi_Immune")
+
+## Add on metadata
+immune_seurat<- AddMetaData(immune_seurat, immune_meta[,!colnames(immune_meta) %in% colnames(immune_seurat@meta.data)])
+immune_seurat<- SetIdent(immune_seurat, value=immune_seurat$sampleid)
+```
+
+
+## Run remaining preprocessing on merged object
+```{r}
+## QC plots to compare between original/5 new samples
+VlnPlot(immune_seurat, features = c("nFeature_RNA", "nHK_RNA"), ncol = 1, pt.size = 0.5) 
+#ggsave(paste0(figure_dir, "QC_allSamples.png"), width=12, height=6)
+
+## Score for cycling
+cycling_genes<- list(cycling=cycling_genes$V1)
+
+cm_list<- NormCenter(immune_seurat@assays$RNA@counts)
+cm_mean<- log2(rowMeans(immune_seurat@assays$RNA@counts) + 1)
+cycling_score<- scoreSignature(cm_list$center_data, cm_mean, s=cycling_genes$cycling)
+
+sum(names(cycling_score)==colnames(immune_seurat)); ncol(immune_seurat); length(cycling_score)
+immune_seurat$cycling_score<- cycling_score
+immune_seurat$cycling_predicted<- ifelse(immune_seurat$cycling_score>=1, "cycling", "not_cycling")
+
+## Run clustering/UMAP
+immune_meta<- immune_seurat@meta.data
+immune_seurat<- RunFullSeurat_Immune(immune_seurat@assays$RNA@counts, samples=immune_seurat$sampleid)
+immune_seurat<- AddMetaData(immune_seurat, immune_meta[,!colnames(immune_meta) %in% colnames(immune_seurat@meta.data)])
+```
+
+## Add on metadata
+```{r}
+## Add detailed subtype info
+immune_seurat$MySubtype<- plyr::mapvalues(immune_seurat$sampleid, subtypes$sample, subtypes$MySubtypes)
+
+## Clean up subtype info for plotting
+immune_seurat$NiceSubtype<- gsub("hemiBCOR", "Hemispheric-BCOR", gsub("hemiG34R", "Hemispheric-H3G34R/V",
+                            gsub("hemiHistoneWT", "Hemispheric-HistoneWT", gsub("midlineHistoneWT", "Midline-HistoneWT",
+                            gsub("midlineK27M", "Midline-H3K27M", immune_seurat$MySubtype)))))
+
+## Shorten subtype info for plottting
+immune_seurat$ShortSubtype<-gsub("hemiBCOR", "BCOR", gsub("hemiG34R", "Hemi\nH3G34R/V",
+                            gsub("hemiHistoneWT", "Hemi\nHistoneWT", gsub("midlineHistoneWT", "Midline\nHistoneWT",
+                            gsub("midlineK27M", "Midline\nH3K27M", 
+                                 gsub("Ependymoma", "EPN", immune_seurat$MySubtype))))))
+
+## Merge into major subtypes
+immune_seurat$NiceSubtype_Merge<- gsub("-BCOR", "", 
+                              gsub("-H3G34R/V", "", 
+                                   gsub("-H3K27M", "",
+                                   gsub("-HistoneWT", "", immune_seurat$NiceSubtype))))
+
+## Add clonality info- need to slightly rename cells
+all_clonal<- c(newSamples_clonal, byOrr_clonal)
+all_clonal<- gsub("\\.", "_", gsub("MUV", "MUV0", all_clonal))
+immune_seurat$clonal<- ifelse(colnames(immune_seurat) %in% all_clonal, "clonal", "nonclonal")
+
+## Add on clonal group info
+newSamples_clonotypes$clonal_group<- newSamples_clonotypes$clonal_group + max(byOrr_clonotypes$clonal_group) + 1
+all_clonotypes<- rbind(byOrr_clonotypes, newSamples_clonotypes)
+all_clonotypes$cell_name<- gsub("\\.", "_", gsub("MUV", "MUV0", all_clonotypes$cell_name))
+all_clonotypes$experiment<- gsub("\\.", "_", gsub("MUV", "MUV0", all_clonotypes$experiment))
+cd8_seurat$clonal_group<- ifelse(colnames(cd8_seurat) %in% all_clonotypes$cell_name,
+                                    plyr::mapvalues(colnames(cd8_seurat), all_clonotypes$cell_name, all_clonotypes$clonal_group,
+                                                    warn_missing = FALSE),
+                                    NA)
+
+## Add on age
+sample_ages<- read.csv("../../CohortAges_Filbin.Cell2021.csv")
+immune_seurat$age<- plyr::mapvalues(immune_seurat$sampleid, sample_ages$Sample, sample_ages$Age, warn_missing = FALSE)
+```
+
+## Quality issue suspected in cluster 11: Remove cluster and rerun full pipeline
+## Reasoning: Low HK gene expression, doesn't express myeloid or t cell markers, forms separate cluster when looking at just t cells
+```{r}
+p1<- FeaturePlot(immune_seurat, features="nFeature_RNA")
+p2<- FeaturePlot(immune_seurat, features="nHK_RNA")
+p1+p2
+ggsave(paste0(figure_dir, "UMAP_Quality.png"), width=6, height=12)
+
+## Remove cluster 11
+immune_seurat<- subset(immune_seurat, seurat_clusters != "11")
+
+## Rerun pipeline
+immune_meta<-immune_seurat@meta.data
+immune_seurat<- RunFullSeurat_Immune(immune_seurat@assays$RNA@counts, immune_seurat$sampleid)
+immune_seurat<- AddMetaData(immune_seurat, metadata=immune_meta[,!colnames(immune_meta) %in% colnames(immune_seurat@meta.data)])
+```
+
+## Remove adult samples, rerun pipeline
+```{r}
+subtypes<- read.csv("../../../../Subtypes.csv")
+
+## MUV063 is an adult sample, but was originally annotated as ped. re-assign as ped here to retain original analysis
+## This analysis/seurat object kept in order to replicate original analysis, but is not used downstream.
+subtypes[subtypes$sample=="MUV063", "PedAdult"]<- "Ped"
+
+  ## Subset to ped samples, rerun seurat
+  ped_samples<- subtypes[subtypes$PedAdult=="Ped", "sample"]
+  ped_immune_seurat<- subset(immune_seurat, sampleid %in% ped_samples)
+  ped_immune_meta<- ped_immune_seurat@meta.data
+  ped_immune_seurat<- RunFullSeurat_Immune(ped_immune_seurat@assays$RNA@counts, samples=ped_immune_seurat$sampleid)
+  ped_immune_seurat<-AddMetaData(ped_immune_seurat, 
+                                 metadata=ped_immune_meta[,!colnames(ped_immune_meta) %in% colnames(ped_immune_seurat@meta.data)])
+  
+## Remove MUV063, rerun seurat pipeline to create "true" ped only seurat
+subtypes<- read.csv("../../../../Subtypes.csv")
+ped_nomuv63_samples<- subtypes[subtypes$PedAdult=="Ped", "sample"]
+ped_nomuv63_immune_seurat<- subset(immune_seurat, sampleid %in% ped_nomuv63_samples)
+ped_nomuv63_immune_meta<- ped_nomuv63_immune_seurat@meta.data
+ped_nomuv63_immune_seurat<- RunFullSeurat_Immune(ped_nomuv63_immune_seurat@assays$RNA@counts, 
+                                                 samples=ped_nomuv63_immune_seurat$sampleid)
+ped_nomuv63_immune_seurat<-AddMetaData(ped_nomuv63_immune_seurat, 
+                               metadata=ped_nomuv63_immune_meta[,!colnames(ped_nomuv63_immune_meta) %in% 
+                                                                  colnames(ped_nomuv63_immune_seurat@meta.data)])
+
+## Remove MUV063, but keep MUV91- age is exactly 25, want to keep as ped
+subtypes<- read.csv("../../../../Subtypes.csv")
+subtypes[subtypes$sample=="MUV091", "PedAdult"]<- "Ped"
+ped_nomuv63.withmuv91_samples<- subtypes[subtypes$PedAdult=="Ped", "sample"]
+ped_nomuv63.withmuv91_immune_seurat<- subset(immune_seurat, sampleid %in% ped_nomuv63.withmuv91_samples)
+ped_nomuv63.withmuv91_immune_meta<- ped_nomuv63.withmuv91_immune_seurat@meta.data
+ped_nomuv63.withmuv91_immune_seurat<- RunFullSeurat_Immune(ped_nomuv63.withmuv91_immune_seurat@assays$RNA@counts, 
+                                                 samples=ped_nomuv63.withmuv91_immune_seurat$sampleid)
+ped_nomuv63.withmuv91_immune_seurat<-AddMetaData(ped_nomuv63.withmuv91_immune_seurat, 
+                               metadata=ped_nomuv63.withmuv91_immune_meta[,!colnames(ped_nomuv63.withmuv91_immune_meta) %in% 
+                                                                  colnames(ped_nomuv63.withmuv91_immune_seurat@meta.data)])
+```
+
+## Save seurat objects
+```{r}
+saveRDS(immune_seurat, file=paste0(analysis_dir, "tcell.myeloid_seurat_allSamples.Rds"))
+saveRDS(ped_immune_seurat, file=paste0(analysis_dir, "tcell.myeloid_seurat_pedOnly.Rds"))
+saveRDS(ped_nomuv63_immune_seurat, file=paste0(analysis_dir, "tcell.myeloid_seurat_pedOnly_nomuv63.Rds"))
+saveRDS(ped_nomuv63.withmuv91_immune_seurat, file=paste0(analysis_dir, "tcell.myeloid_seurat_pedOnly_nomuv63.withmuv91.Rds"))
+```
+
+
+
+## Run with harmony, save
+```{r}
+library(harmony)
+analysis_dir<- paste0(analysis_dir, "HarmonyInt/")
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir)}
+
+immune_seurat<- readRDS(paste0(analysis_dir, "tcell.myeloid_seurat_allSamples.Rds"))
+ped_nomuv63_immune_seurat<- readRDS(paste0(analysis_dir, "tcell.myeloid_seurat_pedOnly.Rds"))
+
+immune_meta<- immune_seurat@meta.data
+immune_seurat<-RunFullSeurat(cm=immune_seurat@assays$RNA@counts, RunHarmony = TRUE, samples=immune_meta$sampleid)
+immune_seurat<- AddMetaData(immune_seurat, immune_meta[,!colnames(immune_meta) %in% colnames(immune_seurat@meta.data)])
+
+ped_nomuv63_immune_meta<- ped_nomuv63_immune_seurat@meta.data
+ped_nomuv63_immune_seurat<-RunFullSeurat(cm=ped_nomuv63_immune_seurat@assays$RNA@counts, 
+                                         RunHarmony = TRUE, samples=ped_nomuv63_immune_meta$sampleid)
+ped_nomuv63_immune_seurat<- AddMetaData(ped_nomuv63_immune_seurat,
+                                        ped_nomuv63_immune_meta[,!colnames(ped_nomuv63_immune_meta) %in% 
+                                                         colnames(ped_nomuv63_immune_seurat@meta.data)])
+
+saveRDS(immune_seurat, file=paste0(analysis_dir, "tcell.myeloid_seurat_allSamples.Rds"))
+saveRDS(ped_nomuv63_immune_seurat, file=paste0(analysis_dir, "tcell.myeloid_seurat_pedOnly_nomuv63.Rds"))
+```
+
+
+

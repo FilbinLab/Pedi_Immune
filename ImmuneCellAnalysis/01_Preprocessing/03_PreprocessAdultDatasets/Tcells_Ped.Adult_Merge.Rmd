@@ -1,0 +1,563 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+## Goal:
+Merge adult/pediatric T cells into single seurat object for downstream use. Also identify CD4/CD8, BUT these annotations are NOT used downstream
+
+## Approach:
+Adult t cells (Cell 2021) provided as seurat object by Orr. Merged with our pediatric T cells (Filbin adult T cells excluded), harmony integration. Cluster-wise annotation of CD4/CD8 T cells (memory/cycling/cd4/cd8 all sub-clustered to improve annotation), but again, these annotations not used downstream.
+
+
+** Here, "adult" refers to Cell 2021 cells, NOT the adult samples generated in Filbin lab.
+```{r}
+library(Seurat) 
+library(harmony)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/01_Preprocessing/",
+                     "03_PreprocessAdultDatasets/")
+
+analysis_dir<- "analysis/Tcells_Ped.Adult_Merge/"
+figure_dir<- "figures/Tcells_Ped.Adult_Merge/"
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir)};if(!dir.exists(analysis_dir)){dir.create(analysis_dir)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+```
+
+
+## Create merged adult/ped tcell seurat object
+```{r}
+cohort<- "pedOnly_nomuv63"
+
+## Load in seurat objects
+  ## Ped
+  tcell_seurat<-readRDS(paste0("../02_Counts_Preprocess/analysis/detailed_annotation/", cohort, "/tcell_seurat.Rds"))
+
+  ## Adult
+  load(paste0("../../data/Adult/", "tcells_seurat_obj.Robj"))
+  adult_seurat<- seurat_obj; rm(seurat_obj)
+  adult_seurat$detailed_annot<- adult_seurat$annotate
+  adult_seurat$NiceSubtype<- adult_seurat$Tumor_Class
+
+
+## Read in age metadata
+age_meta<- read.csv("../../CohortAges_Filbin.Cell2021.csv")
+
+## merge cm- due to memory issues, subset to common genes, order same way, then bind columns
+commonGenes<- rownames(adult_seurat)[rownames(adult_seurat) %in% rownames(tcell_seurat)]
+adult_cm<- adult_seurat@assays$RNA@counts[commonGenes,]
+ped_cm<- tcell_seurat@assays$RNA@counts[commonGenes,]
+sum(rownames(adult_cm)==rownames(ped_cm)); nrow(adult_cm); nrow(ped_cm)
+both_cm<- cbind(adult_cm, ped_cm)
+
+## Make merged metadataa  
+adult_seurat$Age<- "Adult"; tcell_seurat$Age<- "Ped"
+adult_seurat$detailed_annot_withCycling<- gsub("\\+", "", gsub("Cycling T cells", "Cycling", adult_seurat$detailed_annot))
+adult_seurat$ShortSubtype<- adult_seurat$NiceSubtype
+
+commonMeta<- colnames(adult_seurat@meta.data)[colnames(adult_seurat@meta.data) %in% colnames(tcell_seurat@meta.data)]
+adult_meta<- adult_seurat@meta.data[,commonMeta]; ped_meta<- tcell_seurat@meta.data[,commonMeta]
+sum(colnames(adult_meta)==colnames(ped_meta)); ncol(adult_meta); ncol(ped_meta)
+both_meta<- rbind(adult_meta, ped_meta)
+
+## Run full seurat 
+both_seurat<- RunFullSeurat_Immune(cm=both_cm, samples=both_meta$sampleid)
+
+## Slight adjustment to resolution to get # of clusters to match Orr's analysis
+## res.45 for pedOnly (no adult filbin), pedOnly_nomuv63 (no adult filbin)
+## conda activate /Users/jlabelle/Library/r-miniconda/envs/r-reticulate
+both_seurat<- FindClusters(both_seurat, resolution = .45, algorithm = 4, random.seed = 100)  
+both_seurat<- RunUMAP(both_seurat, dims = 1:20, reduction = "pca", n.neighbors = 15, 
+                      min.dist = 0.5, spread = 1, metric = "euclidean", seed.use = 1)  
+
+both_meta<- both_meta[,!colnames(both_meta) %in% colnames(both_seurat@meta.data)]
+adult_ped_tcell_seurat<- AddMetaData(both_seurat, metadata=both_meta, col.name = colnames(both_meta))
+
+## Add on actual ages
+adult_ped_tcell_seurat$age_numeric<-plyr::mapvalues(adult_ped_tcell_seurat$sampleid,
+                                                    age_meta$Sample, age_meta$Age)
+
+saveRDS(adult_ped_tcell_seurat, file=paste0(analysis_dir, "adult_ped_tcell_merged_seurat.Rds"))
+```
+
+## Re-process with harmony integration
+```{r}
+## Read in merged adult (cell 2021) and ped tcells
+tcell_seurat<- readRDS(paste0(analysis_dir, "adult_ped_tcell_merged_seurat_fresh.Rds"))
+
+## Re-process with harmony integration
+tcell_meta<- tcell_seurat@meta.data
+tcell_seurat<- RunFullSeurat(tcell_seurat@assays$RNA@counts, RunHarmony = TRUE, samples=tcell_meta$sampleid)
+tcell_seurat<-AddMetaData(tcell_seurat, tcell_meta[,!colnames(tcell_meta) %in% colnames(tcell_seurat@meta.data)])
+
+## Basic visualizations
+DimPlot(tcell_seurat, group.by = "Age")+scale_color_manual(values=c(Adult="blue", Ped="red"))
+ggsave(paste0(figure_dir, "Tcell_UMAP_adult.ped_harmonyInt_byAge.png"), width=6, height=5)
+
+DimPlot(tcell_seurat, group.by = "sampleid")
+ggsave(paste0(figure_dir, "Tcell_UMAP_adult.ped_harmonyInt_byAge.sample.png"), width=8.5, height=5)
+
+DimPlot(tcell_seurat, group.by = "NiceSubtype")
+ggsave(paste0(figure_dir, "Tcell_UMAP_adult.ped_harmonyInt_byAge.subtype.png"), width=7, height=5)
+
+FeaturePlot(tcell_seurat, features=c("CD4", "TOP2A","CD8A","CD8B",  "SELL", "CCR7"), cols = c("grey", "red"), ncol=2)
+ggsave(paste0(figure_dir, "Tcell_UMAP.adult.ped_MarkerGenes.png"), width=8, height=12)
+
+DimPlot(tcell_seurat, label=TRUE)+NoLegend()
+ggsave(paste0(figure_dir, "Tcell_UMAP_adult.ped_seuratClusters.png"), width=6, height=6)
+
+saveRDS(tcell_seurat, file=paste0(analysis_dir, "adult_ped_tcell_merged_seurat_harmony.Rds"))
+```
+
+## Add on clonotype information
+```{r}
+## Read in clonotype info
+  ## Pediatric- from Orr
+  load(paste0("../../data/data_FromOrr/", "2020_12_10_clonalTcells_cluster.Rda"))
+  ped_clonotypes<- clonotypes.all; rm(clonal); rm(clonotypes.all); rm(clonotypes.cells); rm(tcell.reconstructed); rm(gcdata)
+  ped_clonotypes$cell_name<- gsub("MUV", "MUV0", ped_clonotypes$cell_name)
+  ped_clonotype_list<- ped_clonotypes$clonal_group; names(ped_clonotype_list)<- ped_clonotypes$cell_name
+  
+  ## Adult
+  load("../../data/Adult/tcells_seurat_obj.Robj")
+  adult_clonotypes<- seurat_obj$clonal_group; names(adult_clonotypes)<-colnames(seurat_obj)
+  adult_clonotypes<- na.omit(adult_clonotypes)
+  
+  all_clonotypes<- c(ped_clonotype_list, adult_clonotypes)
+  
+
+## Add clonotype info
+tcell_seurat$clonotype<- ifelse(tcell_seurat$clonal=="clonal", 
+                                plyr::mapvalues(colnames(tcell_seurat), names(all_clonotypes), all_clonotypes, warn_missing = FALSE),
+                                NA)
+
+## A couple (33) are clonal but don't have clonotype info. Just set to NA
+tcell_seurat$clonotype<- ifelse(tcell_seurat$clonotype==colnames(tcell_seurat), NA, tcell_seurat$clonotype)
+
+saveRDS(tcell_seurat, file=paste0(analysis_dir, "adult_ped_tcell_merged_seurat_harmony.Rds"))
+```
+
+## Split into CD4/CD8/Memory/Cycling + "unclear" cluster
+Note: this annotation approach was attemped, but these annotations are NOT used downstream
+```{r}
+figure_dir<- paste0(figure_dir, "CD4.CD8_annotation/")
+
+VlnPlot(tcell_seurat, features=c("CD4",  "TOP2A", "CD8A", "CD8B", "SELL", "CCR7"), ncol = 2)
+ggsave(paste0(figure_dir, "Tcell_Vln_MarkerGenes.png"), width=8, height=9)
+
+## initial annots
+cd4_clusters<- c(1,11,4,6,16)
+cd8_clusters<- c(0,2,7,8,9,12)
+cycling_clusters<- c(15)
+memory_clusters<- c(3,5)
+unclear_clusters<- c(10,13,14)
+
+
+## Assign as initial annots- marker genes? To see if "unclear_clusters" corresponds to cell type
+  ## assign as cd4/cd8/cycling/memory/unclear
+  tcell_seurat$initial_annot<- ifelse(tcell_seurat$seurat_clusters %in% cd4_clusters, "CD4",
+                               ifelse(tcell_seurat$seurat_clusters %in% cd8_clusters, "CD8",
+                               ifelse(tcell_seurat$seurat_clusters %in% cycling_clusters, "Cycling",
+                               ifelse(tcell_seurat$seurat_clusters %in% memory_clusters, "Memory",
+                               ifelse(tcell_seurat$seurat_clusters %in% unclear_clusters, "Unclear", "Issue")))))
+  
+  ## Plot by initial annot
+  DimPlot(tcell_seurat, group.by = "initial_annot")
+  ggsave(paste0(figure_dir, "Tcell_umap_initialAnnot.png"), width=6, height=5)
+  
+  ## Plot marker genes by initial annot
+  VlnPlot(tcell_seurat, group.by = "initial_annot", features=c("CD4", "CD8A", "TOP2A", "CCR7"), ncol=2, sort=TRUE)
+  ggsave(paste0(figure_dir, "Tcells_Vln_CellMarkers_byInitialAnnot.png"), width=6, height=6)
+  
+  ## Identify markers for initial annot
+  tcell_seurat<- SetIdent(tcell_seurat, value=tcell_seurat$initial_annot)
+  all_markers<- FindAllMarkers(tcell_seurat, min.pct = 0.2, logfc.threshold = 0.2)
+  all_markers_filtered<- all_markers[all_markers$p_val_adj<0.05 & all_markers$avg_log2FC>0.2,]
+  
+  ## Plot heatmap of top markers
+  top_markers<- all_markers_filtered %>% group_by(cluster) %>% top_n(n=25, wt=avg_log2FC) %>% as.data.frame()
+  top_markers$cluster<- factor(top_markers$cluster, levels=c("CD4", "CD8", "Cycling", "Memory", "Unclear"))
+  top_markers<- top_markers[order(top_markers$cluster),]
+  DoHeatmap(tcell_seurat, group.by = "initial_annot", features=top_markers$gene)+
+    scale_fill_gradient2(low="blue",mid = "white", high="red")
+  ggsave(paste0(figure_dir, "Tcells_heatmap_initialAnnot_topGenes.png"), width=6, height=6)
+  saveRDS(all_markers_filtered, file=paste0(analysis_dir, "Tcell_initialAnnot_cd4.cd8.memory.cycling.unclear_filtered_markers.Rds"))
+  
+saveRDS(tcell_seurat, paste0(analysis_dir, "adult_ped_tcell_merged_seurat_harmony.Rds"))
+```
+
+
+
+## Re-cluster memory, cycling, and unclear
+```{r}
+## Memory
+memory_seurat<- subset(tcell_seurat, seurat_clusters %in% memory_clusters)
+memory_meta<- memory_seurat@meta.data
+memory_seurat<- RunFullSeurat(memory_seurat@assays$RNA@counts, RunHarmony = TRUE, sample=memory_seurat$sampleid)
+memory_seurat<- AddMetaData(memory_seurat, memory_meta[,!colnames(memory_meta) %in% colnames(memory_seurat@meta.data)])
+
+## Cycling
+cycling_seurat<- subset(tcell_seurat, seurat_clusters %in% cycling_clusters)
+cycling_meta<- cycling_seurat@meta.data
+cycling_seurat<- RunFullSeurat(cycling_seurat@assays$RNA@counts, RunHarmony = TRUE,
+                               sample=cycling_seurat$sampleid)
+cycling_seurat<- AddMetaData(cycling_seurat, cycling_meta[,!colnames(cycling_meta) %in% colnames(cycling_seurat@meta.data)])
+
+## Unclear
+unclear_seurat<- subset(tcell_seurat, seurat_clusters %in% unclear_clusters)
+unclear_meta<- unclear_seurat@meta.data
+unclear_seurat<- RunFullSeurat(unclear_seurat@assays$RNA@counts, RunHarmony = TRUE,
+                             sample=unclear_seurat$sampleid)
+unclear_seurat<- AddMetaData(unclear_seurat, unclear_meta[,!colnames(unclear_meta) %in% colnames(unclear_seurat@meta.data)])
+
+all_subcluster<- list(memory=memory_seurat, cycling=cycling_seurat, unclear=unclear_seurat)
+saveRDS(all_subcluster, file=paste0(analysis_dir, "subclustered_memory.cycling.unclear_seurat_list.Rds"))
+```
+
+## Annotate sub-clustered memory/cycling/unclear as CD4 or CD8
+```{r}
+all_subcluster<- readRDS(paste0(analysis_dir, "subclustered_memory.cycling.unclear_seurat_list.Rds"))
+memory_seurat<- all_subcluster$memory
+cycling_seurat<- all_subcluster$cycling
+unclear_seurat<- all_subcluster$unclear
+
+## Memory
+  ## Increase resolution- need to split some clusters that have CD4/CD8 grouped together
+  memory_seurat<- FindClusters(memory_seurat, resolution = 2.6)
+  
+  ## Plot by marker genes
+  p1<-FeaturePlot(memory_seurat, features=c("CD4", "CD8A", "CCR7", "SELL"), ncol=2)
+  p2<- DotPlot(memory_seurat, features=c("CD4", "CD8A", "CCR7", "SELL"))
+  p3<- DimPlot(memory_seurat, label=TRUE)
+  cowplot::plot_grid(plotlist=list(p1, p2, p3), ncol=3)
+  ggsave(paste0(figure_dir, "MemoryTcell_MarkerGenes.png"), width=15, height=5)
+  
+  ## Re-assign any "initial annot"- any clusters that do not express CCR7
+  initial_annot_reassign<-c(2,13,21,26); names(initial_annot_reassign)<-c("CD8", "CD4","CD4", "CD4")
+  memory_seurat$initial_annot<- ifelse(memory_seurat$seurat_clusters %in% initial_annot_reassign, 
+                                       as.character(plyr::mapvalues(memory_seurat$seurat_clusters,
+                                                                    initial_annot_reassign, names(initial_annot_reassign))),
+                                       memory_seurat$initial_annot)
+  
+  ## Add on "second annot" assignment- all cells have an "initial" annot + annot after sub-clustering 
+  cd4_clusters<- c(0,1,3:5,7:17,19:21, 23:28)
+  cd8_clusters<- c(2,6,18,22,29)
+  memory_seurat$second_annot<- ifelse(memory_seurat$seurat_clusters %in% cd4_clusters, "CD4",
+                                      ifelse(memory_seurat$seurat_clusters %in% cd8_clusters, "CD8", "issue"))
+  p1<-DimPlot(memory_seurat, group.by = "second_annot")
+  p2<- VlnPlot(memory_seurat, group.by = "second_annot", features=c( "CD4", "CD8A"), ncol = 1)
+  p1+p2
+  ggsave(paste0(figure_dir, "Memory_CD4.CD8_annot.png"), width=6, height=4)
+  
+## Cycling
+  ## Increase resolution- need to split some clusters that have CD4/CD8 grouped together
+  cycling_seurat<- FindClusters(cycling_seurat, resolution = 2.1)
+  
+  ## Plot by marker genes
+  p1<-FeaturePlot(cycling_seurat, features=c("CD4", "CD8A", "TOP2A"), ncol=2)
+  p2<- VlnPlot(cycling_seurat, features=c("CD4", "CD8A", "TOP2A"), ncol=2)
+  p3<- DimPlot(cycling_seurat, label=TRUE)
+  cowplot::plot_grid(plotlist=list(p1, p2, p3), ncol=3)
+  ggsave(paste0(figure_dir, "CyclingTcell_MarkerGenes.png"), width=15, height=5)
+  
+  ## Add on "second annot" assignment- all cells have an "initial" annot + annot after sub-clustering 
+  cd4_clusters<- c(1,2,4)
+  cd8_clusters<- c(0,3,5)
+  cycling_seurat$second_annot<- ifelse(cycling_seurat$seurat_clusters %in% cd4_clusters, "CD4",
+                                      ifelse(cycling_seurat$seurat_clusters %in% cd8_clusters, "CD8", "issue"))
+  p1<-DimPlot(cycling_seurat, group.by = "second_annot")
+  p2<- VlnPlot(cycling_seurat, group.by = "second_annot", features=c( "CD4", "CD8A"), ncol = 1)
+  p1+p2
+  ggsave(paste0(figure_dir, "Cycling_CD4.CD8_annot.png"), width=6, height=4)
+
+## Unclear
+  ## Increase resolution- need to split some clusters that have CD4/CD8 grouped together
+  unclear_seurat<- FindClusters(unclear_seurat, resolution = 1)
+  
+  ## Plot by marker genes
+  p1<-FeaturePlot(unclear_seurat, features=c("CD4", "CD8A", "RGS1", "ANXA1"), ncol=2)
+  p2<- VlnPlot(unclear_seurat, features=c("CD4", "CD8A", "RGS1", "ANXA1"), ncol=2)
+  p3<- DimPlot(unclear_seurat, label=TRUE)
+  cowplot::plot_grid(plotlist=list(p1, p2, p3), ncol=3)
+  ggsave(paste0(figure_dir, "unclearTcell_MarkerGenes.png"), width=15, height=5)
+  
+  ## Marker genes- split clusters for further sub-clustering?
+  unclear_seurat<- FindClusters(unclear_seurat, resolution = .2)
+  all_markers<- FindAllMarkers(unclear_seurat)
+  all_markers_filtered<- all_markers[all_markers$p_val_adj<0.05 & all_markers$avg_log2FC>0.2,]
+  top_markers<- all_markers_filtered %>% group_by(cluster) %>% top_n(n=10, wt=avg_log2FC) %>% as.data.frame()
+  DoHeatmap(unclear_seurat, features=top_markers$gene)+
+    scale_fill_gradient2(low="blue", mid="white", high="red") + DimPlot(unclear_seurat, label=TRUE)
+  ggsave(paste0(figure_dir, "UnclearTcells_Heatmap_seuratMarkers.png"), width=8, height=4)
+  
+  ## Split cluster 3 (viral response/stress?) from others for sub-sub-clustering
+    ## Cluster 3- sub-sub-clustering didn't work -annotate cell wise, remove 13 cells that can't be annotated this way
+    unclear_c3_seurat<- subset(unclear_seurat, seurat_clusters == 3)
+    unclear_c3_meta<- unclear_c3_seurat@meta.data
+    unclear_c3_seurat<- RunFullSeurat(cm=unclear_c3_seurat@assays$RNA@counts, RunHarmony = TRUE, pca_dims = 73,
+                                      samples=unclear_c3_meta$sampleid)
+    
+    ## Other clusters- sub-sub-clustering works, annotate cluster-wise (except for a few cells)
+    unclear_others_seurat<- subset(unclear_seurat, seurat_clusters %in% c(0,1,2))
+    unclear_others_meta<- unclear_others_seurat@meta.data
+    unclear_others_seurat<- RunFullSeurat(cm=unclear_others_seurat@assays$RNA@counts, RunHarmony = TRUE, 
+                                      samples=unclear_others_meta$sampleid)
+    unclear_others_seurat<- FindClusters(unclear_others_seurat, resolution = 3.2)
+    p1<- FeaturePlot(unclear_others_seurat, features=c("CD4", "CD8A")) 
+    p2<- DimPlot(unclear_others_seurat, label=TRUE) 
+    p3<- VlnPlot(unclear_others_seurat, features=c("CD4", "CD8A"))
+    p1+p2+p3
+    ggsave(paste0(figure_dir, "UnclearTcell_subclusterOfc0.1.2_markerGenes.png"), width=14, height=8)
+    
+      ## Assign cd4/cd8
+      cd4_clusters<- c(0,1,5,7,13,16,17)
+      cd8_clusters<- c(3,4,6,8:11,15)
+      cell_wise<- c(2,12,14,18)
+      unclear_others_seurat$second_annot<- ifelse(unclear_others_seurat$seurat_clusters %in% cd4_clusters, "CD4",
+                                           ifelse(unclear_others_seurat$seurat_clusters %in% cd8_clusters, "CD8",
+                                           ifelse(unclear_others_seurat$seurat_clusters %in% cell_wise, "CellWise",
+                                                  "Issue")))
+      
+    ## Do cell-wise annotation as needed
+    cell_wise_cells<- c(colnames(unclear_c3_seurat),
+                        colnames(unclear_others_seurat)[unclear_others_seurat$second_annot=="CellWise"])
+    cd4.cd8_expr<- as.data.frame(t(unclear_seurat@assays$RNA@counts[c("CD4", "CD8A", "CD8B"),]))
+    cd4.cd8_expr<- cd4.cd8_expr[cell_wise_cells,]
+    cd4.cd8_expr$CD8<-apply(cd4.cd8_expr, 1, function(x){max(as.numeric(x["CD8A"]), as.numeric(x["CD8B"]))})
+    cd4.cd8_expr$annotate<- ifelse(cd4.cd8_expr$CD4==0 & cd4.cd8_expr$CD8 ==0, "TooLow",
+                            ifelse(cd4.cd8_expr$CD4>cd4.cd8_expr$CD8, "CD4",
+                            ifelse(cd4.cd8_expr$CD8 > cd4.cd8_expr$CD4, "CD8", "Issue")))
+    
+    ## Merge cluster/cell-wise annotations
+    all_unclear_cells<- c(rownames(cd4.cd8_expr),
+                          colnames(unclear_others_seurat)[unclear_others_seurat$second_annot != "CellWise"])
+    names(all_unclear_cells)<- c(cd4.cd8_expr$annotate,
+                                 unclear_others_seurat$second_annot[unclear_others_seurat$second_annot != "CellWise"])
+    unclear_seurat$second_annot<- plyr::mapvalues(colnames(unclear_seurat),
+                                                  all_unclear_cells, names(all_unclear_cells))
+
+  
+  ## Plot final annotations for unclear
+  p1<-DimPlot(unclear_seurat, group.by = "second_annot")
+  p2<- VlnPlot(unclear_seurat, group.by = "second_annot", features=c( "CD4", "CD8A"), ncol = 1)
+  p1+p2
+  ggsave(paste0(figure_dir, "unclear_CD4.CD8_annot.png"), width=6, height=4)
+
+## Save memory/cycling/unclear seurat objects
+all_subcluster<- list(memory=memory_seurat, cycling=cycling_seurat, unclear=unclear_seurat)  
+saveRDS(all_subcluster, file=paste0(analysis_dir, "subclustered_memory.cycling.unclear_seurat_list.Rds"))
+```
+
+## Update full tcell seurat with finalized cd4/cd8 annotations from memory/cycling/unclear
+```{r}
+## Read in subclusters, with CD4/CD8 annotations added (above)
+all_subcluster<- readRDS(paste0(analysis_dir, "subclustered_memory.cycling.unclear_seurat_list.Rds"))
+memory_seurat<- all_subcluster$memory
+cycling_seurat<- all_subcluster$cycling
+unclear_seurat<- all_subcluster$unclear
+
+## make list with all annotations
+all_tcells<- c(colnames(tcell_seurat)[tcell_seurat$initial_annot %in% c("CD4", "CD8")],
+               colnames(memory_seurat),
+               colnames(cycling_seurat),
+               colnames(unclear_seurat))
+names(all_tcells)<- c(as.character(tcell_seurat$initial_annot[tcell_seurat$initial_annot %in% c("CD4", "CD8")]),
+                      as.character(memory_seurat$second_annot),
+                      as.character(cycling_seurat$second_annot),
+                      as.character(unclear_seurat$second_annot))
+
+## Update tcell annotations based on above
+tcell_seurat$detailed_annot<- plyr::mapvalues(colnames(tcell_seurat), all_tcells, names(all_tcells))
+
+## Final annots
+DimPlot(tcell_seurat, 
+        group.by = "detailed_annot")+VlnPlot(tcell_seurat, 
+                                             group.by="detailed_annot", features=c("CD4", "CD8A"))
+ggsave(paste0(figure_dir, "Tcell_finalizedAnnots.cd4.cd8.png"), width=8, height=4.5)
+
+saveRDS(tcell_seurat, paste0(analysis_dir, "adult_ped_tcell_merged_seurat_harmony.Rds"))
+```
+
+
+
+## For CD4/CD8: check that cells are truly CD4/CD8
+```{r}
+## Make df with CD4/CD8 expression for all tcells
+cd4.cd8_expr<- as.data.frame(t(tcell_seurat@assays$RNA@data[c("CD4", "CD8A", "CD8B"),]))
+cd4.cd8_expr$CD8<-apply(cd4.cd8_expr, 1, function(x){max(as.numeric(x["CD8A"]), as.numeric(x["CD8B"]))})
+cd4.cd8_expr$annotate<- ifelse(cd4.cd8_expr$CD4==0 & cd4.cd8_expr$CD8 ==0, "TooLow",
+                            ifelse(cd4.cd8_expr$CD4>cd4.cd8_expr$CD8, "CD4",
+                            ifelse(cd4.cd8_expr$CD8 > cd4.cd8_expr$CD4, "CD8", "Issue")))
+
+
+## How many CD4 cells express CD8 + no CD4 expression: 16%
+cd4Cells_expr<- cd4.cd8_expr[colnames(tcell_seurat)[tcell_seurat$initial_annot=="CD4"],]
+sum(cd4Cells_expr$CD4==0 & cd4Cells_expr$CD8>2)/sum(cd4Cells_expr$annotate !="TooLow")
+
+p1<- ggplot(cd4Cells_expr, aes(x=CD4, y=CD8, color=annotate))+
+  geom_point(size=0.2)+ggtitle("Cells assigned as CD4 (16% mismatch)")
+  
+## How many CD8 cells express CD4 more highly than CD8? Result: 19%
+cd8Cells_expr<- cd4.cd8_expr[colnames(tcell_seurat)[tcell_seurat$initial_annot=="CD8"],]
+sum(cd8Cells_expr$CD8==0 & cd8Cells_expr$CD4>2)/sum(cd8Cells_expr$annotate !="TooLow")
+p2<- ggplot(cd8Cells_expr, aes(x=CD4, y=CD8, color=annotate))+
+  geom_point(size=0.2)+ggtitle("Cells assigned as CD8 (18% mismatch)")
+p1+p2
+ggsave(paste0(figure_dir, "CD4.CD8Tcells_cd4.cd8Expr.png"), width=7, height=3)
+
+## Sub-cluster CD4 cells- separates the few actually CD8 out
+cd4_seurat<- subset(tcell_seurat, initial_annot=="CD4")
+cd4_meta<- cd4_seurat@meta.data
+cd4_seurat<- RunFullSeurat(cd4_seurat@assays$RNA@counts, RunHarmony = TRUE,
+                           samples=cd4_meta$sampleid)
+cd4_seurat<- AddMetaData(cd4_seurat, cd4_meta[,!colnames(cd4_meta) %in% colnames(cd4_seurat@meta.data)])
+cd4_seurat<- FindClusters(cd4_seurat, resolution = 2)
+p1<-FeaturePlot(cd4_seurat, features=c("CD4", "CD8A"))
+p2<- DimPlot(cd4_seurat, label=TRUE) +NoLegend()
+p3<- DotPlot(cd4_seurat, features=c("CD4", "CD8A"))
+p1+p2+p3
+ggsave(paste0(figure_dir, "CD4_MarkerGene.cd8ID.png"), width=10, height=10)
+
+  ## re-annotate
+  cd8_clusters<- c(9, 15, 28)
+  cd4_seurat$initial_annot<- ifelse(cd4_seurat$seurat_clusters %in% cd8_clusters, "CD8",
+                                    cd4_seurat$initial_annot)
+  
+  DimPlot(cd4_seurat, group.by = "initial_annot") + VlnPlot(cd4_seurat, group.by = "initial_annot",
+                                                            features=c("CD4", "CD8A"))
+  ggsave(paste0(figure_dir, "CD4_reAnnotatedAsCD8.png"), width=8, height=4)
+  
+## Sub-cluster CD8 cells- does NOT separate out the few CD4. So will just have to live with these.
+cd8_seurat<- subset(tcell_seurat, initial_annot=="CD8")
+cd8_meta<- cd8_seurat@meta.data
+cd8_seurat<- RunFullSeurat(cd8_seurat@assays$RNA@counts, RunHarmony = TRUE,
+                           samples=cd8_meta$sampleid)
+cd8_seurat<- AddMetaData(cd8_seurat, cd8_meta[,!colnames(cd8_meta) %in% colnames(cd8_seurat@meta.data)])
+cd8_seurat<- FindClusters(cd8_seurat, resolution = .5)
+FeaturePlot(cd8_seurat, features=c("CD4", "CD8A", "GNLY"), ncol=3)
+ggsave(paste0(figure_dir, "CD8_MarkerGene.cd4ID.png"), width=9, height=3)
+
+   ## re-annotate- doesn't work
+  cd4_clusters<- c(9, 15, 28)
+  cd8_seurat$initial_annot<- ifelse(cd8_seurat$seurat_clusters %in% cd4_clusters, "CD4",
+                                    cd8_seurat$initial_annot)
+  
+  DimPlot(cd8_seurat, group.by = "initial_annot") + VlnPlot(cd8_seurat, group.by = "initial_annot",
+                                                            features=c("CD4", "CD8A"))
+  ggsave(paste0(figure_dir, "CD8_reAnnotatedAsCD8.png"), width=8, height=4)
+  
+## Add re-annotated CD4 cells back to full tcell seurat object
+tcell_seurat$initial_annot<- ifelse(tcell_seurat$initial_annot == "CD4",
+                                    plyr::mapvalues(colnames(tcell_seurat),
+                                                    colnames(cd4_seurat),
+                                                    cd4_seurat$initial_annot,
+                                                    warn_missing = FALSE),
+                                    tcell_seurat$initial_annot)
+
+saveRDS(tcell_seurat, paste0(analysis_dir, "adult_ped_tcell_merged_seurat_harmony.Rds"))
+```
+
+## Split into CD4/CD8
+```{r}
+tcell_seurat<- readRDS(paste0(analysis_dir, "adult_ped_tcell_merged_seurat_harmony.Rds"))
+
+## Split into cd4/cd8
+cd4_seurat<- subset(tcell_seurat, detailed_annot == "CD4")
+cd8_seurat<- subset(tcell_seurat, detailed_annot=="CD8")
+
+## Rerun pipeline with harmony integration
+cd4_meta<- cd4_seurat@meta.data
+cd8_meta<- cd8_seurat@meta.data
+
+cd4_seurat<- RunFullSeurat(cd4_seurat@assays$RNA@counts, RunHarmony=TRUE, samples=cd4_meta$sampleid)
+cd8_seurat<- RunFullSeurat(cd8_seurat@assays$RNA@counts, RunHarmony=TRUE, samples=cd8_meta$sampleid)
+
+cd4_seurat<- AddMetaData(cd4_seurat, cd4_meta[,!colnames(cd4_meta) %in% colnames(cd4_seurat@meta.data)])
+cd8_seurat<- AddMetaData(cd8_seurat, cd8_meta[,!colnames(cd8_meta) %in% colnames(cd8_seurat@meta.data)])
+
+## Summary plots
+DimPlot(cd4_seurat)+DimPlot(cd4_seurat, group.by = "Age")
+ggsave(paste0(figure_dir, "CD4_Finalized_cluster.Age.png"), width=10, height=4)
+
+DimPlot(cd8_seurat)+DimPlot(cd8_seurat, group.by = "Age")
+ggsave(paste0(figure_dir, "CD8_Finalized_cluster.Age.png"), width=10, height=4)
+
+FeaturePlot(cd4_seurat, features=c("CD4", "CD8A", "TOP2A", "CCR7", "GNLY", "FOXP3"), ncol=2)
+ggsave(paste0(figure_dir, "CD4_Finalized_markerGenes.png"), width=8, height=12)
+
+FeaturePlot(cd8_seurat, features=c("CD4", "CD8A", "TOP2A", "CCR7", "GNLY", "FOXP3"),ncol=2)
+ggsave(paste0(figure_dir, "CD8_Finalized_markerGenes.png"), width=8, height=12)
+
+saveRDS(cd4_seurat, file=paste0(analysis_dir, "adult_ped_cd4_merged_seurat_harmony.Rds"))
+saveRDS(cd8_seurat, file=paste0(analysis_dir, "adult_ped_cd8_merged_seurat_harmony.Rds"))
+```
+
+## Identify Tregs + NK-like
+```{r}
+## Tregs- identify within CD4
+p1<-FeaturePlot(cd4_seurat, features=c("FOXP3", "CCR8", "IL2RA", "LAYN"))
+p2<-VlnPlot(cd4_seurat, features=c("FOXP3", "CCR8", "IL2RA", "LAYN"), ncol=2, sort=TRUE)
+p3<- DimPlot(cd4_seurat, label=TRUE)+NoLegend()
+cowplot::plot_grid(plotlist=list(p1, p2,p3), ncol=3)
+ggsave(paste0(figure_dir, "CD4_UMAP_TregMarkers.png"), width=18, height=6)
+  
+  ## Annotate cluster as Treg
+  treg_clusters<- c(0)
+  cd4_seurat$sub_annot<-ifelse(cd4_seurat$seurat_clusters %in% treg_clusters, "Treg", "CD4")
+  
+## NK-like: identify within CD8
+p1<-FeaturePlot(cd8_seurat, features=c("NKG7", "GNLY", "GZMB", "FGFBP2"))
+p2<-VlnPlot(cd8_seurat, features=c("NKG7", "GNLY", "GZMB", "FGFBP2"), ncol=2, sort=TRUE)
+p3<- DimPlot(cd8_seurat, label=TRUE)+NoLegend()
+cowplot::plot_grid(plotlist=list(p1, p2,p3), ncol=3)
+ggsave(paste0(figure_dir, "CD8_UMAP_NKMarkers.png"), width=18, height=6)
+  
+  ## Annotate cluster as Treg
+  nk_clusters<- c(2,15)
+  cd8_seurat$sub_annot<-ifelse(cd8_seurat$seurat_clusters %in% nk_clusters, "NK-like", "CD8")
+  
+## Add "sub_annot" variable to full t cell
+## includes: Treg, NK-like, Memory, Cycling, other CD8, other CD4, "TooLow" (neither cd4 or cd8 expressed, can't be annotated)
+memory_cells<- colnames(tcell_seurat)[tcell_seurat$initial_annot=="Memory"]
+cycling_cells<- colnames(tcell_seurat)[tcell_seurat$initial_annot=="Cycling"]
+tooLow_cells<- colnames(tcell_seurat)[tcell_seurat$detailed_annot=="TooLow"]
+cd4_cells<- colnames(cd4_seurat)[!colnames(cd4_seurat) %in% c(memory_cells, cycling_cells)]
+cd8_cells<- colnames(cd8_seurat)[!colnames(cd8_seurat) %in% c(memory_cells, cycling_cells)]
+
+all_tcells<- c(memory_cells, cycling_cells, tooLow_cells,cd4_cells, cd8_cells)
+
+names(all_tcells)<- c(paste0(tcell_seurat$detailed_annot[tcell_seurat$initial_annot=="Memory"], "_",
+                             tcell_seurat$initial_annot[tcell_seurat$initial_annot=="Memory"]),
+                      rep("Cycling", length(cycling_cells)),
+                      rep("TooLow", length(tooLow_cells)),
+                      cd4_seurat$sub_annot[!colnames(cd4_seurat) %in% c(memory_cells, cycling_cells) ],
+                      cd8_seurat$sub_annot[!colnames(cd8_seurat) %in% c(memory_cells, cycling_cells)])
+
+tcell_seurat$sub_annot<- plyr::mapvalues(colnames(tcell_seurat), all_tcells, names(all_tcells))
+
+## Plot finalized annots
+DimPlot(tcell_seurat, group.by = "sub_annot")+
+ scale_color_manual(values=c(CD4="skyblue", CD4_Memory="violetred", CD8="darkgreen", CD8_Memory="grey22",Cycling="orange",
+                             `NK-like`="lawngreen", TooLow="grey", Treg="slateblue4"))
+ggsave(paste0(figure_dir, "Tcells_treg.nk.cycling.memory_annot.png"), width=6, height=4.5)
+
+## Add updated sub-annots to cd4/cd8
+cd4_seurat$sub_annot<- plyr::mapvalues(colnames(cd4_seurat), colnames(tcell_seurat), tcell_seurat$sub_annot, warn_missing = FALSE)
+cd8_seurat$sub_annot<- plyr::mapvalues(colnames(cd8_seurat), colnames(tcell_seurat), tcell_seurat$sub_annot, warn_missing = FALSE)
+
+saveRDS(tcell_seurat, paste0(analysis_dir, "adult_ped_tcell_merged_seurat_harmony.Rds"))
+saveRDS(cd4_seurat, paste0(analysis_dir, "adult_ped_cd4_merged_seurat_harmony.Rds"))
+saveRDS(cd8_seurat, paste0(analysis_dir, "adult_ped_cd8_merged_seurat_harmony.Rds"))
+
+```
+

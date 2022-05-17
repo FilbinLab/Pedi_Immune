@@ -1,0 +1,180 @@
+---
+title: "5Samples_ProcessToSeurat.Rmd"
+author: "Jenna LaBelle"
+date: "11/04/21"
+output: html_document
+---
+
+## Purpose:
+Majority of cohort processed/tracer run by Orr. 5 samples were sequenced later and were not processed by Orr. For these 5 samples: Li and I ran Tracer, and I performed all preprocessing. These 5 samples are processed to seurat object here.
+
+## Approach:
+Read in count matrix, process to seurat, initial QC, for these 5 new samples
+
+```{r}
+library(Seurat) 
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/01_Preprocessing/02_Counts_Preprocess/")
+
+analysis_dir<- paste0(working_dir, "/analysis/newSamples/")
+figure_dir<- paste0(working_dir, "/figures/newSamples/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir)};if(!dir.exists(analysis_dir)){dir.create(analysis_dir)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(nmf_helper)
+
+## Read in housekeeping genes
+marker_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Marker_genes/")
+hkgenes <- read.table(paste0(marker_dir, "tirosh_house_keeping.txt"), skip = 2)
+hkgenes <- as.vector(hkgenes$V1)
+```
+
+## Outputs
+```{r}
+raw_seurat<- paste0(analysis_dir, "gcdata_unfiltered.Rds")
+metrics.out.file<- paste0(analysis_dir, "qc_metrics.txt")
+filtered_seurat<- paste0(analysis_dir, "gcdata_filtered.Rds")
+```
+
+## Read in tpm, list of tpm
+```{r}
+cm_files<- list.files("../data/", pattern="cm_tpm")
+cm_list<- lapply(cm_files, function(x){
+  print(x)
+  read.csv(paste0("../data/", x), row.names = "gene_id")
+})
+sampleid<- gsub("cm_tpm_", "", gsub(".csv", "", cm_files))
+sampleid<- gsub("MUV", "MUV0", sampleid)
+names(cm_list)<- sampleid
+
+n.cells.beforeqc <- sapply(cm_list, function(tpm) ncol(tpm))
+```
+
+## Create samplesheet with metadata on each sample
+```{r}
+samplesheet<- data.frame(sampleid=names(cm_list),
+                         tumor=c("hemispheric", "midline_pedi", "hemispheric", "hemispheric", "midline_pedi"),
+                         condition=rep("Fresh", length(cm_list)),
+                         sort=rep("Hold", length(cm_list)), ## will add this after creating seurat object
+                         steroids=rep("NA", length(cm_list)),
+                         sex=c("F", "NA", "F", "NA", "NA"),
+                         age=c("8do", "NA", "NA", "NA", "NA"),
+                         source=c("BCH", "BCH", "Vienna", "Vienna", "Vienna"),
+                         group=c("hemispheric", "midline_pedi", "hemispheric", "hemispheric", "midline_pedi"),
+                         prefix=names(cm_list))
+```
+
+
+## Initialize Seurat object with pediatric brain cancer TPM data
+Create a list of Seurat objects, where each list element is the data from SmartSeq2 96-well plates. We also store the annotation for each experiment as metadata. 
+```{r initialize_seurat, eval = T}
+# Create list of Seurat objects and store gene expression in @counts and in @data. 
+# The Seurat object list elements are named by their sample name.
+gcdata <- sapply(seq(cm_list), function(i) CreateSeuratObject(counts = cm_list[[i]], min.cells = 0,
+                                            min.features = 0, project = names(cm_list)[i]))  
+names(gcdata) <- names(cm_list)
+
+# Add metadata from the samplesheet to each Seurat object.
+gcdata <- sapply(seq(gcdata), function(i) AddMetaData(object = gcdata[[i]], 
+                                                      metadata = data.frame(row.names = colnames(gcdata[[i]]), 
+                                                                            "sampleid" = rep(samplesheet$sampleid[i], ncol(gcdata[[i]])), 
+                                                                            "tumor" = rep(samplesheet$tumor[i], ncol(gcdata[[i]])), 
+                                                                            "condition" = rep(samplesheet$condition[i], ncol(gcdata[[i]])), 
+                                                                            "sort" = gsub(samplesheet$sampleid[i], "", 
+                                                                                     gsub("\\..*", "",gsub("pons", "",
+                                                                                     gsub("vent", "", colnames(gcdata[[i]]))))),
+                                                                            "steroids" = rep(samplesheet$steroids[i], ncol(gcdata[[i]])), 
+                                                                            "sex" = rep(samplesheet$sex[i], ncol(gcdata[[i]])), 
+                                                                            "age" = rep(samplesheet$age[i], ncol(gcdata[[i]])), 
+                                                                            "source" = rep(samplesheet$source[i], ncol(gcdata[[i]])), 
+                                                                            "group" = rep(samplesheet$group[i], ncol(gcdata[[i]])), 
+                                                                            "prefix" = rep(samplesheet$prefix[i], ncol(gcdata[[i]])))))
+gcdata <- sapply(seq(gcdata), function(i) gcdata[[i]] <- SetIdent(gcdata[[i]], value = "sampleid"))
+names(gcdata) <- names(cm_list) # add list names for each Seurat object
+
+# Number of cells for each sample.
+sapply(gcdata, function(data) ncol(data))
+sum(sapply(gcdata, function(data) ncol(data)))
+
+# Save current progress.
+saveRDS(gcdata, file = raw_seurat)
+```
+
+## Basic QC- matches same QC as rest of cohort, by Orr
+## Quality control metrics
+
+Count number of UMIs per cell (these are TPM in SmartSeq2), number of genes expressed per cell, number of human housekeeping genes expressed per cell, and fraction mitochondrial gene expression per cell.
+
+```{r quality, eval = T}
+# Within each sample, get number of expressed housekeeping genes detected per cell barcode and
+# fraction of mitochondrial gene expression.
+for (i in sampleid) {
+  # Indices of hkgenes not present in gcdata.
+  hkgenes.notfound.indices <- which(!hkgenes %in% rownames(gcdata[[i]]))  
+  if (length(hkgenes.notfound.indices)) {
+    message = paste0(paste0(hkgenes[hkgenes.notfound.indices], collapse = " "), " housekeeping genes were not found in sample ", i)
+    print(message)
+  }
+  
+  # Get number of expressed housekeeping genes.
+  hkgenes.found <- hkgenes[-hkgenes.notfound.indices]  # remove hkgenes that were not found
+  gcdata[[i]][["nHK_RNA"]] <- Matrix::colSums(gcdata[[i]][['RNA']]@data[hkgenes.found, ] > 0)
+  
+  # Mitochondrial genes can be identified in USCS Table Browser using chrM search.
+  gcdata[[i]][["percent_mito"]] <- PercentageFeatureSet(gcdata[[i]], pattern = "^MT-")
+  
+  print (paste0(sum(gcdata[[i]][["percent_mito"]] > .1), " of ", ncol(gcdata[[i]]), " cells have greater than 10% mitochondrial gene expression"))
+}
+
+# Merge Seurat objects. 
+gcdata.merge <- merge(x = gcdata[[1]], y = gcdata[2:length(gcdata)], add.cell.ids = NULL)
+Idents(gcdata.merge) <- "sampleid"  # use identity based on sample identity
+
+# Plot number of genes per cell, percent mitochondrial gene expression, and number of housekeeping genes. 
+# This is done on a Seurat object merged across samples.
+VlnPlot(gcdata.merge, features = c("nFeature_RNA", "nHK_RNA"), ncol = 1, pt.size = 0.5) 
+ggsave(paste0(figure_dir, "vln_nGene_nHK.png"), width = 6, height = 6)
+```
+
+## Filter cells
+Remove cells that have a high percentage mitochondrial gene expression, or too few or too many genes detected. Remove cells from E30, E88, E119. This is all stored in Seurat @data slot. 
+```{r filtercells, eval = T}
+# Use merged Seurat object containing all experimental data
+gcdata <- gcdata.merge
+rm(gcdata.merge)
+
+# Filter cells based on nGene, nHK, and percent.mito and store in @data slot 
+gcdata <- subset(gcdata, subset = nFeature_RNA > 500 & nFeature_RNA < 5000 & nHK_RNA > 20)
+```
+
+## Quality control metrics after filtering
+These are a few quality control metrics after the final filtering of genes and cells. We look at number of cells, number of genes per cell, and fraction of reads mapping to different genomic regions.
+```{r qc_postfilter, eval = T}
+# Number of cells in each experiment after filtering.
+table(Idents(gcdata))
+
+# Group cells by their experimental sample and find number of cells and median genes per sample after filtering. 
+qc <- gcdata[[]] %>% group_by(sampleid) %>% summarise(n.cells.after = n(), med.nGene = median(nFeature_RNA)) 
+
+# Include number of cells per sample before filtering and sort samples by their original order.
+qc <- merge(data.frame("sampleid" = names(n.cells.beforeqc), "n.cells.before" = n.cells.beforeqc), qc, by = "sampleid") 
+rownames(qc) <- qc$sampleid
+qc <- qc[as.character(sampleid), ]  # reorder rows to have same order as sampleid
+print(qc)
+write.table(qc, metrics.out.file, sep = "\t", quote = F)
+
+# Total number of cells before and after filtering
+sum(qc$n.cells.before)
+sum(qc$n.cells.after)
+
+# Save current progress.
+saveRDS(gcdata, file=filtered_seurat)
+```
+

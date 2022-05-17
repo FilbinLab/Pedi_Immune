@@ -1,0 +1,322 @@
+---
+title: "ProcessAdultMyeloidDatasets"
+output: html_document
+---
+
+## Purpose: 
+3 adult myeloid single cell datasets used- IDHmut (Science), GBM (Neftel), GBM (10X, Movahedi; primary and recurrent separately). Preprocess these to seurat
+
+## Approach:
+Read in raw count matrices/metadata, process to seurat for use downstream
+
+```{r}
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/01_Preprocessing/03_PreprocessAdultDatasets/")
+
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+
+
+figure_dir<- "figures/Preprocess_AdultMyeloid/"
+analysis_dir<- "analysis/Preprocess_AdultMyeloid/"
+
+for(i in c(figure_dir, analysis_dir)){
+  if(!dir.exists(i)){dir.create(i, recursive = TRUE)}
+}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(nmf_helper)
+```
+
+## read in macrophage/microglia marker genes for helping to subset to myeloid
+```{r}
+gene_set_dir<- "../../../../../../Marker_genes/"
+macrophage_genes<- read.table(paste0(gene_set_dir, "Macrophage_markers.txt"))
+microglia_genes<- read.table(paste0(gene_set_dir, "Microglia_markers.txt"))
+mm_genes<-list(macrophage=macrophage_genes$V1, microglia=microglia_genes$V1)
+```
+
+## IDHmut - Science 2018
+## Preprocess to seurat object. contains tumor cells- need to subset to microglia
+```{r}
+figure_dir_tmp<- paste0(figure_dir, "IDHmutScience2018/")
+if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp)}
+
+## read in raw counts from paper
+myeloid_adult_cm<- read.table("../../data/Adult_Myeloid/GSE89567_IDH_A_processed_data.txt")
+
+## create sample list from cell names
+samples<-colnames(myeloid_adult_cm)
+samples<- gsub("\\.", "_", samples)
+samples<- strsplit(samples, split="_")
+samples<- unlist(lapply(samples, function(x){x[1]}))
+samples<- gsub("mgh", "MGH", samples)
+names(samples)<- colnames(myeloid_adult_cm)
+
+## preprocess
+adult_seurat<- RunFullSeurat_Immune(cm=myeloid_adult_cm, samples=samples)
+
+## Marker gene expression to determine myeloid cluster
+FeaturePlot(adult_seurat, 
+            features = c("MBP", "PLP1", "TF", ## Oligodendrocyte
+                         "OLIG1", "PDGFRA", "APOD", ## OPC
+                         "CTGF", "IFITM1", "MGP", ## Endothelial cells,
+                         "CD14", "CD3E", "CD4" ## Immune cells
+                         ), #CD45 marker for all immune cells-distinguish neural from immune
+            cols = c("lightgrey", "red"), ncol=3,
+            slot="data")
+ggsave(paste0(figure_dir_tmp, "marker_genes_allCells.png"))
+
+FeaturePlot(adult_seurat, 
+            features =c("CD14", "CD1A", "FCGR1A", "CD68", "TFRC", "CCR5"),
+            cols = c("lightgrey", "red"), ncol=3,
+            slot="data")
+ggsave(paste0(figure_dir_tmp, "macrophage_marker_genes_allCells.png"), width=9, height=6)
+
+## Score for macrophage/microglia gene sets to determine myeloid cluster
+cm_list<- NormCenter(adult_seurat@assays$RNA@counts)
+cm_mean<- rowMeans(log2(adult_seurat@assays$RNA@counts+1))
+mm_scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, mm_genes)))
+
+## Set as "high" score based on quantile. Quantile % decided based on % of cells in potential myeloid cluster
+high_mac_score<- quantile(mm_scores$macrophage, probs=c(.85)); high_mic_score<- quantile(mm_scores$microglia, probs=c(.85))
+mm_scores$HighMM<- ifelse(mm_scores$macrophage > high_mac_score & mm_scores$microglia>high_mic_score, "HighBoth",
+                          ifelse(mm_scores$macrophage > high_mac_score, "Macrophage",
+                                 ifelse(mm_scores$microglia>high_mic_score, "Microglia", "Neither")))
+adult_seurat$Macrophage.Microglia<- plyr::mapvalues(colnames(adult_seurat), rownames(mm_scores), mm_scores$HighMM)
+DimPlot(adult_seurat, group.by="Macrophage.Microglia")
+ggsave(paste0(figure_dir_tmp, "HighMacrophage.MicrogliaScore_adult_allCells.png"), width=8, height=8)
+
+save(adult_seurat, file=paste0(analysis_dir, "adult_seurat_allCells_noInt.Robj"))
+
+## subset to just myeloid, scale to CPM, rerun seurat 
+myeloid_adult_seurat<- subset(adult_seurat, Macrophage.Microglia %in% c("HighBoth", "Macrophage", "Microglia"))
+cm<- myeloid_adult_seurat@assays$RNA@counts
+cm<- apply(cm, 2, function(x){x/sum(x) * 1000000 })
+myeloid_adult_seurat<- RunFullSeurat_Immune(cm,  samples=myeloid_adult_seurat$sampleid)
+
+
+## summary plots
+DimPlot(myeloid_adult_seurat, group.by = "sampleid")
+ggsave(paste0(figure_dir_tmp, "UMAP_adultMyeloid_sample.png"), width=7, height=7)
+FeaturePlot(myeloid_adult_seurat, features= c("CD14", "CD3E", "CD4",
+                                              "CD14", "CD1A", "FCGR1A", "CD68", "TFRC", "CCR5", "CD8A"))
+ggsave(paste0(figure_dir_tmp, "macrophage_marker_genes_myeloid.png"), width=12, height=9)
+
+## small cluster at right may be t cells. where do cells map from full seurat object clusters  --> "myeloid"
+myeloid_adult_seurat$adult_seurat_cluster<- plyr::mapvalues(colnames(myeloid_adult_seurat), colnames(adult_seurat),
+                                                            adult_seurat$seurat_clusters, warn_missing=FALSE)
+DimPlot(myeloid_adult_seurat, group.by = "adult_seurat_cluster") ## all map to one cluster (21)
+
+## based on marker genes (CD3/CD8A)- remove these outleir cells
+myeloid_adult_seurat<- subset(myeloid_adult_seurat, adult_seurat_cluster != "21")
+
+## rerun seurat with final cm
+myeloid_adult_seurat<- RunFullSeurat_Immune(myeloid_adult_seurat@assays$RNA@counts,  
+                                            samples=myeloid_adult_seurat$sampleid)
+DimPlot(myeloid_adult_seurat, group.by = "sampleid")
+ggsave(paste0(figure_dir_tmp, "UMAP_adultMyeloid_sample_final.png"), width=7, height=7)
+FeaturePlot(myeloid_adult_seurat, features= c("CD14", "CD3E", "CD4",
+                                              "CD14", "CD1A", "FCGR1A", "CD68", "TFRC", "CCR5", "CD8A"))
+ggsave(paste0(figure_dir_tmp, "macrophage_marker_genes_myeloid_final.png"), width=12, height=9)
+
+
+## save final object
+saveRDS(myeloid_adult_seurat, file=paste0(analysis_dir, "IDHmutScience2018_myeloid_seurat.Rds"))
+```
+
+## GBM- Neftel
+## Preprocess adult myeloid to seurat object. contains tumor cells- need to subset to microglia
+```{r}
+figure_dir_tmp<- paste0(figure_dir, "GBM_Neftel/")
+if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp)}
+
+
+pub_dir<- "../../../../../../PublishedDatasets/FilbinPublishedDatasets/GBM2019_WithNormalCells/"
+load(paste0(pub_dir, "IDHwtGBM_seurat.Robj"))
+adult_seurat<- seurat_obj_gbm2019; rm(seurat_obj_gbm2019)
+
+## Add on high level annotations (from paper)
+load(paste0(pub_dir, "IDHwtGBM_meta.Robj"))
+adult_seurat$CellAssignment<- plyr::mapvalues(colnames(adult_seurat),gbm2019_meta$NAME, gbm2019_meta$CellAssignment)
+
+DimPlot(adult_seurat, group.by = "CellAssignment")
+ggsave(paste0(figure_dir_tmp, "UMAP_ByPaperCellAssignment.png"), width=6, height=6)
+
+## Marker gene expression to determine myeloid cluster
+FeaturePlot(adult_seurat, 
+            features = c("MBP", "PLP1", "TF", ## Oligodendrocyte
+                         "OLIG1", "PDGFRA", "APOD", ## OPC
+                         "CTGF", "IFITM1", "MGP", ## Endothelial cells,
+                         "CD14", "CD3E", "CD4" ## Immune cells
+                         ), #CD45 marker for all immune cells-distinguish neural from immune
+            cols = c("lightgrey", "red"), ncol=3,
+            slot="data")
+ggsave(paste0(figure_dir_tmp, "marker_genes_allCells.png"))
+
+FeaturePlot(adult_seurat, 
+            features =c("CD14", "CD1A", "FCGR1A", "CD68", "TFRC", "CCR5"),
+            cols = c("lightgrey", "red"), ncol=3,
+            slot="data")
+ggsave(paste0(figure_dir_tmp, "macrophage_marker_genes_allCells.png"), width=9, height=6)
+
+FeaturePlot(adult_seurat, 
+            features =c("PTPRC"),
+            cols = c("lightgrey", "red"), ncol=1,
+            slot="data")
+ggsave(paste0(figure_dir_tmp, "myeloid_marker_genes_allCells.png"), width=3, height=3)
+
+## Score for macrophage/microglia gene sets to confirm myeloid cluster
+cm_list<- NormCenter(adult_seurat@assays$RNA@counts)
+cm_mean<- rowMeans(log2(adult_seurat@assays$RNA@counts+1))
+mm_scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, mm_genes)))
+
+## Set as "high" score based on quantile. Quantile % decided based on % of cells in potential myeloid cluster
+high_mac_score<- quantile(mm_scores$macrophage, probs=c(.95)); high_mic_score<- quantile(mm_scores$microglia, probs=c(.95))
+mm_scores$HighMM<- ifelse(mm_scores$macrophage > high_mac_score & mm_scores$microglia>high_mic_score, "HighBoth",
+                          ifelse(mm_scores$macrophage > high_mac_score, "Macrophage",
+                                 ifelse(mm_scores$microglia>high_mic_score, "Microglia", "Neither")))
+adult_seurat$Macrophage.Microglia<- plyr::mapvalues(colnames(adult_seurat), rownames(mm_scores), mm_scores$HighMM)
+DimPlot(adult_seurat, group.by="Macrophage.Microglia")
+ggsave(paste0(figure_dir_tmp, "HighMacrophage.MicrogliaScore_adult_allCells.png"), width=8, height=8)
+
+
+## subset to just myeloid, scale to CPM, rerun seurat 
+## Subset based on cell assignment in paper. Marker genes/scores just used to confirm
+myeloid_adult_seurat<- subset(adult_seurat, CellAssignment=="Macrophage")
+cm<- myeloid_adult_seurat@assays$RNA@counts
+cm<- apply(cm, 2, function(x){x/sum(x) * 1000000 })
+myeloid_adult_seurat<- RunFullSeurat_Immune(cm,  samples=myeloid_adult_seurat$sample)
+
+
+## summary plots
+DimPlot(myeloid_adult_seurat, group.by = "sampleid")
+ggsave(paste0(figure_dir_tmp, "UMAP_adultMyeloid_sample.png"), width=7, height=7)
+FeaturePlot(myeloid_adult_seurat, features= c("CD14", "CD3E", "CD4",
+                                              "CD14", "CD1A", "FCGR1A", "CD68", "TFRC", "CCR5", "CD8A"))
+ggsave(paste0(figure_dir_tmp, "macrophage_marker_genes_myeloid.png"), width=12, height=9)
+
+
+saveRDS(myeloid_adult_seurat, file=paste0(analysis_dir, "GBM.Neftel_myeloid_seurat.Rds"))
+```
+
+## GBM- 10X dataset, primary
+## this dataset only used for helping to annotate ped. Since it's 10X, not appropriate to do direct comparison
+## Li sent seurat object, just need to process in same way as ped, scale, etc
+```{r}
+figure_dir_tmp<- paste0(figure_dir, "GBM_10X/")
+if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp)}
+
+## load in Li's object
+myeloid_adult<- readRDS("../../data/Adult_Myeloid/seurat_obj_TAM_ND_Li.rds")
+
+## Modify scale: convert to CPM
+adult_cm<- myeloid_adult@assays$RNA@counts
+adult_cm<- apply(adult_cm, 2, function(x){x/sum(x)*1000000})
+
+## Re-create seurat object with "raw" counts (at same scale as ped)
+myeloid_adult_rescaled<- RunFullSeurat_Immune(cm=adult_cm, samples=myeloid_adult$sample)
+myeloid_adult_rescaled<- AddMetaData(myeloid_adult_rescaled, myeloid_adult@meta.data[,!colnames(myeloid_adult@meta.data) %in%
+                                                                                       colnames(myeloid_adult_rescaled@meta.data)])
+saveRDS(myeloid_adult_rescaled, paste0(analysis_dir, "GBM.10X_myeloid_seurat.Rds"))
+
+## get marker genes 
+myeloid_adult_rescaled<- SetIdent(myeloid_adult_rescaled, value=myeloid_adult_rescaled$annot)
+adult_markers<- FindAllMarkers(myeloid_adult_rescaled, min.pct = 0.2)
+adult_markers_filtered<- adult_markers[adult_markers$p_val_adj<0.05,]
+adult_markers_top100<- adult_markers_filtered %>% group_by(cluster) %>% top_n(100, wt=avg_log2FC) %>% as.data.frame()
+
+## rename marker genes- no"/", ".", "-"
+adult_markers_top100$cluster<- gsub("/", "_", gsub("-", "_", gsub("\\.", "", gsub(" ", "_", adult_markers_top100$cluster))))
+
+saveRDS(adult_markers_top100, file=paste0(analysis_dir, "GBM.10X_myeloid_markers_top100.Rds"))
+
+```
+
+## GBM -10X dataset, recurrent
+## Li sent seurat object, just need to process in same way as ped, scale, etc
+```{r}
+figure_dir_tmp<- paste0(figure_dir, "GBM_10X/")
+if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp)}
+
+## load in Li's object
+myeloid_adult<- readRDS("../../data/Adult_Myeloid/seurat_obj_TAM_recur_new.rds")
+
+## get marker genes 
+myeloid_adult<- SetIdent(myeloid_adult, value=myeloid_adult$annot)
+adult_markers<- FindAllMarkers(myeloid_adult, min.pct = 0.2)
+adult_markers_filtered<- adult_markers[adult_markers$p_val_adj<0.05,]
+adult_markers_top100<- adult_markers_filtered %>% group_by(cluster) %>% top_n(100, wt=avg_log2FC) %>% as.data.frame()
+
+## rename marker genes- no"/", ".", "-"
+adult_markers_top100$cluster<- gsub("/", "_", gsub("-", "_", gsub("\\.", "", gsub(" ", "_", adult_markers_top100$cluster))))
+
+saveRDS(adult_markers_top100, file=paste0(analysis_dir, "GBM.10X_recurrent_myeloid_markers_top100.Rds"))
+
+## merge all moTAMs and all mgTAMs, then find markers for prol. vs moTAM vs MgTAM vs Monocytes
+myeloid_adult$annot_merged<- ifelse(grepl("Mo-TAM", myeloid_adult$annot), "Mo_TAM",
+                                    ifelse(grepl("Mg-TAM", myeloid_adult$annot), "Mg_TAM",
+                                           ifelse(myeloid_adult$annot=="prol. TAM", "prol_TAM",
+                                                  ifelse(myeloid_adult$annot=="Monocytes", "Monocytes", "issue"))))
+myeloid_adult<- SetIdent(myeloid_adult, value=myeloid_adult$annot_merged)
+all_markers<- FindAllMarkers(myeloid_adult, min.pct = 0.2)
+all_markers_filtered<- all_markers[all_markers$p_val_adj<0.05,]
+adult_markers_top100<- all_markers_filtered %>% group_by(cluster) %>% top_n(100, wt=avg_log2FC) %>% as.data.frame()
+saveRDS(adult_markers_top100, file=paste0(analysis_dir, "GBM.10X_recurrent_mg.mo.monocyte.prol_markers_top100.Rds"))
+```
+
+## Merge together smartseq2 datasets (IDHmut/GBM)
+```{r}
+figure_dir_tmp<- paste0(figure_dir, "IDHmut.GBM.merge/")
+if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp)}
+
+## GBM (Neftel) adult
+gbm_myeloid_seurat<- readRDS(paste0(analysis_dir, "GBM.Neftel_myeloid_seurat.Rds"))
+
+## IDHmut adult
+idhmut_myeloid_seurat<-readRDS(paste0(analysis_dir, "IDHmutScience2018_myeloid_seurat.Rds"))
+
+## Merge into single cm / meta
+sum(rownames(gbm_myeloid_seurat@assays$RNA@counts)==rownames(idhmut_myeloid_seurat@assays$RNA@counts))
+nrow(gbm_myeloid_seurat); nrow(idhmut_myeloid_seurat)
+gbm_idh_cm<- cbind(gbm_myeloid_seurat@assays$RNA@counts, idhmut_myeloid_seurat@assays$RNA@counts)
+
+gbm_myeloid_seurat$TumorType<- "GBM"; idhmut_myeloid_seurat$TumorType<- "IDHmut"
+gbm_idh_meta<- rbind(gbm_myeloid_seurat@meta.data[,c("nFeature_RNA", "sampleid", "TumorType")],
+                     idhmut_myeloid_seurat@meta.data[,c("nFeature_RNA", "sampleid", "TumorType")])
+sum(colnames(gbm_idh_cm)==rownames(gbm_idh_meta)); ncol(gbm_idh_cm); nrow(gbm_idh_meta)
+
+## Preprocess new, merged seurat object
+gbm_idhmut_myeloid_seurat<-RunFullSeurat_Immune(cm=gbm_idh_cm, samples=gbm_idh_meta$sampleid)
+gbm_idhmut_myeloid_seurat$TumorType<- plyr::mapvalues(colnames(gbm_idhmut_myeloid_seurat), 
+                                                             rownames(gbm_idh_meta), gbm_idh_meta$TumorType)
+DimPlot(gbm_idhmut_myeloid_seurat, group.by="TumorType")
+ggsave(paste0(figure_dir, "GBMNeftel_IDHmut2018_merged.png"), width=6, height=5.5)
+
+## Plot cluster breakdown by tumor type
+df<- as.data.frame(table(gbm_idhmut_myeloid_seurat$TumorType, gbm_idhmut_myeloid_seurat$seurat_clusters))
+colnames(df)<- c("TumorType", "Seurat_cluster", "NCells")
+
+  ## Normalize # of cells in each cluster by # of cells in its tumor type
+  norm_factor_forGBM<- table(gbm_idhmut_myeloid_seurat$TumorType)["GBM"]/table(gbm_idhmut_myeloid_seurat$TumorType)["IDHmut"]
+  df$NCells<- ifelse(df$TumorType=="GBM", df$NCells/norm_factor_forGBM, df$NCells)
+  
+  ## Convert N cells per cluster to percentage of cells per cluster
+  df<- df %>% group_by(Seurat_cluster) %>% mutate(PerCells=NCells/sum(NCells)) %>% as.data.frame()
+  
+  ## plot
+  p1<-ggplot(df, aes(x=Seurat_cluster, y=PerCells, fill=TumorType))+
+    geom_bar(position="stack", stat="identity")+
+    geom_hline(yintercept = 0.5)
+  p1 + DimPlot(gbm_idhmut_myeloid_seurat) + DimPlot(gbm_idhmut_myeloid_seurat, group.by = "TumorType")
+  ggsave(paste0(figure_dir, "GBMNeftel_IDHmut2018_merged_clusterOverlapSummary.png"), width=18, height=6)
+  
+save(gbm_idhmut_myeloid_seurat, file=paste0(analysis_dir, "GBMNeftel_IDHmut2018_myeloid_merged_seurat.Robj"))
+```
+

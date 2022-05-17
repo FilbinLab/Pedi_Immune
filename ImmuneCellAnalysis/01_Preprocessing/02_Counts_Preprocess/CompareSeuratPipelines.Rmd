@@ -1,0 +1,360 @@
+---
+title: "MergeSamples_QC_ToSeurat.Rmd"
+author: "Jenna LaBelle"
+date: "11/04/21"
+output: html_document
+---
+
+
+```{r}
+library(Seurat) 
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/Preprocessing/Counts_Preprocess/")
+
+analysis_dir<- paste0(working_dir, "/analysis/compareSeuratPipelines/")
+figure_dir<- paste0(working_dir, "/figures/compareSeuratPipelines/")
+data_dir<- "../Counts_Preprocess/analysis/broad_annotation/"
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir)};if(!dir.exists(analysis_dir)){dir.create(analysis_dir)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+```
+
+## Read in processed seurat objects
+```{r}
+cohort<- "pedOnly_nomuv63.withmuv91"
+
+data_dir<- paste0(data_dir, cohort, "/")
+
+immune_seurat<- readRDS(paste0(data_dir,"tcell.myeloid_seurat.Rds"))
+tcell_seurat<- readRDS(paste0(data_dir,   "tcell_seurat.Rds"))
+myeloid_seurat<- readRDS(paste0(data_dir, "myeloid_seurat.Rds"))
+
+```
+
+```{r}
+cm=tcell_seurat@assays$RNA@counts
+project=""
+samples<- tcell_seurat$sampleid
+meta<- tcell_seurat@meta.data
+```
+
+## Our standard pipeline, without integration
+```{r}
+## Create Seurat Obj
+seurat_obj = CreateSeuratObject(cm, min.cells=0, min.features = 0,  project=project)
+
+## Normalize data
+seurat_obj <- NormalizeData(
+  object = seurat_obj,
+  normalization.method = "LogNormalize",
+  scale.factor = 1E5
+)
+
+## Detection of variable genes across the single cells
+seurat_obj <- FindVariableFeatures(
+  object = seurat_obj,
+  mean.function = ExpMean, 
+  dispersion.function = LogVMR 
+)
+
+## Scaling the data and removing unwanted sources of variation
+seurat_obj <- ScaleData(
+  object = seurat_obj,
+  do.scale = FALSE,
+  do.center = TRUE
+)
+
+seurat_obj <- RunPCA(
+  object = seurat_obj, 
+  features = seurat_obj@assays$RNA@var.features, 
+  npcs = 100,
+  verbose = TRUE, 
+  ndims.print  = 1:5, 
+  nfeatures.print = 5
+)
+  
+
+## Run UMAP
+seurat_obj <- RunUMAP(seurat_obj, reduction = "pca", dims = 1:20)
+seurat_obj <- FindNeighbors(seurat_obj,
+                            reduction = "pca",
+                            dims = 1:20,
+                            force.recalc = TRUE)  
+seurat_obj<- FindClusters(seurat_obj, resolution = .8)
+seurat_obj<- AddMetaData(seurat_obj, meta[,!colnames(meta) %in% colnames(seurat_obj@meta.data)])    
+
+seurat_ourStandard_noInt<- seurat_obj
+
+## Add cd4/cd8 score- subtract cd4 expr from cd8
+cd4.cd8_expr<- as.data.frame(t(seurat_ourStandard_noInt@assays$RNA@data[c("CD4", "CD8A"),]))
+cd4.cd8_expr$score<- cd4.cd8_expr$CD4 - cd4.cd8_expr$CD8A
+seurat_ourStandard_noInt$cd4.cd8_score<- as.numeric(as.character(plyr::mapvalues(colnames(seurat_ourStandard_noInt),
+                                                         rownames(cd4.cd8_expr),
+                                                         cd4.cd8_expr$score)))
+
+p1<- DimPlot(seurat_ourStandard_noInt)
+p2<- DimPlot(seurat_ourStandard_noInt, group.by = "detailed_annot")+
+  scale_color_manual(values=c(CD4="navy", 
+                              CD8="cadetblue3"))
+p3<- DimPlot(seurat_ourStandard_noInt, group.by="sampleid")+NoLegend()
+p4<- FeaturePlot(seurat_ourStandard_noInt, features = "cd4.cd8_score")+scale_color_gradient2(low="blue", mid="white", high="red")
+p1+p2+p3+p4
+ggsave(paste0(figure_dir, "OurStandardPipeline_notInt_Tcells.png"), width=10, height=9)
+
+
+```
+
+## Our standard pipeline, with integration
+```{r}
+library(harmony)
+
+## Create Seurat Obj
+seurat_obj = CreateSeuratObject(cm, min.cells=0, min.features = 0,  project=project)
+
+## Normalize data
+seurat_obj <- NormalizeData(
+  object = seurat_obj,
+  normalization.method = "LogNormalize",
+  scale.factor = 1E5
+)
+
+## Detection of variable genes across the single cells
+seurat_obj <- FindVariableFeatures(
+  object = seurat_obj,
+  mean.function = ExpMean, 
+  dispersion.function = LogVMR 
+)
+
+## Scaling the data and removing unwanted sources of variation
+seurat_obj <- ScaleData(
+  object = seurat_obj,
+  do.scale = FALSE,
+  do.center = TRUE
+)
+
+seurat_obj <- RunPCA(
+  object = seurat_obj, 
+  features = seurat_obj@assays$RNA@var.features, 
+  npcs = 100,
+  verbose = TRUE, 
+  ndims.print  = 1:5, 
+  nfeatures.print = 5
+)
+  
+seurat_obj<- AddMetaData(seurat_obj, meta[,!colnames(meta) %in% colnames(seurat_obj@meta.data)])    
+seurat_obj = RunHarmony(seurat_obj, "sampleid", theta = 2, 
+                                     max.iter.harmony = 50, plot_convergence = TRUE)
+seurat_obj <- RunUMAP(seurat_obj, reduction = "harmony", dims = 1:20)
+seurat_obj <- FindNeighbors(seurat_obj,
+                          reduction = "harmony",
+                          dims = 1:20,
+                          force.recalc = TRUE)   
+seurat_obj<- FindClusters(seurat_obj, resolution = .8)
+
+seurat_ourStandard_harmony<- seurat_obj
+  
+## Add cd4/cd8 score- subtract cd4 expr from cd8
+cd4.cd8_expr<- as.data.frame(t(seurat_ourStandard_harmony@assays$RNA@data[c("CD4", "CD8A"),]))
+cd4.cd8_expr$score<- cd4.cd8_expr$CD4 - cd4.cd8_expr$CD8A
+seurat_ourStandard_harmony$cd4.cd8_score<- as.numeric(as.character(plyr::mapvalues(colnames(seurat_ourStandard_harmony),
+                                                         rownames(cd4.cd8_expr),
+                                                         cd4.cd8_expr$score)))
+
+p1<- DimPlot(seurat_ourStandard_harmony)
+p2<- DimPlot(seurat_ourStandard_harmony, group.by = "detailed_annot")+
+  scale_color_manual(values=c(CD4="navy", 
+                              CD8="cadetblue3"))
+p3<- DimPlot(seurat_ourStandard_harmony, group.by="sampleid")+NoLegend()
+p4<- FeaturePlot(seurat_ourStandard_harmony, features = "cd4.cd8_score")+scale_color_gradient2(low="blue", mid="white", high="red")
+p1+p2+p3+p4
+ggsave(paste0(figure_dir, "OurStandardPipeline_harmony_Tcells.png"), width=10, height=9)
+
+
+```
+
+## Orr's pipeline
+```{r}
+seurat_obj<-CreateSeuratObject(counts = cm, min.cells = 0, min.features = 0, project = "")
+seurat_obj$sampleid<- samples
+
+## Remove samples without at least 1 cell
+nSamples<-table(seurat_obj$sampleid)
+seurat_obj<- subset(seurat_obj, sampleid %in% names(nSamples[nSamples>1]))
+
+## Normalize- scale factor different than ours
+seurat_obj <- NormalizeData(seurat_obj, normalization.method = "LogNormalize", scale.factor = 10000)
+
+## Split object by sample, select integration features, set these as varible features
+seurat_obj_list<- SplitObject(seurat_obj, split.by = "sampleid")
+var.genes <- SelectIntegrationFeatures(seurat_obj_list, 
+                                       nfeatures = 2000, verbose = TRUE, fvf.nfeatures = 2000, 
+                                       selection.method = "vst")
+VariableFeatures(seurat_obj) <- var.genes
+
+## Scale
+seurat_obj <- ScaleData(seurat_obj, split.by = "sampleid", features = VariableFeatures(seurat_obj), 
+                    do.center = T, do.scale = F)
+
+## PCA/neighbors/clusters/umap
+seurat_obj <- RunPCA(seurat_obj, features = VariableFeatures(seurat_obj), npcs = 40)
+seurat_obj <- RunUMAP(seurat_obj, dims = 1:20, reduction = "pca", n.neighbors = 15,  ## used n.neigbors=30 in original
+                      min.dist = 0.5, spread = 1, metric = "euclidean", seed.use = 1)  
+seurat_obj <- FindNeighbors(seurat_obj, reduction = "pca", dims = 1:20, k.param = 20) ## n neighbors = 30 in original
+seurat_obj <- FindClusters(seurat_obj, resolution = 1, algorithm = 4, random.seed = 100)  ## used louvain not leiden in original
+
+seurat_obj<- AddMetaData(seurat_obj, meta[,!colnames(meta) %in% colnames(seurat_obj@meta.data)])    
+
+seurat_orr<- seurat_obj
+
+## Add cd4/cd8 score- subtract cd4 expr from cd8
+cd4.cd8_expr<- as.data.frame(t(seurat_orr@assays$RNA@data[c("CD4", "CD8A"),]))
+cd4.cd8_expr$score<- cd4.cd8_expr$CD4 - cd4.cd8_expr$CD8A
+seurat_orr$cd4.cd8_score<- as.numeric(as.character(plyr::mapvalues(colnames(seurat_orr),
+                                                         rownames(cd4.cd8_expr),
+                                                         cd4.cd8_expr$score)))
+
+p1<- DimPlot(seurat_orr)
+p2<- DimPlot(seurat_orr, group.by = "detailed_annot")+
+  scale_color_manual(values=c(CD4="navy", 
+                              CD8="cadetblue3"))
+p3<- DimPlot(seurat_orr, group.by="sampleid")+NoLegend()
+p4<- FeaturePlot(seurat_orr, features = "cd4.cd8_score")+scale_color_gradient2(low="blue", mid="white", high="red")
+p1+p2+p3+p4
+ggsave(paste0(figure_dir, "OrrPipeline_Tcells.png"), width=10, height=9)
+
+
+```
+
+## Our standard pipeline, modified so that all settings match Orr's EXCEPT for variable features
+```{r}
+## Create Seurat Obj
+seurat_obj = CreateSeuratObject(cm, min.cells=0, min.features = 0,  project=project)
+
+## Normalize data
+seurat_obj <- NormalizeData(
+  object = seurat_obj,
+  normalization.method = "LogNormalize",
+  scale.factor = 10000 ## changed from 100,000
+)
+
+## Detection of variable genes across the single cells
+seurat_obj <- FindVariableFeatures(
+  object = seurat_obj,
+  mean.function = ExpMean, 
+  dispersion.function = LogVMR 
+)
+
+## Scaling the data and removing unwanted sources of variation
+seurat_obj <- ScaleData(
+  object = seurat_obj,
+  do.scale = FALSE,
+  do.center = TRUE
+)
+
+seurat_obj <- RunPCA(
+  object = seurat_obj, 
+  features = seurat_obj@assays$RNA@var.features, 
+  npcs = 40, ## changed from 100
+  verbose = TRUE, 
+  ndims.print  = 1:5, 
+  nfeatures.print = 5
+)
+  
+
+## Run UMAP
+seurat_obj <- RunUMAP(seurat_obj, reduction = "pca", dims = 1:20, metric = "euclidean", n.neighbors = 15)
+seurat_obj <- FindNeighbors(seurat_obj,
+                            reduction = "pca",
+                            dims = 1:20,
+                            force.recalc = TRUE)  
+seurat_obj<- FindClusters(seurat_obj, resolution = .8, algorithm = 4)
+seurat_obj<- AddMetaData(seurat_obj, meta[,!colnames(meta) %in% colnames(seurat_obj@meta.data)])    
+
+seurat_ourStandard_noInt_matchOrr<- seurat_obj
+  
+p1<- DimPlot(seurat_ourStandard_noInt_matchOrr)
+p2<- DimPlot(seurat_ourStandard_noInt_matchOrr, group.by = "detailed_annot")+
+  scale_color_manual(values=c(CD4="navy", 
+                              CD8="cadetblue3"))
+p3<- DimPlot(seurat_ourStandard_noInt_matchOrr, group.by="sampleid")+NoLegend()
+p1+p2+p3
+ggsave(paste0(figure_dir, "OurStandardPipeline_notInt_matchOrrExceptForVariableFeatures_Tcells.png"), width=15, height=4.5)
+
+
+```
+
+## Our standard pipeline, without integration- change variable features approach to match Orr
+```{r}
+## Create Seurat Obj
+seurat_obj = CreateSeuratObject(cm, min.cells=0, min.features = 0,  project=project)
+
+## Normalize data
+seurat_obj <- NormalizeData(
+  object = seurat_obj,
+  normalization.method = "LogNormalize",
+  scale.factor = 1E5
+)
+
+## Split object by sample, select integration features, set these as varible features
+seurat_obj<- AddMetaData(seurat_obj, meta[,!colnames(meta) %in% colnames(seurat_obj@meta.data)]) 
+seurat_obj_list<- SplitObject(seurat_obj, split.by = "sampleid")
+var.genes <- SelectIntegrationFeatures(seurat_obj_list, 
+                                       nfeatures = 2000, verbose = TRUE, fvf.nfeatures = 2000, 
+                                       selection.method = "vst")
+VariableFeatures(seurat_obj) <- var.genes
+
+## Scaling the data and removing unwanted sources of variation
+seurat_obj <- ScaleData(
+  object = seurat_obj,
+  do.scale = FALSE,
+  do.center = TRUE
+)
+
+seurat_obj <- RunPCA(
+  object = seurat_obj, 
+  features = seurat_obj@assays$RNA@var.features, 
+  npcs = 100,
+  verbose = TRUE, 
+  ndims.print  = 1:5, 
+  nfeatures.print = 5
+)
+  
+
+## Run UMAP
+seurat_obj <- RunUMAP(seurat_obj, reduction = "pca", dims = 1:20)
+seurat_obj <- FindNeighbors(seurat_obj,
+                            reduction = "pca",
+                            dims = 1:20,
+                            force.recalc = TRUE)  
+seurat_obj<- FindClusters(seurat_obj, resolution = .8)
+  
+
+seurat_ourStandard_noInt_matchVFOrr<- seurat_obj
+  
+p1<- DimPlot(seurat_ourStandard_noInt_matchVFOrr)
+p2<- DimPlot(seurat_ourStandard_noInt_matchVFOrr, group.by = "detailed_annot")+
+  scale_color_manual(values=c(CD4="navy", 
+                              CD8="cadetblue3"))
+p3<- DimPlot(seurat_ourStandard_noInt_matchVFOrr, group.by="sampleid")+NoLegend()
+p1+p2+p3
+ggsave(paste0(figure_dir, "OurStandardPipeline_notInt_matchOrrVariableFeatures_Tcells.png"), width=15, height=4.5)
+
+
+```
+
+## How many variable features match between our pipeline/orr
+```{r}
+sum(VariableFeatures(seurat_orr) %in% VariableFeatures(seurat_ourStandard_noInt))
+length(VariableFeatures(seurat_orr))
+length(VariableFeatures(seurat_ourStandard_noInt))
+```
+
