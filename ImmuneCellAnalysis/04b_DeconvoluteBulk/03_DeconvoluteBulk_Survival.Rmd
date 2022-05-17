@@ -1,0 +1,384 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+## Purpose:
+Use programs generated in single cell data (for both tcells and myeloid cells) to deconvolute bulk data and determine if there is any effect on survival, etc. 
+
+## Approach:
+Cibersort run on bulk data, results imported here. Summary visualizations + survival analysis performed
+
+```{r}
+library(Seurat) 
+library(harmony)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/04b_DeconvoluteBulk/")
+
+analysis_dir<- paste0(working_dir, "/analysis/bulk_deconvolute.survival/")
+figure_dir<- paste0(working_dir, "/figures/bulk_deconvolute.survival/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir,recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+## colors
+tcell_program_colors<- readRDS(paste0("../plot_colors/Tcell.programs_rank8sharedByunion_reAnnot.Rds"))
+names(tcell_program_colors)<- gsub("\\.", "_", names(tcell_program_colors))
+
+myeloid_program_colors<- readRDS("../plot_colors/Myeloid_program_colors.Rds")
+myeloid_program_colors<- myeloid_program_colors$rank6
+
+celltype_colors<- readRDS(paste0("../plot_colors/ImmuneCell.celltypes.Rds"))
+celltype_colors<- c(celltype_colors, Tumor="violetred")
+```
+
+
+## Functions
+```{r}
+## input_df should consist of: time=numeric column of time to death, censored=logical column with dead=1/alive=0, DepColumnName=name of column with dependent variable to split survival analysis on- ex: High/Low expression of gene set
+run_mySurvAnalysis<- function(input_df, DepColumnName){
+  ## Run survival based on dependent variable
+  input_df$Marker<-input_df[[DepColumnName]]
+  fit <- survfit(Surv(time, censored) ~Marker,
+                   data = input_df)
+  
+  ## Create dataframe of survival results
+  pvalue<-surv_pvalue(fit, input_df)$pval.txt
+  pvalue<-gsub("p = ", "", pvalue)
+  myFit_median<-surv_median(fit)
+  highMarker_median<-myFit_median[myFit_median$strata=="Marker=High", "median"]
+  lowMarker_median<-myFit_median[myFit_median$strata=="Marker=Low", "median"]
+  df<-data.frame(Marker=DepColumnName, pvalue=pvalue,
+                   HighMarkerMedianSurvival=highMarker_median,
+                   LowMarkerMedianSurvival=lowMarker_median)
+  
+  ## Return list of results
+  res_list<- list(fit=fit, res_df=df )
+  return(res_list)
+}
+
+## Visualize survival results with survminer
+## input_df should consist of: time=numeric column of time to death, censored=logical column with dead/alive, DepColumnName=name of column with dependent variable to split survival analysis on- ex: High/Low expression of gene set
+## Surv_fit is results from running survfit(Surv(time, censored)~Dep, data=input_df). 
+plot_mySurvAnalysis<- function(surv_fit,input_df, DepColumnName, plotName=NULL){
+  ## Add on "Marker" to input df- so that it matches exactly from survival analysis
+  input_df$Marker<-input_df[[DepColumnName]]
+  
+  plotTitle<- ifelse(is.null(plotName), GeneSetName, plotName )
+  p<-ggsurvplot(surv_fit, pval=TRUE, input_df)+ggtitle(plotTitle)
+  return(p)
+}
+  
+```
+
+## Read in cibersort results and clinical info
+```{r}
+data_dir<- "/Users/jlabelle/Dropbox (Partners HealthCare)/FilbinLab/data_analysis/PublishedDatasets/BulkRNAseq/"
+
+## CBTN
+cb_cbtn<- read.csv("data/CIBERSORTx_Results_CBTN.csv")
+clinical_cbtn<- read.csv(paste0(data_dir,"CBTN/H3F3A_HGG.DIPG_Mutation_Clinical.tsv"), sep="\t")
+cbtn_meta<- read.csv(paste0(data_dir,"CBTN/clinical_metadata_withHistoneStatus.csv"))
+
+  ## clinical edits- remove derived cell line samples, rename columns, fix censored
+  clinical_cbtn<- clinical_cbtn[clinical_cbtn$SAMPLE_TYPE != "Derived Cell Line",]
+  clinical_cbtn<- clinical_cbtn %>% dplyr::rename("submitter_id"="Patient.ID",
+                                                  "time"="OS_MONTHS",
+                                                  "censored"="OS_STATUS") %>% as.data.frame()
+  clinical_cbtn$censored<- as.numeric(gsub(":DECEASED", "", gsub(":LIVING", "", clinical_cbtn$censored)))
+  
+  ## K27M/WT
+  cb_cbtn_k27m<- cb_cbtn[cb_cbtn$Mixture %in% cbtn_meta$Patient.ID[cbtn_meta$HistoneStatus=="K27M"],]
+  clinical_cbtn_k27m<- clinical_cbtn[clinical_cbtn$submitter_id %in% cb_cbtn_k27m$Mixture,]
+  
+  cb_cbtn_wt<- cb_cbtn[cb_cbtn$Mixture %in% cbtn_meta$Patient.ID[cbtn_meta$HistoneStatus=="WT"],]
+  clinical_cbtn_wt<- clinical_cbtn[clinical_cbtn$submitter_id %in% cb_cbtn_wt$Mixture,]
+  
+## DFCI- Frank/Mimi, HGG
+load(paste0(data_dir, "HGG_FrankMimi/HGGPed_clinical.Robj"))
+load(paste0(data_dir, "HGG_FrankMimi/HGGPed_survival.Robj"))
+  
+  ## Clinical edits- merging survival/clinical, fixing censored
+  clinical_dfci<- merge(HGGPed_clinical, HGGPed_survival,by="submitter_id")
+  clinical_dfci$censored<- as.numeric(clinical_dfci$censored)
+
+  
+## List of cibersort res/clinical
+input_list<- list(cbtn_wt=list(ciber=cb_cbtn_wt, meta=clinical_cbtn_wt),
+                  cbtn_k27m=list(ciber=cb_cbtn_k27m, meta=clinical_cbtn_k27m),
+                  dfci=list(ciber=cb_dfci, meta=clinical_dfci))
+```
+
+## Set cohort to use downstream
+```{r}
+cohort<- "DFCI_FM"
+figure_dir_use<- paste0(figure_dir, cohort, "/")
+if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
+
+
+
+cb_res<- cb_cbtn[cb_cbtn$Mixture %in% cbtn_meta$Patient.ID[cbtn_meta$HistoneStatus=="WT"],]
+clinical_use<- clinical_cbtn[clinical_cbtn$Patient.ID %in% cb_res$Mixture,]
+```
+
+
+## Calculate proportions of broad cell types
+```{r}
+## Set broad cell types- myeloid, CD4, CD8, Tumor
+cd4_cellTypes<- colnames(cb_res)[grepl("CD4", colnames(cb_res))]
+cd8_cellTypes<- colnames(cb_res)[grepl("CD8", colnames(cb_res))]
+myeloid_cellTypes<- colnames(cb_res)[!colnames(cb_res) %in% c(cd4_cellTypes, cd8_cellTypes, "Mixture", "Tumor", "P.value", "Correlation", "RMSE")]
+
+## Reformat
+cb_res_melt<-cb_res[,!colnames(cb_res) %in% c( "P.value", "Correlation", "RMSE")]
+cb_res_melt<- melt(cb_res_melt, id="Mixture")
+colnames(cb_res_melt)<-c("Sample", "Program", "perCells")
+
+## Add on broad cell type, get proportion of broad cell types
+cb_res_melt$CellType<- ifelse(cb_res_melt$Program %in% cd4_cellTypes, "CD4", 
+                               ifelse(cb_res_melt$Program %in% cd8_cellTypes, "CD8",
+                                      ifelse(cb_res_melt$Program %in% myeloid_cellTypes,"Myeloid", "Tumor")))
+cb_res_broad<- cb_res_melt %>% group_by(Sample, CellType) %>% summarise(perCells=sum(perCells)) %>% as.data.frame()
+```
+
+## Calculate proportions of each program within its major cell type
+```{r}
+## CD8
+res_cd8<- cb_res_melt[cb_res_melt$CellType=="CD8",]
+res_cd8<- res_cd8 %>% group_by(Sample) %>% mutate(perCells=perCells/sum(perCells)) %>% as.data.frame()
+res_cd8$Program<- gsub("CD8_", "", res_cd8$Program)
+
+## CD4
+res_cd4<- cb_res_melt[cb_res_melt$CellType=="CD4",]
+res_cd4<- res_cd4 %>% group_by(Sample) %>% mutate(perCells=perCells/sum(perCells)) %>% as.data.frame()
+res_cd4$Program<- gsub("CD4_", "", res_cd4$Program)
+
+## Myeloid
+res_myeloid<- cb_res_melt[cb_res_melt$CellType=="Myeloid",]
+res_myeloid<- res_myeloid %>% group_by(Sample) %>% mutate(perCells=perCells/sum(perCells)) %>% as.data.frame()
+```
+
+## Plot overall proportions
+```{r}
+ggplot(cb_res_broad, aes(x=Sample, y=perCells, fill=CellType))+
+  geom_bar(stat="identity")+
+  theme_classic()+
+  scale_fill_manual(values=celltype_colors)+
+  theme(axis.text.x = element_blank())+
+  ggtitle("CBTN Cibersort predicted proportions: broad cell types")
+ggsave(paste0(figure_dir_use, "CBTN_broadCellTypeProp.png"), width=6, height=3)
+```
+
+
+## Plot proportions within each broad cell type
+```{r}
+## CD8
+ggplot(res_cd8, aes(x=Sample, y=perCells, fill=Program))+
+  geom_bar(stat="identity")+
+  theme_classic()+
+  scale_fill_manual(values=tcell_program_colors[names(tcell_program_colors) %in% res_cd8$Program])+
+  theme(axis.text.x = element_blank())+
+  ggtitle("CBTN Cibersort predicted proportions: CD8 programs")
+ggsave(paste0(figure_dir_use, "CBTN_CD8_programProp.png"), width=6, height=3)
+
+## CD4
+ggplot(res_cd4, aes(x=Sample, y=perCells, fill=Program))+
+  geom_bar(stat="identity")+
+  theme_classic()+
+  scale_fill_manual(values=tcell_program_colors[names(tcell_program_colors) %in% res_cd4$Program])+
+  theme(axis.text.x = element_blank())+
+  ggtitle("CBTN Cibersort predicted proportions: CD4 programs")
+ggsave(paste0(figure_dir_use, "CBTN_CD4_programProp.png"), width=6, height=3)
+
+## Myeloid
+ggplot(res_myeloid, aes(x=Sample, y=perCells, fill=Program))+
+  geom_bar(stat="identity")+
+  theme_classic()+
+  scale_fill_manual(values=myeloid_program_colors[names(myeloid_program_colors) %in% res_myeloid$Program])+
+  theme(axis.text.x = element_blank())+
+  ggtitle("CBTN Cibersort predicted proportions: Myeloid programs")
+ggsave(paste0(figure_dir_use, "CBTN_Myeloid_programProp.png"), width=6, height=3)
+
+
+```
+
+
+## Reformat clinical
+```{r}
+## CBTN
+if(grepl("CBTN", cohort)){
+  clinical<- clinical_use[,c("Patient.ID", "OS_MONTHS", "OS_STATUS")]
+  colnames(clinical)<-c("Sample", "time", "censored")
+  clinical$censored<-as.logical(as.numeric(gsub(":DECEASED", "", gsub(":LIVING", "", clinical$censored))))
+}
+
+```
+
+## Run survival analysis: CD8
+```{r}
+## Settings
+quant_split<- .5
+
+## Calculate quantile split for each gene set (high/low)
+programs<- as.character(unique(res_cd8$Program))
+res_cd8$Program<- as.character(res_cd8$Program)
+
+cd8_quant_split<- lapply(programs, function(program){
+  tmp<- res_cd8[res_cd8$Program == program,]
+  tmp[[program]]<- ifelse(tmp$perCells > quantile(tmp$perCells, probs=quant_split), "High", "Low" )
+  return(tmp[,c("Sample", program)])
+})
+cd8_quant_split<- do.call("cbind", cd8_quant_split)
+rownames(cd8_quant_split)<- cd8_quant_split$Sample
+cd8_quant_split<- cd8_quant_split[,!grepl("Sample", colnames(cd8_quant_split))]
+cd8_quant_split$Sample<- rownames(cd8_quant_split)
+
+## Merge clinical and quantile
+clinical_quant<- merge(cd8_quant_split, clinical, by="Sample")
+
+## Run survival for each program
+all_surv_res<- lapply(programs, function(x){
+  fit<- run_mySurvAnalysis(clinical_quant, x)
+  return(fit)
+})
+names(all_surv_res)<- programs
+
+## Plot survival results
+all_plots<- lapply(programs, function(x){
+  plot_mySurvAnalysis(all_surv_res[[x]]$fit, clinical_quant, x,plotName = x)
+})
+p<-arrange_ggsurvplots(all_plots, ncol=3, nrow=ceiling(length(all_plots)/3))
+ggsave(plot=p, paste0(figure_dir_use, "SurvRes_CD8programs_quantSplit_", quant_split,  ".png"), width=9, height=9)
+
+```
+
+## Run survival analysis: CD4
+```{r}
+## Settings
+#quant_split<- .7
+
+## Calculate quantile split for each gene set (high/low)
+programs<- as.character(unique(res_cd4$Program))
+res_cd4$Program<- as.character(res_cd4$Program)
+
+cd4_quant_split<- lapply(programs, function(program){
+  tmp<- res_cd4[res_cd4$Program == program,]
+  tmp[[program]]<- ifelse(tmp$perCells > quantile(tmp$perCells, probs=quant_split), "High", "Low" )
+  return(tmp[,c("Sample", program)])
+})
+cd4_quant_split<- do.call("cbind", cd4_quant_split)
+rownames(cd4_quant_split)<- cd4_quant_split$Sample
+cd4_quant_split<- cd4_quant_split[,!grepl("Sample", colnames(cd4_quant_split))]
+cd4_quant_split$Sample<- rownames(cd4_quant_split)
+
+## Merge clinical and quantile
+clinical_quant<- merge(cd4_quant_split, clinical, by="Sample")
+
+## Run survival for each program
+all_surv_res<- lapply(programs, function(x){
+  fit<- run_mySurvAnalysis(clinical_quant, x)
+  return(fit)
+})
+names(all_surv_res)<- programs
+
+## Plot survival results
+all_plots<- lapply(programs, function(x){
+  plot_mySurvAnalysis(all_surv_res[[x]]$fit, clinical_quant, x,plotName = x)
+})
+p<-arrange_ggsurvplots(all_plots, ncol=3, nrow=ceiling(length(all_plots)/3))
+ggsave(plot=p, paste0(figure_dir_use, "SurvRes_CD4programs_quantSplit_", quant_split,  ".png"), width=9, height=9)
+
+```
+
+## Run survival analysis: Myeloid
+```{r}
+## Settings
+#quant_split<- .7
+
+## Calculate quantile split for each gene set (high/low)
+programs<- as.character(unique(res_myeloid$Program))
+res_myeloid$Program<- as.character(res_myeloid$Program)
+
+myeloid_quant_split<- lapply(programs, function(program){
+  tmp<- res_myeloid[res_myeloid$Program == program,]
+  tmp[[program]]<- ifelse(tmp$perCells > quantile(tmp$perCells, probs=quant_split), "High", "Low" )
+  return(tmp[,c("Sample", program)])
+})
+myeloid_quant_split<- do.call("cbind", myeloid_quant_split)
+rownames(myeloid_quant_split)<- myeloid_quant_split$Sample
+myeloid_quant_split<- myeloid_quant_split[,!grepl("Sample", colnames(myeloid_quant_split))]
+myeloid_quant_split$Sample<- rownames(myeloid_quant_split)
+
+## Merge clinical and quantile
+clinical_quant<- merge(myeloid_quant_split, clinical, by="Sample")
+
+## Remove any programs where all are "low" (all 0)
+nLow<- apply(clinical_quant[,!colnames(clinical_quant) %in% c("time", "censored", "Sample")], 2, table)
+nLow<-unlist(lapply(nLow, length))
+programs_remove<- names(nLow)[nLow!=2]
+clinical_quant<- clinical_quant[,!colnames(clinical_quant) %in% programs_remove]
+programs<- programs[!programs %in% programs_remove]
+
+## Run survival for each program
+all_surv_res<- lapply(programs, function(x){
+  fit<- run_mySurvAnalysis(clinical_quant, x)
+  return(fit)
+})
+names(all_surv_res)<- programs
+
+## Plot survival results
+all_plots<- lapply(programs, function(x){
+  plot_mySurvAnalysis(all_surv_res[[x]]$fit, clinical_quant, x,plotName = x)
+})
+p<-arrange_ggsurvplots(all_plots, ncol=3, nrow=ceiling(length(all_plots)/3))
+ggsave(plot=p, paste0(figure_dir_use, "SurvRes_Myeloidprograms_quantSplit_", quant_split,  ".png"), width=9, height=6)
+
+```
+
+
+## Run survival analysis: broad cell types (CD4/CD8/Myeloid/Tumor)
+```{r}
+## Settings
+#quant_split<- .7
+
+## Calculate quantile split for each gene set (high/low)
+programs<- as.character(unique(cb_res_broad$CellType))
+cb_res_broad$Program<- as.character(cb_res_broad$CellType)
+
+broad_quant_split<- lapply(programs, function(program){
+  tmp<- cb_res_broad[cb_res_broad$Program == program,]
+  tmp[[program]]<- ifelse(tmp$perCells > quantile(tmp$perCells, probs=quant_split), "High", "Low" )
+  return(tmp[,c("Sample", program)])
+})
+broad_quant_split<- do.call("cbind", broad_quant_split)
+rownames(broad_quant_split)<- broad_quant_split$Sample
+broad_quant_split<- broad_quant_split[,!grepl("Sample", colnames(broad_quant_split))]
+broad_quant_split$Sample<- rownames(broad_quant_split)
+
+## Merge clinical and quantile
+clinical_quant<- merge(broad_quant_split, clinical, by="Sample")
+
+## Run survival for each program
+all_surv_res<- lapply(programs, function(x){
+  fit<- run_mySurvAnalysis(clinical_quant, x)
+  return(fit)
+})
+names(all_surv_res)<- programs
+
+## Plot survival results
+all_plots<- lapply(programs, function(x){
+  plot_mySurvAnalysis(all_surv_res[[x]]$fit, clinical_quant, x,plotName = x)
+})
+p<-arrange_ggsurvplots(all_plots, ncol=3, nrow=ceiling(length(all_plots)/3))
+ggsave(plot=p, paste0(figure_dir_use, "SurvRes_BroadCellTypes_quantSplit_", quant_split,  ".png"), width=9, height=6)
+
+```

@@ -1,0 +1,289 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+## Purpose:
+Use programs generated in single cell data (for both tcells and myeloid cells) to deconvolute bulk data and determine if there is any effect on survival, etc. Here, all preprocessing of single cell data (pseudobulking + program prop, used for validation) and bulk data (to deconvolute) is performed
+
+## Approach:
+For single cell data, using object created for cellchat, which contains merged tcell, myeloid, and tumor seurat objects. Pseudobulked by sample and the actual proportion of "high level" (i.e., Tcells, myeloid, and tumor) and program determined. This data is used to validate deconvolution method- the former for validating cibersort, the latter for the actual bulk deconvolution of programs. Any needed bulk preprocessing is also performed here (pending)
+
+
+```{r}
+library(Seurat) 
+library(harmony)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/04b_DeconvoluteBulk/")
+
+analysis_dir<- paste0(working_dir, "/analysis/")
+figure_dir<- paste0(working_dir, "/figures/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir,recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+```
+
+```{r}
+## Pseudobulk based on sample input
+myPseudobulk<- function(samples, cm, aggr_method="mean"){
+  pseudobulk = NULL
+  if(sum(colnames(cm)!=names(samples)) > 0){message("sample and cm don't match!")}
+  for (sample_use in unique(samples)){
+    cm_tmp = cm[,samples==sample_use]
+    if (aggr_method == "mean"){
+      pseudobulk = cbind(pseudobulk, rowMeans(cm_tmp))
+    }
+    if (aggr_method == "median"){
+      pseudobulk = cbind(pseudobulk, rowMedians(cm_tmp))
+    }
+  }
+  colnames(pseudobulk) = unique(samples)
+  rownames(pseudobulk) = rownames(cm)
+  return(pseudobulk)
+}
+
+## Proportion of programs by sample for seurat object
+getProgramProp<- function(seurat_obj, program_name="Annot_Liger", pseudosample_column="sample"){
+  bd<- as.data.frame(table(seurat_obj@meta.data[[pseudosample_column]], seurat_obj@meta.data[[program_name]]))
+  colnames(bd)<- c("Sample", "Program", "NCells")
+  bd<- bd %>% group_by(Sample) %>% mutate(perCells=NCells/sum(NCells)) %>% as.data.frame()
+  return(bd)
+}
+
+```
+
+## Read in seurat object processed for CellChat- merges tcell, myeloid, and tumor together
+## Also load in tcell/myeloid alone- this is used to generate reference dataset for program-level deconvolution
+```{r}
+rank_use<-8
+sharedBy<- "union"
+cohort<- "pedOnly_nomuv63"
+integration<-""
+
+all_seurat<- readRDS(paste0("../04a_Integrate_Immune.Tumor/CellChat/analysis/", "seurat_tumor.tcell.myeloid.Rds"))
+
+myeloid_seurat<-readRDS(paste0("../01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/",integration, "/",
+                               cohort, "/myeloid_seurat_noDC.B.Rds"))
+tcell_seurat<- readRDS(paste0("../02a_Tcells/02_Ped.Adult/03_Visualize.Reannotate_programs/analysis/Reannotate_programs/",
+                         "rank", rank_use, "_sharedBy", sharedBy, "/ped_seurat_tcell_harmony.Rds"))
+
+## Program variable names
+tcell_program_name<- "NMF_rank8_annot_mergedByunion_reAnnot"
+myeloid_program_name<- "NMF_rank6_annotByAdult10X"
+```
+
+## Add on CD4/CD8 distinction to  annotation 
+```{r}
+## Add to highLevel in all seurat
+all_seurat$CD4CD8<- ifelse(colnames(all_seurat) %in% colnames(tcell_seurat),
+                                               as.character(plyr::mapvalues(colnames(all_seurat), colnames(tcell_seurat),
+                                                                            tcell_seurat$detailed_annot_byNMFrank8_mergedByunion)),
+                           "Other")
+all_seurat$highLevel_annot_CD4CD8<- ifelse(all_seurat$CD4CD8 %in% c("CD4", "CD8", "Unclear"), all_seurat$CD4CD8,
+                                           all_seurat$highLevel_annot)
+all_seurat<- subset(all_seurat, highLevel_annot_CD4CD8 != "Unclear")
+
+## Add to tcell program in tcell_seurat
+tcell_seurat$program_withCD4CD8<- paste0(tcell_seurat$detailed_annot_byNMFrank8_mergedByunion, "_", tcell_seurat@meta.data[[tcell_program_name]])
+tcell_seurat<- subset(tcell_seurat, detailed_annot_byNMFrank8_mergedByunion != "Unclear")
+```
+
+## Preprocessing: pseudobulk and proportion of progrmas
+```{r}
+## Pseudobulk by sample
+pb<- as.data.frame(myPseudobulk(all_seurat$sampleid, all_seurat@assays$RNA@counts))
+pb$GeneSymbol<- rownames(pb)
+pb<- pb[,c(ncol(pb), 1:(ncol(pb)-1))]
+
+## Program proportions
+  ## High level
+  highLevel_prop<- getProgramProp(all_seurat, program_name ="highLevel_annot", pseudosample_column="sampleid" )
+  
+  ## High level with CD4/CD8
+  highLevel_prop_CD4.CD8<- getProgramProp(all_seurat, program_name ="highLevel_annot_CD4CD8", pseudosample_column="sampleid" )
+  
+  ## Tcell: programs (cd4/cd8 together)
+  tcell_program_prop<- getProgramProp(tcell_seurat, program_name =tcell_program_name, pseudosample_column = "sampleid" )
+  
+  ## Tcell: programs (cd4/cd8 separate)
+  tcell_program_prop_byCD4.CD8<- getProgramProp(tcell_seurat, program_name ="program_withCD4CD8", pseudosample_column = "sampleid" )
+  
+  ## All cells: Tcell programs (cd4/cd8 separate)
+  all_seurat$tcell_program<-ifelse(colnames(all_seurat) %in% colnames(tcell_seurat),
+                                   plyr::mapvalues(colnames(all_seurat), colnames(tcell_seurat),
+                                                   tcell_seurat$program_withCD4CD8),
+                                   "Other")
+  all_tcellProgram_prop_byCD4.CD8<- getProgramProp(all_seurat, program_name ="tcell_program", pseudosample_column = "sampleid" )
+  
+  ## All cells: myeloid programs 
+  all_seurat$myeloid_program<-ifelse(colnames(all_seurat) %in% colnames(myeloid_seurat),
+                                   plyr::mapvalues(colnames(all_seurat), colnames(myeloid_seurat),
+                                                   as.character(myeloid_seurat@meta.data[[myeloid_program_name]])),
+                                   "Other")
+  
+  ## All cells: tcell programs + myeloid programs + tumor
+  all_seurat$all_program<-ifelse(all_seurat$tcell_program != "Other", all_seurat$tcell_program,
+                                 ifelse(all_seurat$myeloid_program != "Other", all_seurat$myeloid_program, "Tumor"))
+  all_tcellMyeloidProgramTumor_prop<- getProgramProp(all_seurat, program_name ="all_program", pseudosample_column = "sampleid" )
+  
+saveRDS(highLevel_prop, file=paste0(analysis_dir, "highLevel_prop_bySample.Rds"))
+saveRDS(highLevel_prop_CD4.CD8, file=paste0(analysis_dir, "highLevel_CD4.CD8_prop_bySample.Rds"))  
+saveRDS(tcell_program_prop, file=paste0(analysis_dir, "tcell_program_prop_bySample.Rds"))
+saveRDS(tcell_program_prop_byCD4.CD8, file=paste0(analysis_dir, "tcell_program_byCD4.CD8_prop_bySample.Rds"))
+saveRDS(all_tcellProgram_prop_byCD4.CD8, file=paste0(analysis_dir, "all_tcellProgram_byCD4.CD8_prop_bySample.Rds"))
+saveRDS(all_tcellMyeloidProgramTumor_prop, file=paste0(analysis_dir, "all_tcellMyeloidProgramTumor_prop_bySample.Rds"))
+saveRDS(pb, file=paste0(analysis_dir, "pseudobulked_cm.Rds"))
+write.table(pb, file = paste0(analysis_dir, "pseudobulked_cm.txt"), quote= FALSE, row.names = FALSE, sep="\t")
+```
+
+
+## Preprocess for deconvolution: linear regression
+```{r}
+## Identify marker genes between tcells/myeloid tumor. 
+all_seurat<- SetIdent(all_seurat, value=all_seurat$highLevel_annot)
+all_markers<- FindAllMarkers(all_seurat, min.pct = 0.5, logfc.threshold = 0.5)
+all_markers_filtered<- all_markers[all_markers$p_val_adj<0.05 & all_markers$avg_log2FC>2,]
+
+
+saveRDS(all_markers_filtered, file=paste0(analysis_dir, "highLevel_markers.Rds"))
+```
+
+## Preprocess for deconvolution: cibersort
+```{r}
+analysis_dir_use<- paste0(analysis_dir, "cibersort_input/")
+
+## High level reference dataset, with CD4/CD8
+sc_cm<- data.frame(all_seurat@assays$RNA@counts, check.names = FALSE)
+sc_cm$GeneSymbol<- rownames(sc_cm)
+sc_cm<- sc_cm[,c(ncol(sc_cm), 1:(ncol(sc_cm)-1))]
+rownames(sc_cm)<-NULL
+
+annots<-as.data.frame(t(as.data.frame(c("GeneSymbol", unname(all_seurat$highLevel_annot_CD4CD8)))))
+colnames(annots)<- colnames(sc_cm)
+rownames(annots)<-NULL
+sc_cm<-rbind(annots, sc_cm)
+
+write.table(sc_cm, file = paste0(analysis_dir_use, "scRNAseq_reference.cm_withCD4CD8.txt"), 
+            quote= FALSE, row.names = FALSE,col.names =FALSE, sep="\t")
+
+## Tcell programs reference dataset
+sc_cm<- data.frame(tcell_seurat@assays$RNA@counts, check.names = FALSE)
+sc_cm$GeneSymbol<- rownames(sc_cm)
+sc_cm<- sc_cm[,c(ncol(sc_cm), 1:(ncol(sc_cm)-1))]
+rownames(sc_cm)<-NULL
+
+annots<-as.data.frame(t(as.data.frame(c("GeneSymbol", unname(tcell_seurat@meta.data[[tcell_program_name]])))))
+colnames(annots)<- colnames(sc_cm)
+rownames(annots)<-NULL
+sc_cm<-rbind(annots, sc_cm)
+
+write.table(sc_cm, file = paste0(analysis_dir_use, "scRNAseq_reference.cm_tcellPrograms.txt"), 
+            quote= FALSE, row.names = FALSE,col.names =FALSE, sep="\t")
+
+
+## Tcell programs reference dataset- by CD4/CD8
+sc_cm<- data.frame(tcell_seurat@assays$RNA@counts, check.names = FALSE)
+sc_cm$GeneSymbol<- rownames(sc_cm)
+sc_cm<- sc_cm[,c(ncol(sc_cm), 1:(ncol(sc_cm)-1))]
+rownames(sc_cm)<-NULL
+
+annots<-as.data.frame(t(as.data.frame(c("GeneSymbol", unname(tcell_seurat$program_withCD4CD8)))))
+colnames(annots)<- colnames(sc_cm)
+rownames(annots)<-NULL
+sc_cm<-rbind(annots, sc_cm)
+
+write.table(sc_cm, file = paste0(analysis_dir_use, "scRNAseq_reference.cm_tcellPrograms_byCD4.CD8.txt"), 
+            quote= FALSE, row.names = FALSE,col.names =FALSE, sep="\t")
+
+
+## Tcell programs reference dataset- by CD4/CD8, without CD8 inhibitory
+  ## Remove CD8 inhibitory
+  tcell_tmp<- subset(tcell_seurat, program_withCD4CD8 != "CD8_Inhibitory")
+  
+  ## Rename programs- no periods
+  tcell_tmp$program_withCD4CD8<- gsub("\\.", "_", tcell_tmp$program_withCD4CD8)
+  
+  ## Create count matrix
+  sc_cm<- data.frame(tcell_tmp@assays$RNA@counts, check.names = FALSE)
+  sc_cm$GeneSymbol<- rownames(sc_cm)
+  sc_cm<- sc_cm[,c(ncol(sc_cm), 1:(ncol(sc_cm)-1))]
+  rownames(sc_cm)<-NULL
+  
+  ## add annotations as row1 to allow for duplicate "column names"
+  annots<-as.data.frame(t(as.data.frame(c("GeneSymbol", unname(tcell_tmp$program_withCD4CD8)))))
+  colnames(annots)<- colnames(sc_cm)
+  rownames(annots)<-NULL
+  sc_cm<-rbind(annots, sc_cm)
+  
+  write.table(sc_cm, file = paste0(analysis_dir_use, "scRNAseq_reference.cm_tcellPrograms_byCD4.CD8_noCD8Inh.txt"), 
+            quote= FALSE, row.names = FALSE,col.names =FALSE, sep="\t")
+  
+## All cells reference dataset, where annotations are: Tumor, myeloid program, cd4 program, cd8 program (no inhibitory)
+  ## Remove CD8 inhibitory
+  all_tmp<- subset(all_seurat, all_program != "CD8_Inhibitory")
+
+  ## Rename programs- no periods
+  all_tmp$all_program<- gsub("\\.", "_",all_tmp$all_program)
+  
+  ## Create count matrix
+  sc_cm<- data.frame(all_tmp@assays$RNA@counts, check.names = FALSE)
+  sc_cm$GeneSymbol<- rownames(sc_cm)
+  sc_cm<- sc_cm[,c(ncol(sc_cm), 1:(ncol(sc_cm)-1))]
+  rownames(sc_cm)<-NULL
+  
+  ## add annotations as row1 to allow for duplicate "column names"
+  annots<-as.data.frame(t(as.data.frame(c("GeneSymbol", unname(all_tmp$all_program)))))
+  colnames(annots)<- colnames(sc_cm)
+  rownames(annots)<-NULL
+  sc_cm<-rbind(annots, sc_cm)
+  
+  write.table(sc_cm, file = paste0(analysis_dir_use, "scRNAseq_reference.cm_Tumor.MyeloidProgram.TcellProgram_noCD8Inh.txt"), 
+            quote= FALSE, row.names = FALSE,col.names =FALSE, sep="\t")
+
+  
+
+
+
+
+```
+
+
+
+## Bulk data
+```{r}
+analysis_dir_use<- paste0(analysis_dir, "cibersort_input/")
+data_dir<- "/Users/jlabelle/Dropbox (Partners HealthCare)/FilbinLab/data_analysis/PublishedDatasets/BulkRNAseq/"
+
+## CBTN: HGG+DIPG, WT and K27M available
+tpm<- readRDS(paste0(data_dir, "CBTN/tpm_allSamples_processed.Rds"))
+tpm$GeneSymbol<- rownames(tpm)
+tpm<- tpm[,c(ncol(tpm), 1:(ncol(tpm)-1))]
+write.table(tpm, file = paste0(analysis_dir_use, "CBTN_cm.txt"), quote= FALSE, row.names = FALSE, sep="\t")
+
+## DFCI (HGG, Frank/Mimi)
+load(paste0(data_dir, "HGG_FrankMimi/HGGPed_tpm.Robj"))
+tpm<- HGGPed_tpm; rm(HGGPed_tpm)
+tpm$GeneSymbol<- rownames(tpm)
+tpm<- tpm[,c(ncol(tpm), 1:(ncol(tpm)-1))]
+write.table(tpm, file = paste0(analysis_dir_use, "DFCI_FM_cm.txt"), quote= FALSE, row.names = FALSE, sep="\t")
+
+## TCGA: IDHmut AYA
+load(paste0(data_dir, "TCGA/AllTCGACohorts_CountsFPKMTPM_TCGAIDs_SurvivalMatched.Robj"))
+tpm<- all_cm$tpm$idh1_YA_tpm; rm(all_cm)
+tpm$GeneSymbol<- rownames(tpm)
+tpm<- tpm[,c(ncol(tpm), 1:(ncol(tpm)-1))]
+write.table(tpm, file = paste0(analysis_dir_use, "TCGA_IDHmut.AYA_cm.txt"), quote= FALSE, row.names = FALSE, sep="\t")
+
+
+```
+

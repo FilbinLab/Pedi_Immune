@@ -1,0 +1,148 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+## Purpose:
+Use programs generated in single cell data (for both tcells and myeloid cells) to deconvolute bulk data and determine if there is any effect on survival, etc. Here, linear regression approach is used to deconvolute pseudobulk, then bulk data. The values generated here will be used to normalize deconvolution of programs. This is necessary because different samples have very different proportions of immune cells. The proportion of e.g., cytotoxic:Tcells is more informative than the proportion of cytotoxic T cells alone.
+
+## Approach:
+Generate linear regression model from pseudobulked single cell data- use to predict proportion of tumor, tcell, and myeloid based on marker gene expression.
+
+```{r}
+library(Seurat) 
+library(harmony)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/04b_DeconvoluteBulk/")
+
+analysis_dir<- paste0(working_dir, "/analysis/lmDeconvolute_validate/")
+figure_dir<- paste0(working_dir, "/figures/lmDeconvolute_validatee/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir,recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+```
+
+
+## Read in pseudobulked data + actual high level proportions + high level marker genes
+```{r}
+pseudo<- readRDS("analysis/pseudobulked_cm.Rds")
+highLevel_prop<- readRDS("analysis/highLevel_prop_bySample.Rds")
+all_markers<- readRDS("analysis/highLevel_markers.Rds")
+```
+
+## Settings
+```{r}
+train_prop<- 0.5
+nMarkers<- 25
+```
+
+## Process pseudobulked df
+```{r}
+## Scale pseudobulk df- should be TPM/CPM already
+head(colSums(pseudo))/1e06
+cm_list<- NormCenter(pseudo)
+pseudo_scale<- cm_list$center_data
+
+## split proportion df by program
+program_prop_split<- split(highLevel_prop, f=highLevel_prop$Program)
+names(program_prop_split)<- gsub("-", "_", names(program_prop_split))
+
+## Get mean expression of top markers for tcell, myeloid, and tumor 
+top_markers<- all_markers %>% group_by(cluster) %>% top_n(n=nMarkers, wt=avg_log2FC) %>% as.data.frame()
+program_score<- lapply(names(program_prop_split), function(x){
+  markers_use<- top_markers[top_markers$cluster ==x, "gene"]
+  pb_tmp<- as.data.frame(colMeans(pseudo_scale[markers_use,]))
+  colnames(pb_tmp)<- "meanScore"
+  return(pb_tmp)
+})
+names(program_score)<- names(program_prop_split)
+
+```
+
+## For each program, merge program proportions + scaled pseudobulk for marker genes (+ proportion of samples if needed)
+```{r}
+pp_merge<- lapply(names(program_prop_split), function(x){
+  program_prop<- program_prop_split[[x]]
+  rownames(program_prop)<- program_prop$Sample
+  
+  ## Merge program prop + top gene expression 
+  program_prop_pseudo<- merge(program_prop, program_score[[x]], by=0)
+  program_prop_pseudo<- program_prop_pseudo[,c("Sample", "perCells", "meanScore")] 
+  
+  return(program_prop_pseudo)
+  })
+names(pp_merge)<- names(program_prop_split)
+```
+
+## For each program split into training and testing
+```{r}
+tt_list<- lapply(pp_merge, function(x){
+  set.seed(2)
+  train_samples<-as.character(sample(x$Sample,length(x$Sample) * train_prop, replace = FALSE))
+  train<- x[x$Sample %in% train_samples,]
+  test<-x[!x$Sample %in% train$Sample,]
+  
+  ## Remove sample column- not needed
+  test$Sample<- NULL; train$Sample<- NULL
+  tt<- list(train=train, test=test)
+  return(tt)
+})
+```
+
+
+## Linear regression model- based on each gene
+```{r}
+## For each program, generate model from training data
+model_list<- lapply(tt_list, function(x){
+  train<- x$train
+  model<- lm(perCells  ~ meanScore, train)
+  return(model)
+})
+
+
+## For each program, predict program proportions for testing data
+test_predict_list<- lapply(names(tt_list), function(x){
+  test<- tt_list[[x]]$test
+  model<- model_list[[x]]
+  
+  ## Predict program proportions
+  test_predict<- predict(model, test)
+  test$predicted<- test_predict
+  return(test) })
+names(test_predict_list)<- names(tt_list)
+
+## Plot predicted vs actual
+all_plots<- lapply(names(test_predict_list), function(x){
+  test<- test_predict_list[[x]]
+  
+  ## R2 + pvalue for predictions
+  test_model<- summary(lm(perCells ~ predicted, test))
+  
+  ## Plot
+  ggplot(test, aes(x=perCells, y=predicted))+
+    geom_point()+
+    ggtitle(paste0(x, "\nR2 = ", round(test_model$r.squared, 2 ),
+                   ", pvalue = ", round(test_model$coefficients["predicted", "Pr(>|t|)"], 4)))+
+    geom_smooth(se=FALSE, method=lm, linetype="dashed", color="red", formula=y ~ x)+
+    theme_bw()+
+    xlab(paste0("Actual proportion of\n", x, " cells")) + 
+    ylab(paste0("Predicted proportion of\n ", x, " cells"))
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "Predicted.v.actual_", "train.", train_prop,"_nMarkers", nMarkers, ".png"), width=9, height=3)
+
+
+
+## Save models
+#saveRDS(model_list, file=paste0(analysis_dir, "models", output_name, ".Rds"))
+```

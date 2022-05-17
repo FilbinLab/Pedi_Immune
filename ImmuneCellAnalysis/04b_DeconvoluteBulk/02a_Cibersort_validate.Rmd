@@ -1,0 +1,305 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+## Purpose:
+Use programs generated in single cell data (for both tcells and myeloid cells) to deconvolute bulk data and determine if there is any effect on survival, etc. Here, cibersort results are validated using pseudobulk data for: 1) "high level" (tumor/myeloid/cd4/cd8) and 2) "program level" (tcell programs). Once validated, cibersort is applied to bulk data and deconvoluted in the same way.
+
+## Approach:
+Cibersort is run on https://cibersortx.stanford.edu/ and requires 2 inputs: count matrix for single cells annotated as cell type (high level or program level) and bulk data. To validate, pseudobulk data is used instead. Single cell data is used by cibersort to generate reference. These files are all generated in Preprocessing.Rmd and cibersort results are analysed here. Two validations using pseuodbulk data are performed:
+1. "high level"- does cibersort accurately predict proportion of cd4/cd8/myeloid/tcell in pseuodobulk data?
+2. "program level": 3 options:
+  1. use cibersort to predict tcell program proportions (split by cd4/cd8), then normalize these values by the predicted cd4/cd8 proportions. Do these normalized        proportions accurately predict tcell program proportion within pseudobulked samples that also contain myeloid and tumor cells? 
+  2. Use cibersort to predict tumor, myeloid program, and tcell program proportions, all at once. This method would not require normalization by "high level"            proportions
+  3. instead of using cibersort, just score pseuodobulked samples for expression of tcell program marker genes, then normalize with cd4/cd8 proportions. Do these        scores better correlate with actual tcell program proportions? Whichever method performs the best will be used downstream on actual bulk data.
+
+
+```{r}
+library(Seurat) 
+library(harmony)
+library(reshape2)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/04b_DeconvoluteBulk/")
+
+analysis_dir<- paste0(working_dir, "/analysis/cibersort_validate/")
+figure_dir<- paste0(working_dir, "/figures/cibersort_validate/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir,recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+```
+
+## Functions
+```{r}
+## Function to plot predicted cell proportion/score vs actual cell proportion
+## Df should be a dataframe where Program==celltype to split by, 
+## depColumn=dependent variable name (predicted), indColumn=independent variable name (actual)
+plot_predictVsActual<- function(df, indColumn="perCells", depColumn="NormScore", programColumn="Program"){
+  programs<- as.character(unique(df[[programColumn]]))
+  all_plots<- lapply(programs, function(x){
+    tmp<- df[df[[programColumn]]==x,]
+                  
+    ## Add ind/dep column
+    tmp$depColumn<- tmp[[depColumn]]
+    tmp$indColumn<- tmp[[indColumn]]
+    
+    ## pvalue and r2: linear regression
+    m<- summary(lm(indColumn ~ depColumn, tmp))
+    r2<- round(m$r.squared, 2)
+    pvalue<- formatC(m$coefficients["depColumn", "Pr(>|t|)"],format="e", digits=2)
+    
+    ## Plot, adding pvalue/r2 to title
+    ggplot(tmp, aes(x=indColumn, y=depColumn))+
+      geom_point()+
+      geom_smooth(method="lm", se=FALSE, color="black", linetype="dashed")+
+      theme_bw()+
+      theme(legend.position = "none",
+            axis.text = element_text(face="bold", color="black"),
+            axis.title = element_text(face="bold"))+
+      ylab(depColumn)+
+      xlab(indColumn)+
+      ggtitle(x, subtitle = paste0("R2: ", r2, ", pvalue: ", pvalue))
+  }) 
+  return(all_plots)
+}
+
+```
+
+## Load data
+```{r}
+## Read in actual high level proportions (used for validating cibersort method)
+highLevel_prop<- readRDS("analysis/highLevel_CD4.CD8_prop_bySample.Rds")
+tcell_prop<- readRDS("analysis/all_tcellProgram_byCD4.CD8_prop_bySample.Rds") ## Split by CD4/CD8, within all cells 
+tumor.tcell.myeloid_prop<- readRDS("analysis/all_tcellMyeloidProgramTumor_prop_bySample.Rds")
+
+## Cibersort results 
+cb_res_highLevel<- read.csv("data/CIBERSORTx_Results_Tumor.Myeloid.CD4.CD8.csv")
+cb_res_tcell<- read.csv("data/CIBERSORTx_Results_TcellPrograms_byCD4.CD8_noCD8Inh.csv")
+cb_res_tumor.myeloid.tcell<- read.csv("data/CIBERSORTx_Results_Tumor.MyeloidPrograms.TcellPrograms.csv")
+
+## Marker genes
+tcell_markers<- readRDS(paste0("../02a_Tcells/02_Ped.Adult/01_compare_NMF/analysis/newMarkers_deNovoPed.AdultTcell/", 
+                                 "new_markers_NMFrank", rank_use, "_bySeurat_sharedBy", sharedBy, "_reAnnot.Rds"))
+
+## Pseudobulked cm
+pb<- readRDS("analysis/pseudobulked_cm.Rds")
+```
+
+
+## "High level": Plot actual vs predicted proportions
+```{r}
+cb_res<- cb_res_highLevel
+
+## Reformat cibersort results
+cb_res$Sample<- cb_res$Mixture
+cb_res<- cb_res[,c("Sample", "Tumor", "Myeloid", "CD4", "CD8")]
+cb_melt<- melt(cb_res, id="Sample")
+colnames(cb_melt)<- c("Sample", "Program", "perCells_Cibersort")
+
+## Merge together
+highLevel_prop$NCells<- NULL
+colnames(highLevel_prop)<- c("Sample", "Program", "perCells_actual")
+cb_actual_prop<- merge(cb_melt, highLevel_prop, by=c("Sample", "Program"))
+
+## Plot
+ggplot(cb_actual_prop, aes(x=perCells_actual, y=perCells_Cibersort, color=Program))+
+  geom_point()+
+  facet_grid(cols=vars(Program))+
+  geom_smooth(method="lm", se=FALSE, color="black", linetype="dashed")+
+  theme_bw()+
+  theme(legend.position = "none",
+        axis.text = element_text(face="bold", color="black"),
+        axis.title = element_text(face="bold"))
+ggsave(paste0(figure_dir, "Actual.vs.CBpredicted_CD4.CD8.png"), width=8, height=3)
+```
+
+
+## Program-level deconvolution
+Three main options here:
+1) Use cibersort again to estimate proportion of Tcell programs. These will be over-estimated- divide by proportion of CD4/CD8 T cells to get true estimate
+2) Use cibersort to estimate proportion of tumor AND myeloid programs AND tcell programs. No normalization required
+3) Score for Tcell program genes, divide by cibersort proportion of CD4/CD8 to normalize
+
+Whichever more accurately predict the proportion of tcell programs within pseudobulked data will be used downstream for bulk data.
+
+## Option 1: cibersort again to predict t cell programs
+```{r}
+## Rename actual proportions to match cibersort (no ".")
+tcell_prop$Program<- gsub("\\.", "_", tcell_prop$Program)
+
+## Order cibersort and actual predictions the same way
+cb_res_tcell<- cb_res_tcell[order(cb_res_tcell$Mixture),]
+cb_res_highLevel<- cb_res_highLevel[order(cb_res_highLevel$Mixture),]
+sum(cb_res_tcell$Mixture != cb_res_highLevel$Mixture)
+
+## Normalize tcell program proportions by cd4/cd8
+cb_res_cd4<- cb_res_tcell[,grepl("CD4", colnames(cb_res_tcell))]*cb_res_highLevel$CD4
+cb_res_cd8<- cb_res_tcell[,grepl("CD8", colnames(cb_res_tcell))]*cb_res_highLevel$CD8
+cb_res_cd4$Sample<- cb_res_tcell$Mixture
+cb_res_cd8$Sample<- cb_res_tcell$Mixture
+
+## melt
+cb_cd4_melt<- melt(cb_res_cd4, id="Sample")
+colnames(cb_cd4_melt)<- c("Sample", "Program", "perCells_CiberSort")
+
+cb_cd8_melt<- melt(cb_res_cd8, id="Sample")
+colnames(cb_cd8_melt)<- c("Sample", "Program", "perCells_CiberSort")
+
+## Merge with actual
+actual_cb_cd4<- merge(cb_cd4_melt, 
+                      tcell_prop[grepl("CD4", tcell_prop$Program), c("Sample", "Program", "perCells")], 
+                      by=c("Sample", "Program"))
+
+actual_cb_cd8<- merge(cb_cd8_melt, 
+                      tcell_prop[grepl("CD8", tcell_prop$Program), c("Sample", "Program", "perCells")], 
+                      by=c("Sample", "Program"))
+
+## Plot
+  ## CD4
+  all_plots<- plot_predictVsActual(df=actual_cb_cd4,indColumn ="perCells",  depColumn = "perCells_CiberSort")
+  cowplot::plot_grid(plotlist=all_plots)
+  ggsave(paste0(figure_dir, "CD4programs_cibersortNorm.vs.Actual.png"), width=9, height=9)
+
+  ## CD8
+  all_plots<- plot_predictVsActual(df=actual_cb_cd8,indColumn ="perCells",  depColumn = "perCells_CiberSort")
+  cowplot::plot_grid(plotlist=all_plots)
+  ggsave(paste0(figure_dir, "CD8programs_cibersortNorm.vs.Actual.png"), width=9, height=9)
+
+```
+
+## Option 2: use cibersort to predict tumor/myeloid program/tcell program proportions directly
+```{r}
+## Reformat actual proportion program names
+tumor.tcell.myeloid_prop$Program<- gsub("\\.", "_", tumor.tcell.myeloid_prop$Program)
+
+## Melt cibersort results
+cb_res_melt<- melt(cb_res_tumor.myeloid.tcell[,!colnames(cb_res_tumor.myeloid.tcell) %in% c("P.value", "Correlation", "RMSE")], 
+                   id="Mixture")
+colnames(cb_res_melt)<- c("Sample", "Program", "perCells_Cibersort")
+
+## Merge together
+cb_actual_prop<- merge(cb_res_melt, tumor.tcell.myeloid_prop, by=c("Sample", "Program"))
+
+## Plot
+all_plots<- plot_predictVsActual(df=cb_actual_prop,indColumn ="perCells",  depColumn = "perCells_Cibersort")
+cowplot::plot_grid(plotlist=all_plots)
+ggsave(paste0(figure_dir, "Tumor.MyeloidPrograms.TcellPrograms_cibersort.vs.actual.png"), width=15, height=15)
+```
+
+
+## Option 3: score pseudobulked for tcell program genes directly, then normalize with cd4/cd8 proportions from Cibersort
+```{r}
+## Normalize and center pb
+cm_list<- NormCenter(pb)
+pb_center<- cm_list$center_data
+pb_mean<- rowMeans(log2(pb + 1))
+
+## reformat markers- top 50 as list
+top_markers<-  tcell_markers %>% group_by(cluster) %>% top_n(n=50, wt=avg_log2FC) %>% as.data.frame()
+markers_list<- split(top_markers, f=top_markers$cluster)
+markers_list<- lapply(markers_list, function(x){x$gene})
+
+## Split markers into 3 groups: cd4-specific, cd8-specific, and shared
+cd8_markers<- markers_list[c("Cytotoxic", "Predysfunctional")]
+cd4_markers<- markers_list[c("Treg", "Inhibitory")]
+shared_markers<- markers_list[!names(markers_list) %in% c("Cytotoxic", "Predysfunctional","Treg", "Inhibitory")]
+
+## Score for tcell programs
+cd8_scores<- as.data.frame(t(scoreNmfGenes(pb_center, pb_mean, cd8_markers)))
+cd4_scores<- as.data.frame(t(scoreNmfGenes(pb_center, pb_mean, cd4_markers)))
+shared_scores<- as.data.frame(t(scoreNmfGenes(pb_center, pb_mean, shared_markers)))
+
+## Normalize by % of cd8, cd4, or cd8 + cd4 (i.e., Tcell %)
+  ## CD8
+  cd8_scores<- cd8_scores[order(rownames(cd8_scores)),]
+  sum(rownames(cd8_scores) != cb_res_highLevel$Mixture)
+  cd8_norm<- cd8_scores * cb_res_highLevel$CD8
+  
+  ## CD4
+  cd4_scores<- cd4_scores[order(rownames(cd4_scores)),]
+  sum(rownames(cd4_scores) != cb_res_highLevel$Mixture)
+  cd4_norm<- cd4_scores * cb_res_highLevel$CD4
+  
+  ## Shared (all Tcells)
+  shared_scores<- shared_scores[order(rownames(shared_scores)),]
+  sum(rownames(shared_scores) != cb_res_highLevel$Mixture)
+  shared_norm<- shared_scores * (cb_res_highLevel$CD4 + cb_res_highLevel$CD8)
+ 
+## Reformat scores
+  ## CD8
+  cd8_scores$Sample<- rownames(cd8_scores)
+  cd8_melt<- melt(cd8_scores, id="Sample")
+  colnames(cd8_melt)<- c("Sample", "Program", "NormScore")
+  
+  ## CD4
+  cd4_scores$Sample<- rownames(cd4_scores)
+  cd4_melt<- melt(cd4_scores, id="Sample")
+  colnames(cd4_melt)<- c("Sample", "Program", "NormScore")
+  
+  ## Shared
+  shared_scores$Sample<- rownames(shared_scores)
+  shared_melt<- melt(shared_scores, id="Sample")
+  colnames(shared_melt)<- c("Sample", "Program", "NormScore")
+  
+## Reformat tcell proportions- remove cd4/cd8 distinction, add together proportions for shared programs
+tcell_prop_new<- tcell_prop
+tcell_prop_new$Program<- gsub("CD8.", "", gsub("CD4.", "", gsub("_", "\\.", tcell_prop_new$Program)))
+tcell_prop_new<- tcell_prop_new %>% group_by(Sample, Program) %>% summarise(perCells=sum(perCells)) %>% as.data.frame()
+    
+## Merge normalized scores and actual proportion of cell types
+  ## CD8
+  actual_score_cd8<- merge(cd8_melt, 
+                      tcell_prop_new[tcell_prop_new$Program %in% unique(cd8_melt$Program), 
+                                     c("Sample", "Program", "perCells")], 
+                      by=c("Sample", "Program"))
+  
+  ## CD4
+  actual_score_cd4<- merge(cd4_melt, 
+                      tcell_prop_new[tcell_prop_new$Program %in% unique(cd4_melt$Program), 
+                                     c("Sample", "Program", "perCells")], 
+                      by=c("Sample", "Program"))
+  
+  ## Shared
+  actual_score_shared<- merge(shared_melt, 
+                      tcell_prop_new[tcell_prop_new$Program %in% unique(shared_melt$Program), 
+                                     c("Sample", "Program", "perCells")], 
+                      by=c("Sample", "Program"))
+  
+## Plot
+  ## CD8
+  all_plots<- plot_predictVsActual(df=actual_score_cd8,indColumn ="perCells",  depColumn = "NormScore")
+  cowplot::plot_grid(plotlist=all_plots)
+  ggsave(paste0(figure_dir, "CD8programs_ScoreCibersortNorm.vs.Actual.png"), width=6, height=3)
+
+  ## CD4
+  all_plots<- plot_predictVsActual(df=actual_score_cd4,indColumn ="perCells",  depColumn = "NormScore")
+  cowplot::plot_grid(plotlist=all_plots)
+  ggsave(paste0(figure_dir, "CD4programs_ScoreCibersortNorm.vs.Actual.png"), width=6, height=3)
+  
+  ## Shared
+  all_plots<- plot_predictVsActual(df=actual_score_shared,indColumn ="perCells",  depColumn = "NormScore")
+  cowplot::plot_grid(plotlist=all_plots)
+  ggsave(paste0(figure_dir, "SharedPrograms_ScoreCibersortNorm.vs.Actual.png"), width=9, height=6)
+  
+  
+
+  
+  
+  
+
+```
+## Results:
+Option 1 (using cibersort to predict tcell prop) outperforms scoring. This method will be used to deconvolute bulk data
+
+
+## Confirm that option 1 works with myeloid programs, too
