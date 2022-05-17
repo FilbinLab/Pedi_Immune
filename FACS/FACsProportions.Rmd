@@ -1,0 +1,148 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+```{r}
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/FACS/")
+
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(nmf_helper)
+
+
+figure_dir<- paste0(working_dir, "/figures/FACs/")
+if(!dir.exists(figure_dir)){dir.create(figure_dir)}
+
+analysis_dir<- paste0(working_dir, "/analysis/FACs/")
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir)}
+```
+
+## Read in FACs data
+```{r}
+facs_df<- read.csv("FACsPercentages.csv")
+colnames(facs_df)<- c("Sample", "CD3", "CD45", "TumorCells", "Total")
+```
+
+## Preprocess: 
+```{r}
+## calculate myeloid cell percentage (CD45-CD3)
+facs_df$Myeloid<- facs_df$CD45-facs_df$CD3
+
+## remove NA rows
+facs_remove<- apply(facs_df, 1, function(x){sum(is.na(x))>1})
+facs_df<- facs_df[!facs_remove,]
+
+
+## Remove any samples that don't add up to 1- something wrong with FACs data collection
+facs_df<- facs_df[facs_df$Total>=0.99,]
+
+## add subtype info
+subtypes<- read.csv("Subtypes.csv")
+facs_df$Subtype<- plyr::mapvalues(facs_df$Sample, subtypes$sample, subtypes$MySubtypes)
+
+## Clean up subtype
+facs_df$Subtype<- gsub("hemiBCOR", "BCOR", 
+                       gsub("hemiG34R","Hemi_H3G34R",
+                            gsub("midlineHistoneWT", "Midline_HistoneWT",
+                                 gsub("midlineK27M", "Midline_H3K27M", 
+                                      gsub("hemiHistoneWT", "Hemispheric_HistoneWT", facs_df$Subtype)))))
+
+```
+
+## Plot proportions by subtype- myeloid vs tcell
+```{r}
+## Subset to columns of interest
+facs_subset<- facs_df[,c("Sample", "CD3", "Myeloid", "Subtype")]
+colnames(facs_subset)<- c("Sample", "TCell", "Myeloid", "Subtype")
+
+## melt df
+facs_melt<- melt(facs_subset, id=c("Sample", "Subtype"))
+colnames(facs_melt)<- c("Sample", "Subtype", "CellType", "CellPercentage")
+
+## Convert immune cell percentage so that it adds up to 1
+facs_melt<- facs_melt %>% group_by(Sample) %>% 
+  mutate(ImmuneCellProportion=CellPercentage/sum(CellPercentage))%>%
+  mutate(testTotal=sum(ImmuneCellProportion)) %>%
+  as.data.frame()
+
+facs_melt$Subtype<- gsub("_", "\n", facs_melt$Subtype)
+
+## add column for ordering
+tcells<- facs_melt[facs_melt$CellType=="TCell",]; tcells<- tcells[order(tcells$ImmuneCellProportion),]
+tcells$order<- 1:nrow(tcells)
+facs_melt$Order<- plyr::mapvalues(facs_melt$Sample, tcells$Sample, tcells$order)
+facs_melt$Order<- as.integer(facs_melt$Order)
+
+## plot
+ggplot(facs_melt, aes(x=reorder(Sample, Order), y=ImmuneCellProportion, fill=CellType))+
+  geom_bar(position="stack", stat="identity")+
+  facet_grid(cols=vars(Subtype), scale="free_x", space="free_x")+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle=45, hjust=1, face="bold", color="black"),
+        axis.text.y = element_text(face="bold", color="black"),
+        strip.text.x = element_text(face="bold", color="black"),
+        axis.title.y =  element_text(face="bold", color="black", size=12))+
+  xlab("")+
+  scale_fill_manual(values=c(TCell="red", Myeloid="blue"))
+#ggsave(paste0(figure_dir, "ImmuneCellFACsPercentage.png"), width=9, height=4)
+```
+
+## Test if differences are sig with anova
+```{r}
+cp_prop<- facs_melt
+
+tcell_prob<- cp_prop[cp_prop$CellType=="TCell",]
+aov_model<- aov(ImmuneCellProportion ~ Subtype, data=tcell_prob)
+summary(aov_model)
+
+## not significant
+```
+
+
+## Plot proportions by subtype- myeloid vs tcell vs tumor
+```{r}
+## Subset to columns of interest
+facs_subset<- facs_df[,c("Sample", "CD3", "Myeloid", "Subtype", "TumorCells")]
+colnames(facs_subset)<- c("Sample", "TCell", "Myeloid", "Subtype", "TumorCells")
+
+## melt df
+facs_melt<- melt(facs_subset, id=c("Sample", "Subtype"))
+colnames(facs_melt)<- c("Sample", "Subtype", "CellType", "CellPercentage")
+
+## Convert immune cell percentage so that it adds up to 1
+facs_melt<- facs_melt %>% group_by(Sample) %>% 
+  mutate(ImmuneCellProportion=CellPercentage/sum(CellPercentage))%>%
+  mutate(testTotal=sum(ImmuneCellProportion)) %>%
+  as.data.frame()
+
+facs_melt$Subtype<- gsub("_", "\n", facs_melt$Subtype)
+
+## add column for ordering
+tumor<- facs_melt[facs_melt$CellType=="TumorCells",]; tumor<- tumor[order(tumor$ImmuneCellProportion),]
+tumor$order<- 1:nrow(tumor)
+facs_melt$Order<- plyr::mapvalues(facs_melt$Sample, tumor$Sample, tumor$order)
+facs_melt$Order<- as.integer(facs_melt$Order)
+
+## order cell type
+facs_melt$CellType<- factor(facs_melt$CellType, levels=c(  "TCell","Myeloid","TumorCells"))
+
+## plot
+ggplot(facs_melt, aes(x=reorder(Sample, Order), y=ImmuneCellProportion, fill=CellType))+
+  geom_bar(position="stack", stat="identity")+
+  facet_grid(cols=vars(Subtype), scale="free_x", space="free_x")+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle=45, hjust=1, face="bold", color="black"),
+        axis.text.y = element_text(face="bold", color="black"),
+        strip.text.x = element_text(face="bold", color="black"),
+        axis.title.y =  element_text(face="bold", color="black", size=12))+
+  xlab("")+ylab("Cell Proportion")+
+  scale_fill_manual(values=c(TCell="red", Myeloid="blue", TumorCells="olivedrab"))
+ggsave(paste0(figure_dir, "ImmuneCellFACsPercentage_Tumor.Myeloid.Tcell.png"), width=9, height=4)
+```

@@ -1,0 +1,200 @@
+---
+title: "5Samples_ProcessToSeurat.Rmd"
+author: "Jenna LaBelle"
+date: "11/04/21"
+output: html_document
+---
+
+```{r}
+library(Seurat) 
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/Immune/PTGER2_Sort/")
+
+analysis_dir<- paste0(working_dir, "/analysis/GOI/")
+figure_dir<- paste0(working_dir, "/figures/GOI/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir)};if(!dir.exists(analysis_dir)){dir.create(analysis_dir)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(nmf_helper)
+
+## Read in housekeeping genes
+marker_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Marker_genes/")
+hkgenes <- read.table(paste0(marker_dir, "tirosh_house_keeping.txt"), skip = 2)
+hkgenes <- as.vector(hkgenes$V1)
+```
+
+## Read in seurat
+```{r}
+seurat_obj<- readRDS("analysis/gcdata_filtered.Rds")
+
+```
+
+
+## Identify and remove any myeloid cells
+```{r}
+FeaturePlot(seurat_obj, features=c("CD4", "CD8A", "CD3G", 
+                                   "GFAP", 
+                                   "CSF1R","CD74", "CX3CR1", 
+                                   "STMN1", "STMN2"), ncol= 3)
+ggsave(paste0(figure_dir, "Myeloid_Tcell_markers.png"), width=9, height=9)
+
+## cluster 2 is tcell, cluster 1/4 is myeloid, cluster 3 is neurons
+
+
+## Marker genes- to help identify cluster 3
+all_markers<- FindAllMarkers(seurat_obj, min.pct = 0.2)
+all_filtered<- all_markers[all_markers$p_val_adj<0.05 & all_markers$avg_log2FC>0.2,]
+cluster3<- all_filtered[all_filtered$cluster==3,]
+cluster3<- cluster3[order(cluster3$avg_log2FC, decreasing = TRUE),]
+write.csv(cluster3, file=paste0(analysis_dir, "allCells_cluster3_markers.csv"))
+
+## Annotate cells
+seurat_obj$broad_annot<- ifelse(seurat_obj$seurat_clusters %in% c(1,4), "Myeloid",
+                                ifelse(seurat_obj$seurat_clusters == 2, "Tcell", "Neuron"))
+DimPlot(seurat_obj, group.by = "broad_annot", label=TRUE) +NoLegend()
+ggsave(paste0(figure_dir, "Broad_annot.png"), width=6, height=6)
+
+## Cd45 expression? for neurons especially
+FeaturePlot(seurat_obj, features=c("PTPRC"))+VlnPlot(seurat_obj, group.by = "broad_annot", features="PTPRC")
+ggsave(paste0(figure_dir, "CD45_AllCells.png"), width=5, height=8)
+
+## Subset to tcells, rerun pipeline
+tcell_seurat<- subset(seurat_obj, broad_annot=="Tcell")
+tcell_meta<- tcell_seurat@meta.data
+tcell_seurat<-RunFullSeurat_Immune(tcell_seurat@assays$RNA@counts, tcell_seurat$sampleid)
+tcell_seurat<- AddMetaData(tcell_seurat, tcell_meta[,!colnames(tcell_meta) %in%
+                                                      colnames(tcell_seurat@meta.data)])
+p1<-DimPlot(tcell_seurat)
+p2<- FeaturePlot(tcell_seurat, features=c("CD3G", "CD4", "CD8A"))
+p1+p2
+#ggsave(paste0(figure_dir, "Tcell_CD4.CD8.png"), width=9, height=6)
+
+## Subset to myeloid, rerun pipeline
+myeloid_seurat<- subset(seurat_obj, broad_annot=="Myeloid")
+myeloid_meta<- myeloid_seurat@meta.data
+myeloid_seurat<-RunFullSeurat_Immune(myeloid_seurat@assays$RNA@counts, myeloid_seurat$sampleid)
+myeloid_seurat<- AddMetaData(myeloid_seurat, myeloid_meta[,!colnames(myeloid_meta) %in%
+                                                      colnames(myeloid_seurat@meta.data)])
+
+## Subset to neurons, rerun pipeline
+neuron_seurat<- subset(seurat_obj, broad_annot=="Neuron")
+neuron_meta<- neuron_seurat@meta.data
+neuron_seurat<-RunFullSeurat_Immune(neuron_seurat@assays$RNA@counts, neuron_seurat$sampleid)
+neuron_seurat<- AddMetaData(neuron_seurat, neuron_meta[,!colnames(neuron_meta) %in%
+                                                      colnames(neuron_seurat@meta.data)])
+
+
+saveRDS(seurat_obj, file="analysis/gcdata_filtered.Rds")
+saveRDS(tcell_seurat, file="analysis/tcell_seurat.Rds")
+saveRDS(myeloid_seurat, file="analysis/myeloid_seurat.Rds")
+saveRDS(neuron_seurat, file="analysis/neuron_seurat.Rds")
+```
+
+## Marker genes for each broad annotation
+```{r}
+seurat_obj<-SetIdent(seurat_obj, value=seurat_obj$broad_annot)
+all_markers<- FindAllMarkers(seurat_obj, min.pct = 0.2)
+all_markers_filtered<- all_markers[all_markers$p_val_adj<0.05 & all_markers$avg_log2FC>.5,]
+write.csv(all_markers_filtered, file=paste0(analysis_dir, "filtered_markers_Tcell.Myeloid.Neuron.csv"))
+```
+
+## Breakdown of sample by major cell type
+```{r}
+df<-as.data.frame(table(seurat_obj$broad_annot, seurat_obj$sampleid))
+colnames(df)<- c("CellType", "Sample", "Ncells")
+ggplot(df, aes(x=Sample, y=Ncells, fill=CellType))+
+  geom_bar(stat="identity", position="stack")
+ggsave(paste0(figure_dir, "Sample_ByCellType.png"), width=4, height=4)
+```
+
+## PTGER2 expression across all Tcells
+```{r}
+p1<- VlnPlot(tcell_seurat, group.by = "sampleid", features="PTGER2")
+p2<- FeaturePlot(tcell_seurat, features="PTGER2")
+p1+p2
+ggsave(paste0(figure_dir, "PTGER2_Tcells.png"), width=6, height=12)
+```
+## PTGER2 expression by PTGER2 sort
+```{r}
+VlnPlot(tcell_seurat, features="PTGER2", group.by = "PTGER2_sort")
+```
+## PTGER2 expression in all cells, by broad annotation
+```{r}
+VlnPlot(seurat_obj, features="PTGER2", group.by = "PTGER2_sort")
+seurat_obj$annot_ptger2<- paste0(seurat_obj$broad_annot, "_", seurat_obj$PTGER2_sort)
+
+## Add on n cells per group
+nCells<- table(seurat_obj$annot_ptger2)
+seurat_obj$annot_ptger2<- paste0(seurat_obj$annot_ptger2, "\nn=",
+                                 plyr::mapvalues(seurat_obj$annot_ptger2, names(nCells), nCells))
+VlnPlot(seurat_obj, features="PTGER2", group.by = "annot_ptger2")+NoLegend()
+ggsave(paste0(figure_dir, "PTGER2_allImmune_BySort.png"), width=4, height=3)
+
+DotPlot(seurat_obj, features="PTGER2", group.by = "annot_ptger2")
+ggsave(paste0(figure_dir, "DotPlot_PTGER2_allImmune_BySort.png"), width=4, height=4)
+
+## Plot all PTGER2 receptors
+DotPlot(seurat_obj, features=c("PTGER2", "PTGER1", "PTGER3", "PTGER4"), group.by = "annot_ptger2")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))+
+  ylab("")+xlab("")
+ggsave(paste0(figure_dir, "DotPlot_PTGER1-4_allImmune_BySort.png"), width=5, height=5)
+
+
+```
+
+## Myeloid cells: cluster annotation
+```{r}
+myeloid_seurat$merged_clusters<- gsub(2, 1, myeloid_seurat$seurat_clusters)
+myeloid_seurat<- SetIdent(myeloid_seurat, value=myeloid_seurat$merged_clusters)
+myeloid_markers<-FindAllMarkers(myeloid_seurat)
+myeloid_markers_filt<- myeloid_markers[myeloid_markers$p_val_adj<0.05 & myeloid_markers$avg_log2FC>0,]
+write.csv(myeloid_markers_filt, file=paste0(analysis_dir, "Myeloid_markers_seurat.clusters.csv"))
+
+## marker gene expression
+FeaturePlot(myeloid_seurat, features=c("CD14", "FCGR3A", "CD68", "CD64", "CD71", "CCR5"))
+```
+
+## Identify cd4/cd8 t cells
+```{r}
+cd8.cd4_expr<- as.data.frame(t(tcell_seurat@assays$RNA@counts[c("CD4", "CD8A"),]))
+cd8_cells<- cd8.cd4_expr[cd8.cd4_expr$CD8A > cd8.cd4_expr$CD4,]
+cd4_cells<- cd8.cd4_expr[cd8.cd4_expr$CD4 > cd8.cd4_expr$CD8A,]
+tcell_seurat$CD4.CD8<- ifelse(colnames(tcell_seurat) %in% rownames(cd4_cells), "CD4",
+                              ifelse(colnames(tcell_seurat) %in% rownames(cd8_cells), "CD8",
+                                     "Unclear"))
+```
+
+## PTGER2 expression in T cells
+```{r}
+p1<-VlnPlot(tcell_seurat, group.by = "CD4.CD8", features="PTGER2")
+ggsave(paste0(figure_dir, "PTGER2_Tcells_CD4.CD8.png"), width=6, height=6)
+```
+
+## DEGs between +/- PTGER2 cells: myeloid, t cell
+```{r}
+## Myeloid
+myeloid_seurat<- SetIdent(myeloid_seurat, value=myeloid_seurat$PTGER2_sort)
+myeloid_PTGER2_DEGs<- FindAllMarkers(myeloid_seurat )
+myeloid_PTGER2_DEGs_filt<-myeloid_PTGER2_DEGs[myeloid_PTGER2_DEGs$p_val_adj<0.1,] ## GZMM is up in PTGER2 negative
+
+## T cell
+tcell_seurat<- SetIdent(tcell_seurat, value=tcell_seurat$PTGER2_sort)
+tcell_PTGER2_DEGs<- FindAllMarkers(tcell_seurat )
+tcell_PTGER2_DEGs_filt<-tcell_PTGER2_DEGs[tcell_PTGER2_DEGs$p_val_adj<0.1 & 
+                                            tcell_PTGER2_DEGs$avg_log2FC>0,] ## CMAS, KDM4A, and PEX1 are up in pos
+```
+
+## Export annotation + location + cell ID dataframe for Rebecaa
+```{r}
+df<- seurat_obj@meta.data[,c("broad_annot", "sampleid", "PTGER2_sort")]
+df$location<- gsub(".*CD3pos.", "", rownames(df))
+write.csv(df, file=paste0(analysis_dir, "allCells_Annotation.PlateLocation.PTGER2sort.csv"))
+```
+
