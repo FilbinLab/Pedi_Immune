@@ -1,0 +1,14 @@
+.DS_Store
+**/analysis/*
+**/figures/*
+**/reference/*
+**/data/*
+**/resources/*
+**/int/*
+**/cisTarget_databases/*
+**/ARCHIVE/*
+.Rhistory
+.Rapp.history
+**/notUploaded/*
+
+.Rproj.user
