@@ -1,0 +1,204 @@
+---
+title: "Slingshot"
+output: html_document
+---
+
+## Purpose:
+Use Slingshot for pseudotime analysis to try to determine whether there is any trajectory within T cells, particularly for cytotoxic/dysfunctional
+
+
+## Approach:
+Run Slingshot on all programs to start, consider removing programs that don't contribute
+
+
+```{r}
+library(Seurat) 
+library(monocle)
+library(dplyr)
+library(plyr)
+
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/02a_Tcells/02_Ped.Adult/", 
+                     "04a_Trajectory/")
+
+analysis_dir_tmp<- paste0(working_dir, "/analysis/Monocle/")
+figure_dir_tmp<- paste0(working_dir, "/figures/Monocle/")
+
+if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp,recursive = TRUE)}
+if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+
+```
+
+## Read in ped tcell seurat object. Contains NMF assignments (annots added in deNovoPedTcell.v.deNovoAdultTcell, based on correlation with adult T cell + correlation with ped cd4/cd8 programs)
+```{r}
+rank_use<-8
+sharedBy<- "union" 
+data_dir<- paste0("../02_detailed_annot/analysis/identifyCD4.CD8_byNMF/", "rank",rank_use, "_sharedBy", sharedBy, "/" )
+
+## figure/analysis dir based on rank + how shared programs are merged
+figure_dir<- paste0(figure_dir_tmp, "rank", rank_use, "_sharedBy", sharedBy, "/")
+analysis_dir<- paste0(analysis_dir_tmp, "rank", rank_use, "_sharedBy", sharedBy, "/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir,recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+  
+## ped/adult tcell seurat objects
+#cd4_seurat<- readRDS(paste0(data_dir, "ped.adult_seurat_cd4_harmony.Rds"))
+cd8_seurat<-readRDS(paste0(data_dir, "ped.adult_seurat_cd8_harmony.Rds"))
+
+## Read in colors to use
+program_colors<- readRDS(paste0("../../../plot_colors/Tcell.programs_rank", rank_use, "sharedBy", sharedBy, "_reAnnot.Rds"))
+
+variable_name<- paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
+cd8_seurat$CellAnnot<- cd8_seurat@meta.data[[variable_name]]
+
+```
+
+```{r}
+cd8_seurat<- subset(cd8_seurat, CellAnnot !=  c("Inhibitory"))
+```
+
+
+
+```{r}
+## Create CellDataSet object
+pd<-new("AnnotatedDataFrame", data = cd8_seurat@meta.data)
+fd<- as.data.frame(rownames(cd8_seurat))
+colnames(fd)<-c("gene_short_name")
+rownames(fd)<- fd$gene_short_name
+fd <- new("AnnotatedDataFrame", data =fd)
+
+HSMM <- newCellDataSet(cd8_seurat@assays$RNA@counts,
+                phenoData = pd,
+                featureData = fd,
+                lowerDetectionLimit = 0.1,
+                expressionFamily = tobit(Lower = 0.1))
+
+## Converting TPM/FPKM values into mRNA counts
+rpc_matrix <- relative2abs(HSMM, method = "num_genes")
+HSMM <- newCellDataSet(as(as.matrix(rpc_matrix), "sparseMatrix"),
+                phenoData = pd,
+                featureData = fd,
+                lowerDetectionLimit = 0.5,
+                expressionFamily = negbinomial.size())
+
+## Estimate size factors and dispersions
+HSMM <- estimateSizeFactors(HSMM)
+HSMM <- estimateDispersions(HSMM)
+
+## Determine expressed genes
+HSMM <- detectGenes(HSMM, min_expr = 0.1)
+expressed_genes <- row.names(subset(fData(HSMM),
+    num_cells_expressed >= 10))
+
+## Remove low recovery cells and potential doublets
+pData(HSMM)$Total_mRNAs <- Matrix::colSums(exprs(HSMM))
+
+HSMM <- HSMM[,pData(HSMM)$Total_mRNAs < 1e6]
+
+upper_bound <- 10^(mean(log10(pData(HSMM)$Total_mRNAs)) +
+            2*sd(log10(pData(HSMM)$Total_mRNAs)))
+lower_bound <- 10^(mean(log10(pData(HSMM)$Total_mRNAs)) -
+            2*sd(log10(pData(HSMM)$Total_mRNAs)))
+
+qplot(Total_mRNAs, data = pData(HSMM), color = CellAnnot, geom =
+"density") +
+geom_vline(xintercept = lower_bound) +
+geom_vline(xintercept = upper_bound)
+HSMM <- HSMM[,pData(HSMM)$Total_mRNAs > lower_bound &
+      pData(HSMM)$Total_mRNAs < upper_bound]
+HSMM <- detectGenes(HSMM, min_expr = 0.1)
+
+  ## Confirm filtering looks good- expect roughly lognormal distribution
+    # Log-transform each value in the expression matrix.
+    L <- log(exprs(HSMM[expressed_genes,]))
+    
+    # Standardize each gene, so that they are all on the same scale,
+    # Then melt the data with plyr so we can plot it easily
+    melted_dens_df <- melt(Matrix::t(scale(Matrix::t(L))))
+    
+    # Plot the distribution of the standardized gene expression values.
+    qplot(value, geom = "density", data = melted_dens_df) +
+    stat_function(fun = dnorm, size = 0.5, color = 'red') +
+    xlab("Standardized log(FPKM)") +
+    ylab("Density")
+    
+    
+    
+## Reduce Dims --> tsne (not necessary for monocle, just used for quick vis)
+HSMM <- reduceDimension(HSMM, max_components = 2, num_dim = 6,
+                reduction_method = 'tSNE', verbose = T)
+HSMM <- clusterCells(HSMM, num_clusters = 2)
+plot_cell_clusters(HSMM, 1, 2, color = "CellAnnot")
+
+
+## Trajectory step 1: choose genes that define a cell's progress
+  ## Select superset of feature genes as genes expressed in at least 5% of all the cells
+  HSMM <- detectGenes(HSMM, min_expr = 0.1)
+  fData(HSMM)$use_for_ordering <-
+      fData(HSMM)$num_cells_expressed > 0.05 * ncol(HSMM)
+  
+  ## Perform PCA to determine which PCs to use
+  plot_pc_variance_explained(HSMM, return_all = F)
+  
+  ## Run Tsne on those top PCs
+  HSMM <- reduceDimension(HSMM,
+                              max_components = 2,
+                              norm_method = 'log',
+                              num_dim = 4,
+                              reduction_method = 'tSNE',
+                              verbose = T)
+  
+  ## Use to help decide on cell cluster threshold
+  plot_rho_delta(HSMM, rho_threshold = 2, delta_threshold = 4 )
+  
+  ## Identify clusters using densityPeak algorithm
+  HSMM <- clusterCells(HSMM,
+                 rho_threshold = 2,
+                 delta_threshold = 15,## lower = more clusters
+                 skip_rho_sigma = T, ## may have to set this to true when clustering isn't already run
+                 verbose = F)
+  plot_cell_clusters(HSMM, color_by = 'as.factor(Cluster)')
+  plot_cell_clusters(HSMM, color_by = 'as.factor(CellAnnot)')
+  
+  
+## Perform DE
+clustering_DEG_genes <-differentialGeneTest(HSMM[expressed_genes,],
+                                            fullModelFormulaStr = '~Cluster',
+                                            cores = 1)
+
+## Select top sig genes as the ordering genes
+HSMM_ordering_genes <-row.names(clustering_DEG_genes)[order(clustering_DEG_genes$qval)][1:1000]
+
+HSMM <-setOrderingFilter(HSMM,ordering_genes = HSMM_ordering_genes)
+
+## Trajectory step 2: reduce data dimensionality
+HSMM <-reduceDimension(HSMM, method = 'DDRTree')
+
+## Trajectory step 3: order cells along the trajectory
+HSMM <-orderCells(HSMM)
+
+  ## visualize the trajectory in the reduced dimensional space.
+  plot_cell_trajectory(HSMM, color_by = "CellAnnot")
+  ggsave(paste0(figure_dir, "trajectory_byCellAnnot_allPrograms.png"), width=6, height=6)
+  plot_cell_trajectory(HSMM, color_by = "State")
+  plot_cell_trajectory(HSMM, color_by = "Pseudotime")
+  
+  plot_cell_trajectory(HSMM, color_by = "State") +
+    facet_wrap(~State, nrow = 1)
+  
+  plot_genes_jitter(HSMM[c("GNLY", "PDCD1", "GZMK", "TIGIT"),],
+    grouping = "State",
+    min_expr = 0.1)
+  
+  
+  saveRDS(HSMM, file=paste0(analysis_dir, "monocle_obj_allPrograms.Rds"))
+```
+

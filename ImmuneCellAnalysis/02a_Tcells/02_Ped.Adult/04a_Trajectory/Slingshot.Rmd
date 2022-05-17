@@ -1,0 +1,218 @@
+---
+title: "Slingshot"
+output: html_document
+---
+
+## Purpose:
+Use Slingshot for pseudotime analysis to try to determine whether there is any trajectory within T cells, particularly for cytotoxic/dysfunctional
+
+
+## Approach:
+Run Slingshot on all programs to start, consider removing programs that don't contribute
+
+
+```{r}
+library(Seurat) 
+library(slingshot)
+library(BUSpaRse)
+library(tidyverse)
+library(tidymodels)
+library(scales)
+library(viridis)
+library(Matrix)
+library(uwot)
+library(mclust, quietly = TRUE)
+library(grDevices)
+library(tradeSeq)
+
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/02a_Tcells/02_Ped.Adult/", 
+                     "04_Trajectory/")
+
+analysis_dir_tmp<- paste0(working_dir, "/analysis/Slingshot/")
+figure_dir_tmp<- paste0(working_dir, "/figures/Slingshot/")
+
+if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp,recursive = TRUE)}
+if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+
+```
+
+```{r}
+## Function for color palette
+cell_pal <- function(cell_vars, pal_fun,...) {
+  if (is.numeric(cell_vars)) {
+    pal <- pal_fun(100, ...)
+    return(pal[cut(cell_vars, breaks = 100)])
+  } else {
+    categories <- sort(unique(cell_vars))
+    pal <- setNames(pal_fun(length(categories), ...), categories)
+    return(pal[cell_vars])
+  }
+}
+```
+
+## Read in ped tcell seurat object. Contains NMF assignments (annots added in deNovoPedTcell.v.deNovoAdultTcell, based on correlation with adult T cell + correlation with ped cd4/cd8 programs)
+```{r}
+rank_use<-8
+sharedBy<- "union" 
+data_dir<- paste0("../02_detailed_annot/analysis/identifyCD4.CD8_byNMF/", "rank",rank_use, "_sharedBy", sharedBy, "/" )
+
+## figure/analysis dir based on rank + how shared programs are merged
+figure_dir<- paste0(figure_dir_tmp, "rank", rank_use, "_sharedBy", sharedBy, "/")
+analysis_dir<- paste0(analysis_dir_tmp, "rank", rank_use, "_sharedBy", sharedBy, "/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir,recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+  
+## ped/adult tcell seurat objects
+#cd4_seurat<- readRDS(paste0(data_dir, "ped.adult_seurat_cd4_harmony.Rds"))
+cd8_seurat<-readRDS(paste0(data_dir, "ped.adult_seurat_cd8_harmony.Rds"))
+
+## Read in colors to use
+program_colors<- readRDS(paste0("../../../plot_colors/Tcell.programs_rank", rank_use, "sharedBy", sharedBy, "_reAnnot.Rds"))
+
+variable_name<- paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
+cd8_seurat$CellAnnot<- cd8_seurat@meta.data[[variable_name]]
+
+```
+
+## Settings
+```{r}
+analysis_name<- "CD8_NoStress.Memory"
+
+
+## Filtering
+programs_keep<- unique(cd8_seurat$CellAnnot)[!unique(cd8_seurat$CellAnnot) %in% c("Stress", "Memory")]
+seurat_use<- subset(cd8_seurat, CellAnnot %in% programs_keep)
+```
+
+
+## Create singleCellExperiment object, filter, norm, and run PCA/UMAP
+```{r}
+sce <- SingleCellExperiment(assays = List(counts = seurat_use@assays$RNA@counts))
+
+## Filter
+geneFilter <- apply(assays(sce)$counts,1,function(x){
+    sum(x >= 3) >= 10
+})
+sce <- sce[geneFilter, ]
+
+## Norm
+FQnorm <- function(counts){
+    rk <- apply(counts,2,rank,ties.method='min')
+    counts.sort <- apply(counts,2,sort)
+    refdist <- apply(counts.sort,1,median)
+    norm <- apply(rk,2,function(r){ refdist[r] })
+    rownames(norm) <- rownames(counts)
+    return(norm)
+}
+assays(sce)$norm <- FQnorm(assays(sce)$counts)
+
+## PCA
+pca <- prcomp(t(log1p(assays(sce)$norm)), scale. = FALSE)
+rd1 <- pca$x[,1:2]
+
+## UMAP
+rd2 <- uwot::umap(t(log1p(assays(sce)$norm)))
+colnames(rd2) <- c('UMAP1', 'UMAP2')
+
+## Add reduced dimensions to sce
+reducedDims(sce) <- SimpleList(PCA = rd1, UMAP = rd2)
+
+## Add cluster labels
+colData(sce)$NMF_program <- seurat_use$CellAnnot
+
+## Save
+saveRDS(sce, file=paste0(analysis_dir, "sce_", analysis_name, ".Rds"))
+```
+
+
+## Plot PCA/UMAP
+```{r}
+plot(rd1, col = rgb(0,0,0,.5), pch=16, asp = 1)
+plot(rd2, col = rgb(0,0,0,.5), pch=16, asp = 1)
+```
+
+
+## Run slignshot
+two-step process composed of identifying the global lineage structure with a cluster-based minimum spanning tree (MST) and fitting simultaneous principal curves to describe each lineage
+```{r}
+## Run slingshot
+sce <- slingshot(sce, clusterLabels = "NMF_program", reducedDim = 'PCA') ## ,start.clus="Memory"
+
+summary(sce$slingPseudotime_1)
+
+saveRDS(sce, file=paste0(analysis_dir, "sce_", analysis_name, ".Rds"))
+```
+
+
+## Plot results
+```{r}
+library(ggpubr)
+
+cell_colors <- cell_pal(sce$NMF_program, brewer_pal("qual", "Set2"))
+
+## Legend to show which color corresponds to which program
+cell_legend<- data.frame(color=cell_colors, program=names(cell_colors))
+cell_legend$ID<- paste0(cell_legend$color, cell_legend$program)
+cell_legend<- cell_legend[!duplicated(cell_legend$ID),]
+cell_legend$dummy<- 1
+colors_use<- cell_legend$color; names(colors_use)<- cell_legend$program
+p<-ggplot(cell_legend, aes(x=program, y=dummy, fill=program))+
+  geom_bar(stat="identity")+
+  scale_fill_manual(values=colors_use)+
+  theme(axis.text.x = element_text(angle=45, hjust=1))
+as_ggplot(get_legend(p))
+ggsave(paste0(figure_dir, "SS_PCA_", analysis_name, "_legend.png"), width=3, height=4)
+
+## Plot in PCA space
+png(filename=paste0(figure_dir, "SS_PCA_", analysis_name, ".png"), width=1000, height=1000)
+plot(reducedDims(sce)$PCA, col = cell_colors, pch=16, asp = 1)
+lines(SlingshotDataSet(sce), lwd=2, type = 'lineages', col = 'black')
+dev.off()
+```
+
+## Alternative to using NMF to label: run clustering
+```{r}
+## Clustering: gaussian mixture
+cl1 <- Mclust(rd1)$classification
+colData(sce)$GMM <- cl1
+
+plot(rd1, col = brewer.pal(9,"Set1")[cl1], pch=16, asp = 1)
+
+## Clustering: k means
+cl2 <- kmeans(rd1, centers = 4)$cluster
+colData(sce)$kmeans <- cl2
+
+plot(rd1, col = brewer.pal(9,"Set1")[cl2], pch=16, asp = 1)
+```
+
+## Identify temporally dynamic genes
+For each gene, we will fit a general additive model (GAM) using a negative binomial noise distribution to model the (potentially nonlinear) relationshipships between gene expression and pseudotime. We will then test for significant associations between expression and pseudotime using the associationTest.
+```{r}
+# fit negative binomial GAM
+sce <- fitGAM(sce) ## runs for 2 hours!!!
+
+# test for dynamic expression
+ATres <- associationTest(sce)
+
+## Plot top genes
+topgenes <- rownames(ATres[order(ATres$pvalue), ])[1:250]
+pst.ord <- order(sce$slingPseudotime_1, na.last = NA)
+heatdata <- assays(sce)$counts[topgenes, pst.ord]
+heatclus <- sce$GMM[pst.ord]
+
+heatmap(log1p(heatdata), Colv = NA,
+        ColSideColors = brewer.pal(9,"Set1")[heatclus])
+```
+
+
+
+

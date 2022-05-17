@@ -1,0 +1,456 @@
+---
+title: "Compare.Adult.Ped"
+author: "Jenna LaBelle"
+date: "11/11/2021"
+output: html_document
+---
+
+## Purpose:
+Compare ped/adult de novo Tcell programs- shared? specific?
+
+## Approach:
+Correlate scores for ped/adult programs with one another + ped cd4/cd8 to help annotate. Various visualizations (venn diagram, heatmap, umap)
+
+```{r}
+library(Seurat) 
+library(clusterProfiler)
+library(biomaRt)
+library(stringr)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/02a_Tcells/02_Ped.Adult/01_compare_NMF/")
+
+analysis_dir<- paste0(working_dir, "/analysis/correlate_deNovoPed.AdultTcell/")
+figure_dir<- paste0(working_dir, "/figures/correlate_deNovoPed.AdultTcell/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir,recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+```
+
+
+
+
+## Read in merged ped/adult tcell seurat object. Merged in Merge_AssessIntegration.Rmd, processed + annotated in AnnotateCD4.CD8_Ped.Adult
+```{r}
+cohort<- "pedOnly_nomuv63"
+adult_withMUV<- "FALSE"
+
+## ped/adult tcell seurat
+tcell_seurat<- readRDS(paste0("../../../01_Preprocessing/03_PreprocessAdultDatasets/analysis/Tcells_Ped.Adult_Merge/",
+                              "adult_ped_tcell_merged_seurat_harmony.Rds"))
+
+## Read in ped cd4/cd8 derived programs
+cd8_markers<- read.csv(paste0("../../01a_Ped/01_NMF/ARCHIVE/CD8/analysis/", cohort, "/top_DE_genes_annotated_NMF_rank4.csv"))
+cd4_markers<- read.csv(paste0( "../../01a_Ped/01_NMF/ARCHIVE/CD4/analysis/", cohort, "/top_DE_genes_annotated_NMF_rank4.csv"))
+
+cd8_markers<- split(cd8_markers, f=cd8_markers$cluster); cd8_markers<- lapply(cd8_markers, function(x){x$gene})
+cd4_markers<- split(cd4_markers, f=cd4_markers$cluster); cd4_markers<- lapply(cd4_markers, function(x){x$gene})
+
+names(cd8_markers)<- paste0("CD8_", names(cd8_markers))
+names(cd4_markers)<- paste0("CD4_", names(cd4_markers))
+cd4.cd8_markers<- c(cd8_markers, cd4_markers)
+
+```
+
+
+## Score for ped cd4/cd8 programs + ped/adult tcell programs
+```{r}
+## Norm/center current cm
+cm_list<- NormCenter(tcell_seurat@assays$RNA@counts)
+cm_mean<- log2(rowMeans(cm_list$raw_data)+1)
+
+## Score for cd4/cd8 ped
+cd4.cd8_scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, c(cd8_markers, cd4_markers))))
+
+
+## Read in ped and adult tcell derived programs for all ranks. Score all
+ranks<- 7:9
+
+  ## Ped markers
+  all_ped_tcell_markers<- lapply(ranks, function(x){
+    ped_tcell_markers<- read.csv(paste0( "../../01a_Ped/NMF/analysis/deNovoNMF/", cohort, "/top_DE_genes_NMF_rank", x,".csv"))
+    ped_tcell_markers<- split(ped_tcell_markers, f=ped_tcell_markers$cluster) 
+    ped_tcell_markers<- lapply(ped_tcell_markers, function(x){x$gene})
+    names(ped_tcell_markers)<-paste0("PedTcell_", names(ped_tcell_markers))
+    return(ped_tcell_markers)
+  })
+  names(all_ped_tcell_markers)<-paste0("rank", ranks)
+
+
+  ## Read in adult tcell derived programs
+  all_adult_tcell_markers<-lapply(ranks, function(x){
+    adult_tcell_markers<- read.csv(paste0( "../../01b_Adult/NMF/analysis/deNovoNMF/", "/top_DE_genes_NMF_rank",x, ".csv"))
+    adult_tcell_markers<- split(adult_tcell_markers, f=adult_tcell_markers$cluster) 
+    adult_tcell_markers<- lapply(adult_tcell_markers, function(x){x$gene})
+    names(adult_tcell_markers)<- paste0("AdultTcell_", names(adult_tcell_markers))
+    return(adult_tcell_markers)
+  })
+  names(all_adult_tcell_markers)<- paste0("rank", ranks)
+  
+  
+  ranks<- 7:9
+  all_scores<- list()
+  for(r in ranks){
+    print(r)
+    ped_markers<- all_ped_tcell_markers[[paste0("rank", r)]]
+    adult_markers<- all_adult_tcell_markers[[paste0("rank", r)]]
+    
+    
+    ## score for ped cd8/cd4 programs, adult tcell, ped tcell
+    scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, c(ped_markers, adult_markers))))
+    all_scores[[paste0("rank", r)]]<- scores
+  }
+
+saveRDS(all_scores, file=paste0(analysis_dir, "scores_ped.adult.tcell_ranks", ranks[1], "-",ranks[length(ranks)], ".Rds"))
+saveRDS(cd4.cd8_scores, file=paste0(analysis_dir, "scores_mergedTcells_for_pedCD4.CD8.Rds"))
+```
+
+
+
+## Correlate with ped cd4/cd8 programs to help annotate tcell programs
+```{r}
+## Read in ped/adult tcell scores
+ranks<- 7:9
+all_scores<- readRDS(paste0(analysis_dir, "scores_ped.adult.tcell_ranks", ranks[1], "-",ranks[length(ranks)], ".Rds"))
+
+## read in scores for ped cd4/cd8 programs
+cd4.cd8_scores<- readRDS(paste0(analysis_dir, "scores_mergedTcells_for_pedCD4.CD8.Rds"))
+
+## For each rank, correlate with cd4.cd8 scores, plot correlation heatmap
+for(r in ranks){
+  tcell_scores<- all_scores[[paste0("rank", r)]]
+  scores<- merge(tcell_scores, cd4.cd8_scores, by=0)
+  rownames(scores)<- scores$Row.names; scores$Row.names<-NULL
+  
+  
+  ## Correlate and plot heatmap
+  scores_factor_hc = clusterNmfFactors(scores)
+  scores_factor_cor = scores_factor_hc$cor_coef[scores_factor_hc$hc_obj$order, scores_factor_hc$hc_obj$order]
+  
+  ## Heatmap of correlations
+  hm_colors = rev((brewer.pal(n=9, name="RdBu")))
+  hm_colors = colorRampPalette(colors = hm_colors)
+  pheatmap(scores_factor_cor, color = hm_colors(100), 
+           cluster_rows = F, cluster_cols = F, 
+           annotation_names_row = F, annotation_names_col =T,
+           show_rownames = T, show_colnames = F,
+           filename = paste0(figure_dir, "Cor_PedCD4.CD8rank4_PedTcellrank", r, "_AdultTcellrank", r,".png"),
+           width = 8, height = 4)
+  
+  ## Dendrogram of hierarchical clustering 
+  jpeg(filename=paste0(figure_dir, "HC_PedCD4.CD8rank4_PedTcellrank", r, "_AdultTcellrank", r,".png"), width = 400, height = 600)
+  plot(scores_factor_hc$hc_obj)
+  dev.off()
+  
+  
+}
+
+```
+
+
+## Correlation between just ped/adult tcell programs
+```{r}
+## Read in ped/adult tcell scores
+ranks<- 7:9
+all_scores<- readRDS(paste0(analysis_dir, "scores_ped.adult.tcell_ranks", ranks[1], "-",ranks[length(ranks)], ".Rds"))
+
+
+## For each rank, correlate with cd4.cd8 scores, plot correlation heatmap
+for(r in ranks){
+  scores<- all_scores[[paste0("rank", r)]]
+  
+  
+  ## Correlate and plot heatmap
+  scores_factor_hc = clusterNmfFactors(scores)
+  scores_factor_cor = scores_factor_hc$cor_coef[scores_factor_hc$hc_obj$order, scores_factor_hc$hc_obj$order]
+  
+  ## Heatmap of correlations
+  hm_colors = rev((brewer.pal(n=9, name="RdBu")))
+  hm_colors = colorRampPalette(colors = hm_colors)
+  pheatmap(scores_factor_cor, color = hm_colors(100), 
+           cluster_rows = F, cluster_cols = F, 
+           annotation_names_row = F, annotation_names_col =T,
+           show_rownames = T, show_colnames = F,
+           filename = paste0(figure_dir, "Cor_PedTcellrank", r, "_AdultTcellrank", r,".png"),
+           width = 8, height = 4)
+  
+  ## Dendrogram of hierarchical clustering 
+  jpeg(filename=paste0(figure_dir, "HC_PedTcellrank", r, "_AdultTcellrank", r,".png"), width = 400, height = 600)
+  plot(scores_factor_hc$hc_obj)
+  dev.off()
+  
+  
+}
+  
+```
+
+## Annotate gene lists based on correlation (+ marker genes for Treg/Stress annotation)
+```{r}
+rank_use<-9
+cohort<- "pedOnly_nomuv63"
+
+## Read in tcell derived programs
+ped_tcell_markers<- read.csv(paste0( "../../01a_Ped/01_NMF/analysis/deNovoNMF/", cohort, 
+                                     "/top_DE_genes_NMF_rank", rank_use,".csv"))
+adult_tcell_markers<- read.csv(paste0( "../../01b_Adult/01_NMF/analysis/deNovoNMF/", 
+                                       "/top_DE_genes_NMF_rank",rank_use, ".csv"))
+
+## Annotate programs based on correlation with ped cd4/cd8 programs (+ based on marker genes for Treg/Stress)
+## Note: for ped rank8, only 7 programs actually have any marker genes
+adult_annotate<- list(rank7=c("Memory", "Inhibitory", "Treg", "Cytotoxic.CD4", "EffectorMemory", "NK-like", "Stress"),
+                      rank8=c("Inhibitory.CD8", "EffectorMemory", "Treg", "Stress", "NK-like", "Inhibitory.CD4", "Memory", "Cytotoxic.CD4"),
+                      rank9=c("EffectorMemory", "Stress", "Memory", "Inhibitory.CD8", "Inhibitory.CD4", "Treg",
+                              "NK-like", "Cytotoxic.CD4", "NMF9"))
+adult_annotate<- adult_annotate[[paste0("rank", rank_use)]]
+names(adult_annotate)<- unique(adult_tcell_markers$cluster)
+
+ped_annotate<- list(rank7=c("Memory", "Cytotoxic.CD4", "NK-like", "Inhibitory.CD8", "Cytotoxic.CD8", "Inhibitory.CD4", "EffectorMemory"),
+                    rank8=c("Cytotoxic.CD4", "Cytotoxic.CD8", "Memory", "EffectorMemory", 
+                            "NK-like", "Inhibitory.CD8", "Inhibitory.CD4"),
+                    rank9=c("Cytotoxic.CD4", "Cytotoxic.CD8", "Inhibitory.CD4","NK-like", "EffectorMemory2", "Memory",
+                            "RiboActive", "Inhibitory.CD8", "EffectorMemory"))
+ped_annotate<- ped_annotate[[paste0("rank", rank_use)]]
+names(ped_annotate)<-unique(ped_tcell_markers$cluster)
+
+## Add annotations to marker genes
+adult_tcell_markers$cluster<- plyr::mapvalues(adult_tcell_markers$cluster, names(adult_annotate), adult_annotate)
+ped_tcell_markers$cluster<- plyr::mapvalues(ped_tcell_markers$cluster, names(ped_annotate), ped_annotate)
+
+## Save annotated marker lists
+paste0( "../../01a_Ped/NMF/analysis/deNovoNMF/", cohort, 
+                                     "/top_DE_genes_annotated_NMF_rank", x,".csv")
+write.csv(ped_tcell_markers, 
+          file=paste0( "../../01a_Ped/NMF/analysis/deNovoNMF/", cohort, 
+                                     "/top_DE_genes_annotated_NMF_rank", x,".csv"))
+write.csv(adult_tcell_markers, 
+          file=paste0( "../../01b_Adult/NMF/analysis/deNovoNMF/", 
+                                       "/top_DE_genes_annotated_NMF_rank",x, ".csv"))
+
+## Save annotations
+ped.adult_annotations<- list(adult=adult_annotate, ped=ped_annotate)
+saveRDS(ped.adult_annotations, file=paste0(analysis_dir, "ped.adult.programs_annotations_rank",rank_use, ".Rds"))
+```
+
+
+
+## Compare gene lists between similar ped/adult programs
+```{r}
+library(ggVennDiagram)
+rank_use<-9
+option1<- FALSE
+
+## Read in annotated gene lists (see above)
+ped_tcell_markers<- read.csv(paste0( "../../01a_Ped/NMF/analysis/deNovoNMF/", cohort, 
+                                     "/top_DE_genes_annotated_NMF_rank", x,".csv"))
+adult_tcell_markers<- read.csv(paste0( "../../01b_Adult/NMF/analysis/deNovoNMF/", 
+                                       "/top_DE_genes_annotated_NMF_rank",x, ".csv"))
+
+## Split into list
+ped_tcell_markers<- split(ped_tcell_markers, f=ped_tcell_markers$cluster) 
+ped_tcell_markers<- lapply(ped_tcell_markers, function(x){x$gene})
+
+adult_tcell_markers<- split(adult_tcell_markers, f=adult_tcell_markers$cluster) 
+adult_tcell_markers<- lapply(adult_tcell_markers, function(x){x$gene})
+
+
+## Venn diagram comparing overlap for genesets
+  ## Optional: Show overlap between adult inhibitory/cytotoxic + ped cd4/cd8 inhibitory separately
+  ## Only used for rank 7
+  if(option1){
+    adult_tcell_markers_tmp<- adult_tcell_markers
+    adult_tcell_markers_tmp$Inhibitory.CD4<- adult_tcell_markers_tmp$Inhibitory
+    adult_tcell_markers_tmp$Inhibitory.CD8<- adult_tcell_markers_tmp$Inhibitory
+    adult_tcell_markers_tmp$Inhibitory<-NULL
+    
+    adult_tcell_markers_tmp$Cytotoxic.CD8<- adult_tcell_markers_tmp$Cytotoxic.CD4
+    
+    figure_append<- "_CytoCD8.InhCD4.added"
+    
+  }else{
+    adult_tcell_markers_tmp<- adult_tcell_markers
+    figure_append<- ""
+  }
+  
+  ## Generate list of comparisons between programs named the same
+  comparisons<- names(adult_tcell_markers_tmp)[names(adult_tcell_markers_tmp) %in% names(ped_tcell_markers)]
+  comparisons<- comparisons[order(comparisons)]
+  comparison_list<- lapply(comparisons, function(x){
+    list(Adult=adult_tcell_markers_tmp[[x]], Ped=ped_tcell_markers[[x]])
+  })
+  names(comparison_list)<- comparisons
+  
+  all_plots<- lapply(names(comparison_list), function(x){
+    tmp_list<- comparison_list[[x]]
+    ggVennDiagram(tmp_list, label="count")+
+      scale_fill_gradient(low="white", high="red")+
+      scale_color_manual(values=rep("black", 3))+
+      ggtitle(x)
+  })
+  cowplot::plot_grid(plotlist=all_plots, ncol=3)
+  ggsave(paste0(figure_dir, "VennDiagram_ped.adult_geneOverlaps_rank", rank_use, ".png"), width=9, height=7)
+```
+
+## Add NMF annotations (directly from NMF) to merged tcell seurat object
+NMF annotations from ped-only analysis / adult-only analysis read in, added to merged tcell seurat object in single column
+```{r}
+rank_use<-9
+variable_name<- paste0("NMF_rank", rank_use, "_annot")
+map_from_variable<- paste0("NMF_rank", rank_use)
+
+## read in annotations for NMF programs
+annotations<- readRDS(paste0(analysis_dir, "ped.adult.programs_annotations_rank", rank_use, ".Rds"))
+
+## Read in seurat objects where annotations are stored
+ped_tcell_seurat<- readRDS(paste0("../../../01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/", cohort, "/tcell_seurat.Rds"))
+adult_tcell_seurat<- readRDS(paste0("../../01b_Adult/01_NMF/analysis/deNovoNMF/tcell_seurat.Rds"))
+
+## Add on annotations to ped/adult seurat objects
+ped_tcell_seurat@meta.data[[variable_name]]<- plyr::mapvalues(ped_tcell_seurat@meta.data[[map_from_variable]], 
+                                                              names(annotations$ped), annotations$ped)
+adult_tcell_seurat@meta.data[[variable_name]]<- plyr::mapvalues(adult_tcell_seurat@meta.data[[map_from_variable]], 
+                                                                names(annotations$adult), annotations$adult)
+
+## Add new column to merged ped/adult seurat object with these annotations
+all_annots<- as.character(c(ped_tcell_seurat@meta.data[[variable_name]], adult_tcell_seurat@meta.data[[variable_name]]))
+names(all_annots)<-c(colnames(ped_tcell_seurat), colnames(adult_tcell_seurat))
+tcell_seurat@meta.data[[variable_name]]<- as.character(plyr::mapvalues(colnames(tcell_seurat), 
+                                                                       names(all_annots), all_annots,
+                                                                       warn_missing = FALSE))
+
+## Save all
+saveRDS(ped_tcell_seurat, 
+        file=paste0("../../../01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/", cohort, "/tcell_seurat.Rds"))
+saveRDS(adult_tcell_seurat, file=paste0("../../01b_Adult/01_NMF/analysis/deNovoNMF/tcell_seurat.Rds"))
+saveRDS(tcell_seurat, file=paste0("../../../01_Preprocessing/03_PreprocessAdultDatasets/analysis/Tcells_Ped.Adult_Merge/",
+                              "adult_ped_tcell_merged_seurat_harmony.Rds"))
+```
+
+
+## Heatmap of top genes for ped/adult tcell NMF (annotated as above)
+```{r}
+rank_use<-8
+pvalue_logFC<-"pvalue" ## Select top genes by pvalue or logFC
+n_top<-5
+
+
+## Read in annotated gene lists
+ped_tcell_markers<- read.csv(paste0( "../../01a_Ped/NMF/analysis/deNovoNMF/", cohort, 
+                                     "/top_DE_genes_annotated_NMF_rank", x,".csv"))
+adult_tcell_markers<- read.csv(paste0( "../../01b_Adult/NMF/analysis/deNovoNMF/", 
+                                       "/top_DE_genes_annotated_NMF_rank",x, ".csv"))
+
+## merge into single df, adding "Ped" "Adult" suffix
+ped_tcell_markers$cluster<- paste0(ped_tcell_markers$cluster, "_Ped")
+adult_tcell_markers$cluster<- paste0(adult_tcell_markers$cluster,"_Adult")
+tcell_markers<- rbind(ped_tcell_markers, adult_tcell_markers)
+tcell_markers<- tcell_markers[order(tcell_markers$cluster),]
+
+
+## Get top genes
+if(pvalue_logFC=="pvalue"){
+    top_genes<- tcell_markers %>% group_by(cluster) %>% top_n(n=n_top, wt=-p_val_adj) %>% as.data.frame()
+}else if(pvalue_logFC=="logFC"){
+  top_genes<- tcell_markers %>% group_by(cluster) %>% top_n(n=n_top, wt=avg_log2FC) %>% as.data.frame()
+}
+
+## plot on heatmap using ped/adult seurat object
+backup<- ScaleData(tcell_seurat, do.scale = FALSE, do.center=TRUE, features=rownames(tcell_seurat))
+DoHeatmap(backup, features=top_genes$gene, group.by = paste0("NMF_rank", rank_use, "_annot") )+
+  scale_fill_gradient2(low="blue", mid="white", high="red")
+ggsave(paste0(figure_dir, "Heatmap_AllTcells_top",n_top, "_NMFrank",rank_use, "genes_by",pvalue_logFC, ".png"), width = 12, height=12)
+
+```
+
+## UMAP of all tcells by NMF annot
+```{r}
+rank_use<-9
+variable_name<- paste0("NMF_rank", rank_use, "_annot")
+
+## With cyto/inhibitory split
+colors_use<-c(`Cytotoxic.CD4`="orange", `Cytotoxic.CD8`="red",EffectorMemory="olivedrab", EffectorMemory2="palegreen",Inhibitory="blue", 
+              `Inhibitory.CD4`="turquoise", `Inhibitory.CD8`="navy",Memory="purple", `NK-like`="green", 
+              Stress="yellow", Treg="grey22", `8`="white", RiboActive="pink",NMF9="white")
+
+DimPlot(tcell_seurat, group.by=variable_name)+
+  scale_color_manual(values=colors_use)
+ggsave(paste0(figure_dir, "UMAP_AllTcells_byNMFrank", rank_use, ".png"), width=7, height=5)
+
+  ## Plot each individually
+  all_plots<- lapply(unique(tcell_seurat@meta.data[[variable_name]]), function(x){
+    tcell_seurat$tmp<- ifelse(tcell_seurat@meta.data[[variable_name]]==x, x, "Other")
+    DimPlot(tcell_seurat, group.by="tmp")+
+      scale_color_manual(values=c(colors_use, Other="grey"))+NoLegend()+
+      ggtitle(x)
+  })
+  cowplot::plot_grid(plotlist=all_plots, ncol=4)
+  ggsave(paste0(figure_dir, "UMAP_AllTcells_byNMFrank", rank_use, "_indv.png"), width=12, height=9)
+
+## With cyto/inhibitory types together
+colors_use<- c(Cytotoxic="red",EffectorMemory="olivedrab", `Inhibitory`="turquoise",
+               Memory="purple", `NK-like`="green", Stress="yellow", Treg="grey22", `8`="white",
+               RiboActive="pink",NMF9="white", EffectorMemory2="palegreen")
+tcell_seurat@meta.data[[paste0(variable_name, "_merge")]]<- gsub(".CD4", "", gsub(".CD8", "", tcell_seurat@meta.data[[variable_name]]))
+DimPlot(tcell_seurat, group.by=paste0(variable_name, "_merge"))+
+  scale_color_manual(values=colors_use)
+ggsave(paste0(figure_dir, "UMAP_AllTcells_byNMFrank",rank_use, ".mergeCytoInh.png"), width=7, height=5)
+
+  ## Plot each individually
+  all_plots<- lapply(unique(tcell_seurat@meta.data[[paste0(variable_name, "_merge")]]), function(x){
+    tcell_seurat$tmp<- ifelse(tcell_seurat@meta.data[[paste0(variable_name, "_merge")]]==x, x, "Other")
+    DimPlot(tcell_seurat, group.by="tmp")+
+      scale_color_manual(values=c(colors_use, Other="grey"))+NoLegend()+
+      ggtitle(x)
+  })
+  cowplot::plot_grid(plotlist=all_plots, ncol=4)
+  ggsave(paste0(figure_dir, "UMAP_AllTcells_byNMFrank",rank_use, ".mergeCytoInh_indv.png"), width=12, height=9)
+```
+
+## Expression of expected marker genes based on NMF annotation
+```{r}
+rank_use<-8
+variable_name<- paste0("NMF_rank", rank_use, "_annot")
+
+DotPlot(tcell_seurat, group.by = variable_name, 
+        features=c("GZMK", "CTLA4","LAG3", "TIGIT","PDCD1", "HAVCR2", "TOP2A", "CCR7", "GNLY", "HSPA1A", "FOXP3"))+
+  xlab("") + ylab("")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))
+ggsave(paste0(figure_dir, "DotPlot_expectedMarkerGenes_forNMFrank7.png"), width=6, height=4)
+
+## Split all into ped/adult
+tcell_seurat$tmp<- paste0(tcell_seurat@meta.data[[variable_name]], "_", tcell_seurat$Age)
+DotPlot(tcell_seurat, group.by = "tmp", 
+        features=c("GZMK", "CTLA4","LAG3", "TIGIT","PDCD1", "HAVCR2", "TOP2A", "CCR7", "GNLY", "HSPA1A", "FOXP3"))+
+  xlab("") + ylab("")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))
+ggsave(paste0(figure_dir, "DotPlot_expectedMarkerGenes_forNMFrank", rank_use,".byAge.png"), width=8, height=4)
+```
+
+## Exploratory- can delete
+```{r}
+adult_tregs<- subset(tcell_seurat, NMF_rank7_annot=="Treg")
+test<- as.data.frame(t(adult_tregs@assays$RNA@data[c("CTLA4", "TIGIT","HAVCR2", "FOXP3"),]))
+test<- test[rowSums(test)>0,]
+hist(test$FOXP3)
+test$lowfoxp3<- test$FOXP3<0.5 ## 430 tregs with no/low foxp3
+test<- melt(test, id="lowfoxp3")
+colnames(test)<-c("FOXP3_expr", "Gene", "logTPM")
+ggplot(test, aes(x=Gene, y=logTPM, fill=FOXP3_expr))+
+  geom_boxplot()
+
+
+ped<- subset(tcell_seurat, Age=="Ped")
+foxp3<- as.data.frame(t(ped@assays$RNA@data[c("FOXP3", "TIGIT"),]))
+foxp3$nmf<- plyr::mapvalues(rownames(foxp3), colnames(ped), ped$NMF_rank7_annot)
+foxp3$potential_tregs<- foxp3$FOXP3>2
+table(foxp3$potential_tregs, foxp3$nmf)
+```
+

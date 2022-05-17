@@ -1,0 +1,297 @@
+---
+title: "Visualize_programs"
+output: html_document
+---
+
+## Purpose:
+After re-annotating programs based on markers, GO, reference genesets, etc in 01_Visualize.Reannotate_programs, visualize updated programs (all Tcells together) here
+
+
+## Approach:
+Using updated annotations, plot nice plots for heatmap, UMAP, density, etc
+
+
+```{r}
+library(Seurat) 
+library(clusterProfiler)
+library(biomaRt)
+library(stringr)
+library(harmony)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/02a_Tcells/02_Ped.Adult/", 
+                     "03_Visualize.Reannotate_programs/")
+
+analysis_dir_tmp<- paste0(working_dir, "/analysis/NMF_plots/AllTcells/")
+figure_dir_tmp<- paste0(working_dir, "/figures/NMF_plots/AllTcells/")
+
+if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp,recursive = TRUE)}
+if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+```
+
+## Read in ped tcell seurat object. Contains NMF assignments (annots added in deNovoPedTcell.v.deNovoAdultTcell, based on correlation with adult T cell + correlation with ped cd4/cd8 programs)
+```{r}
+rank_use<-8
+sharedBy<- "union" 
+data_dir<- paste0("../02_detailed_annot/analysis/identifyCD4.CD8_byNMF/", "rank",rank_use, "_sharedBy", sharedBy, "/" )
+
+## figure/analysis dir based on rank + how shared programs are merged
+figure_dir<- paste0(figure_dir_tmp, "rank", rank_use, "_sharedBy", sharedBy, "/")
+analysis_dir<- paste0(analysis_dir_tmp, "rank", rank_use, "_sharedBy", sharedBy, "/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir,recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+  
+## ped/adult tcell seurat objects
+tcell_seurat<- readRDS(paste0(data_dir, "ped.adult_seurat_tcell_harmony.Rds"))
+
+## Read in marker genes
+program_markers<- readRDS(paste0("../01_compare_NMF/analysis/newMarkers_deNovoPed.AdultTcell/", 
+                                 "new_markers_NMFrank", rank_use, "_bySeurat_sharedBy", sharedBy, "_reAnnot.Rds"))
+
+## Read in scores
+all_scores<- readRDS(paste0("../01_compare_NMF/analysis/newMarkers_deNovoPed.AdultTcell/",
+                            "scores_merged.ped.adultRank", rank_use, "_specific.sharedBy", sharedBy, "_reAnnot.Rds"))
+
+## Read in colors to use
+program_colors<- readRDS(paste0("../../../plot_colors/Tcell.programs_rank", rank_use, "sharedBy", sharedBy, "_reAnnot.Rds"))
+celltype_colors<- readRDS(paste0("../../../plot_colors/Tcell.celltypes.Rds"))
+```
+
+## Subset to top markers for each nmf- top 10
+```{r}
+marker_genes<- program_markers
+
+## If any genes are top markers for multiple clusters- remove, then find top 10 again
+top_markers<- marker_genes %>% group_by(cluster) %>% slice_max(order_by = avg_log2FC, n = 10) %>% as.data.frame()
+if(sum(duplicated(top_markers$gene))!=0){
+  duplicated<- top_markers$gene[duplicated(top_markers$gene)]
+  print(paste0("Shared top markers: ", paste(duplicated, collapse=",")))
+  marker_genes<- marker_genes[!marker_genes$gene %in% duplicated,]
+  top_markers<- marker_genes %>% group_by(cluster) %>% slice_max(order_by = avg_log2FC, n = 10) %>% as.data.frame()
+}
+all_markers<- top_markers
+all_markers$cluster<- as.character(all_markers$cluster)
+```
+
+
+
+## Plot heatmaps of top marker gene expression
+```{r}
+rank<- "8"
+add_lines<- TRUE
+program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
+bySubtype<- FALSE
+
+top_markers<-all_markers
+
+## Pseudobulk
+if(bySubtype){
+  tcell_seurat$SubtypeEdit<- gsub("Hemispheric-BCOR", "BCOR", gsub("Hemispheric-H3G34R/V", "H3G34R/V", gsub("Midline-H3K27M", "H3K27M",
+                           gsub("GBM", "Adult.GBM",gsub("IDH-G", "Adult.IDH-G", tcell_seurat$NiceSubtype)))))
+  tcell_seurat$PB_variable<- paste0(tcell_seurat$SubtypeEdit, "_",
+                                gsub("\\.", "\n", tcell_seurat@meta.data[[program_name]]))
+  figure_append<- "_bySubtype"
+}else{
+  tcell_seurat$PB_variable<- paste0(tcell_seurat$Age, "_", 
+                                gsub("\\.", "\n", tcell_seurat@meta.data[[program_name]]))
+  figure_append<- ""
+}
+
+
+pb<- pseudobulk_byVariable(tcell_seurat@assays$RNA@counts, tcell_seurat@meta.data, "PB_variable")
+
+## center and score
+pb_list<- NormCenter(pb)
+pb_center<- pb_list$center_data
+
+## Plot
+p<- myHeatmap(pb_center, GOI=top_markers$gene, min.value = -3, max.value = 3, 
+              orderFactors =  gsub("\\.", "\n", unique(top_markers$cluster))) +
+  scale_fill_gradient2(high="red", low="blue", mid="white", name="Centered log2(TPM)")
+
+## Add horizontal lines around each set of nmf genes
+if(add_lines){
+  tmp<- split(top_markers, f=top_markers$cluster)
+  lastGene<- lapply(tmp, function(x){
+    x$tmp<- 1:nrow(x)
+    x<- x[x$gene %in% rownames(pb), ]
+    return(x[max(x$tmp), "gene"])
+  })
+  linePositions<- as.data.frame(pb_center[top_markers$gene,])
+  linePositions$tmp<- 1:nrow(linePositions)
+  linePositions<- linePositions[unlist(lastGene),"tmp"]
+  linePositions<- linePositions[1:length(linePositions)-1]+ 0.5
+  
+  p+geom_hline(yintercept = linePositions, linetype="dashed",size=1)
+}else{p}
+
+  
+ggsave(paste0(figure_dir, "AllTcells_Heatmap_TopNMFgenes_annot_rank", rank,figure_append, ".png"), width=19, height=11)
+
+
+```
+
+## UMAP with annotations
+```{r}
+rank<- "8"
+sharedBy<- "union"
+program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
+program_colors_use<- program_colors
+
+DimPlot(tcell_seurat, group.by = program_name)+
+  scale_color_manual(values=program_colors_use)+
+  ggtitle("")
+ggsave(paste0(figure_dir, "AllTcells_UMAP_annot.png"), width=6, height=4)
+
+## Plot each program one at a time
+seurat_tmp<- tcell_seurat
+all_plots<- lapply(as.character(unique(tcell_seurat@meta.data[[program_name]])), function(x){
+  seurat_tmp$tmp<- ifelse(seurat_tmp@meta.data[[program_name]]==x,
+                          x, "Other")
+  p<-DimPlot(seurat_tmp, group.by = "tmp")+scale_color_manual(values=c(program_colors_use, Other="grey"))+ggtitle(x)+NoLegend()
+  return(p)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol = 2)
+ggsave(paste0(figure_dir, "AllTcells_UMAP_indv.png"), width=6, height=13)
+```
+
+## Density plots
+```{r}
+## Read in scores for programs
+rank<- "8"
+sharedBy<- "union"
+program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
+
+## Create df for plotting
+df<-tcell_seurat@meta.data[,c("sampleid", "Age", program_name)]
+sum(rownames(all_scores)==rownames(df)); nrow(all_scores); nrow(df)
+df<- cbind(df, all_scores[,!grepl("Max", colnames(all_scores))] )
+
+## get number of cells per subtype, add to df
+nCells<- as.data.frame(table(tcell_seurat$Age))
+df$NCells<- plyr::mapvalues(tcell_seurat$Age, nCells$Var1, nCells$Freq)
+df$JustAge<- df$Age
+df$Age<- paste0(df$Age, "\n", "nCells=",df$NCells)
+
+
+colors_use<- c(Ped="red", Adult="blue")
+names(colors_use)<- plyr::mapvalues(names(colors_use), df$JustAge, df$Age, warn_missing=FALSE)
+
+
+
+## Plot each nmf program
+all_plots<- list()
+for(i in as.character(unique(tcell_seurat@meta.data[[program_name]]))){
+  print(i)
+  df_tmp<- df[,c(i, "Age")]
+  colnames(df_tmp)<- c("score", "Age")
+  p<-ggplot(df_tmp, aes(x=score, fill=Age))+
+    geom_density(alpha=0.6)+
+    ggtitle(i)+
+    scale_fill_manual(values=colors_use)+
+    theme_classic()+
+    theme(legend.title = element_blank(),
+          legend.position = "none",
+          plot.title = element_text(size=20, face="bold", hjust=0.5))
+
+  all_plots[[i]]<-p
+}
+
+## add legend separately
+legend<-ggplot(df_tmp, aes(x=score, fill=Age))+
+    geom_density(alpha=0.6)+
+    ggtitle(i)+
+    scale_fill_manual(values=colors_use)+
+    theme_classic()+
+    theme(legend.title = element_blank(),
+          legend.key.size = unit(1.5, 'cm'),
+          legend.text = element_text(size=20))
+all_plots$legend<-  as_ggplot(get_legend(legend))
+cowplot::plot_grid(plotlist = all_plots, ncol=3)
+
+ggsave(paste0(figure_dir, "AllTcells_DensityOfNMFByAge.png"), width=10, height=8)
+
+```
+
+
+## Programs by age/subtype
+```{r}
+program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
+tcell_seurat$tmp<- tcell_seurat@meta.data[[program_name]]
+
+## By Age
+df<- tcell_seurat@meta.data %>% group_by(tmp, Age) %>% summarise(nCells=n()) %>% 
+  group_by(Age) %>% mutate(perCells=nCells/sum(nCells)) %>% as.data.frame()
+
+ggplot(df, aes(x=Age, y=perCells, fill=tmp))+
+  geom_bar(stat="identity")+
+  scale_fill_manual(values=program_colors[names(program_colors) %in% unique(df$tmp)])+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle=45, hjust=1),
+        axis.text = element_text(face="bold", color="black"),
+        axis.title = element_text(face="bold", color="black"))+
+  ylab("Proportion of cells")+xlab("")
+ggsave(paste0(figure_dir, "AllTcells_Breakdown_AgeByProgram.png"), width=4, height=4)
+
+## By Subtype, grouped by age, with n cells by subtype added on
+df<- tcell_seurat@meta.data %>% group_by(tmp, Age, NiceSubtype) %>% summarise(nCells=n()) %>% 
+  group_by(NiceSubtype) %>% mutate(perCells=nCells/sum(nCells)) %>% as.data.frame()
+nCells<- table(tcell_seurat$NiceSubtype)
+df$NiceSubtype<- paste0(df$NiceSubtype, 
+                        "\nn=",
+                        as.character(plyr::mapvalues(df$NiceSubtype, names(nCells), nCells)))
+
+ggplot(df, aes(x=NiceSubtype, y=perCells, fill=tmp))+
+  geom_bar(stat="identity")+
+  scale_fill_manual(values=program_colors[names(program_colors) %in% unique(df$tmp)])+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle=45, hjust=1),
+        axis.text = element_text(face="bold", color="black"),
+        axis.title = element_text(face="bold", color="black"))+
+  ylab("Proportion of cells")+xlab("")+
+  facet_grid(cols=vars(Age), scales = "free_x", space="free_x")
+ggsave(paste0(figure_dir, "AllTcells_Breakdown_Subtype.AgeByProgram.png"), width=7, height=4)
+```
+
+## Proportion of programs by age (integer, actual value)
+```{r}
+program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
+tcell_seurat$tmp<- tcell_seurat@meta.data[[program_name]]
+
+## Proportion of program by sample
+df<- tcell_seurat@meta.data %>% group_by(tmp,sampleid) %>% summarise(nCells=n()) %>% 
+  group_by(sampleid) %>% mutate(perCells=nCells/sum(nCells)) %>% as.data.frame()
+
+## Add on age
+df$age<- as.numeric(as.character(plyr::mapvalues(df$sampleid, tcell_seurat$sampleid, tcell_seurat$age_numeric,
+                                                 warn_missing = FALSE)))
+
+## Plot
+all_plots<-lapply(unique(tcell_seurat$tmp), function(x){
+  df_tmp<- df[df$tmp==x,]
+  ggplot(df_tmp, aes(x=age, y=perCells, color=tmp))+
+    geom_point()+
+    scale_color_manual(values=program_colors)+
+    theme_bw()+
+    theme(legend.position = "none",
+          axis.text = element_text(face="bold", color="black"),
+          axis.title = element_text(face="bold", color="black"),
+          title = element_text(face="bold", size=12))+
+    ggtitle(x)+
+    xlab("Age") + ylab(paste0("Proportion\n", x, " cells"))+
+    geom_smooth(se=FALSE, method="lm", color="black", linetype="dashed")
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "AllTcells_NumericAge.vs.ProgramProportion.png"), width=10, height=10)
+```
+

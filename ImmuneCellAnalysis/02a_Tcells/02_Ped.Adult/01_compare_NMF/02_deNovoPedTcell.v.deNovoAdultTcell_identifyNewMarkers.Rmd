@@ -1,0 +1,478 @@
+---
+title: "GenerateNewMarkers"
+author: "Jenna LaBelle"
+date: "11/11/2021"
+output: html_document
+---
+
+## Purpose:
+Using shared/specific ped/adult tcell programs, merge gene lists then generate new annotations/genes. This is an alternative to using marker genes directly from NMF, and allows for the use of identical gene lists between ped/adult.
+
+## Approach:
+Generate union/intersection between shared ped/adult tcell programs. Score cells for these new programs, assign max, then use these assignments to generate new markers. Create similar plots as in deNovoPedTcell.v.deNovoAdultTcell.Rmd- UMAP, heatmap, etc
+
+```{r}
+library(Seurat) 
+library(clusterProfiler)
+library(biomaRt)
+library(stringr)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projectsgit_repos/Pedi_Immune/ImmuneCellAnalysis/02a_Tcells/02_Ped.Adult/01_compare_NMF/")
+
+analysis_dir<- paste0(working_dir, "/analysis/newMarkers_deNovoPed.AdultTcell/")
+figure_dir<- paste0(working_dir, "/figures/newMarkers_deNovoPed.AdultTcell/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir,recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+```
+
+# Read in merged ped/adult tcell seurat object. Merged in Merge_AssessIntegration.Rmd, processed + annotated in AnnotateCD4.CD8_Ped.Adult
+```{r}
+cohort<- "pedOnly_nomuv63"
+
+## ped/adult tcell seurat
+tcell_seurat<- readRDS(paste0("../../../01_Preprocessing/03_PreprocessAdultDatasets/analysis/Tcells_Ped.Adult_Merge/",
+                              "adult_ped_tcell_merged_seurat_harmony.Rds"))
+
+cm_list<- NormCenter(tcell_seurat@assays$RNA@counts)
+cm_mean<- rowMeans(log2(cm_list$raw_data + 1))
+```
+
+## Read in annotated genes (based on deNovoPedTcell.v.deNovoAdultTcell.Rmd)
+```{r}
+rank_use<-8
+merge_cd4.cd8<- FALSE
+programs_remove<-c("EffectorMemory2", "NMF9")
+
+## Read in markers
+ped_tcell_markers<- read.csv(paste0( "../../01a_Ped/NMF/analysis/deNovoNMF/", cohort, 
+                                     "/top_DE_genes_annotated_NMF_rank", rank_use,".csv"))
+adult_tcell_markers<- read.csv(paste0( "../../01b_Adult/NMF/analysis/deNovoNMF/", 
+                                       "/top_DE_genes_annotated_NMF_rank",rank_use, ".csv"))
+
+## Rename markers as needed to reflect desired merges- for now, all cyto/inhibitory are merged together
+## This may change with higher rank
+if(merge_cd4.cd8){
+  adult_tcell_markers$cluster<- gsub(".CD4", "", gsub(".CD8", "", adult_tcell_markers$cluster))
+  ped_tcell_markers$cluster<- gsub(".CD4", "", gsub(".CD8", "", ped_tcell_markers$cluster))
+}
+
+
+## Split into list
+ped_tcell_markers<- split(ped_tcell_markers, f=ped_tcell_markers$cluster) 
+ped_tcell_markers<- lapply(ped_tcell_markers, function(x){x$gene})
+
+adult_tcell_markers<- split(adult_tcell_markers, f=adult_tcell_markers$cluster) 
+adult_tcell_markers<- lapply(adult_tcell_markers, function(x){x$gene})
+
+## Remove any programs
+ped_tcell_markers<- ped_tcell_markers[!names(ped_tcell_markers) %in% programs_remove]
+adult_tcell_markers<- adult_tcell_markers[!names(adult_tcell_markers) %in% programs_remove]
+
+## Remove any duplicate genes (as a result of merging CD4/CD8 cyto/inhibitory)
+ped_tcell_markers<- lapply(ped_tcell_markers, function(x){x[!duplicated(x)]})
+
+```
+
+## Get union and intersection of "shared" programs
+```{r}
+## Programs to merge
+merge_programs<- names(adult_tcell_markers)[names(adult_tcell_markers) %in% names(ped_tcell_markers)]
+
+## Option 1: union
+union_gene_list<-lapply(merge_programs, function(x){
+  c(adult_tcell_markers[[x]], ped_tcell_markers[[x]])
+})
+names(union_gene_list)<- merge_programs
+
+## Option 2: intersection
+intersect_gene_list<-lapply(merge_programs, function(x){
+  print(x)
+  adult<- adult_tcell_markers[[x]]
+  ped<-ped_tcell_markers[[x]]
+  merged<- adult[adult %in% ped]
+  print(length(merged))
+  return(merged)
+})
+names(intersect_gene_list)<- merge_programs
+
+## Add on "specific" programs
+specific_program_names<- c(names(adult_tcell_markers)[!names(adult_tcell_markers) %in% names(ped_tcell_markers)],
+                           names(ped_tcell_markers)[!names(ped_tcell_markers) %in% names(adult_tcell_markers)])
+specific_gene_list<- c(adult_tcell_markers[names(adult_tcell_markers) %in% specific_program_names],
+                       ped_tcell_markers[names(ped_tcell_markers) %in% specific_program_names])
+
+## Generate list of new genesets
+## Note: these are NOT the genesets used for downstream analysis- used as baseline to assign programs --> generate new markers
+## These markers don't have any pvalue/logFC associated, so difficult to use in some downstream
+new_programs<- list(union=c(union_gene_list, specific_gene_list),
+                    intersect=c(intersect_gene_list, specific_gene_list))
+saveRDS(new_programs, file=paste0(analysis_dir, "merged.ped.adultRank",rank_use, ".genes_specific_shared.union.intersect.Rds"))
+```
+
+## Score all cells for "new" programs, assign max program 
+intersect: 65 cells score <0, 301<.2. Spread evenly across programs
+```{r}
+rank_use<- 9
+new_programs<- readRDS(paste0(analysis_dir, "merged.ped.adultRank",rank_use, ".genes_specific_shared.union.intersect.Rds"))
+union_intersect<-"intersect"
+gene_list<- new_programs[[union_intersect]]
+
+## Score
+scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, gene_list)))
+
+## Assign max program/max score
+scores$MaxProgram<- apply(scores, 1, function(x){names(x)[which.max(x)]})
+scores$MaxScore<- apply(scores[,colnames(scores) != "MaxProgram"], 1, function(x){x[which.max(x)]})
+
+saveRDS(scores, file=paste0(analysis_dir, "scores_merged.ped.adultRank", rank_use, "_specific.sharedBy", union_intersect, ".Rds"))
+```
+
+
+## Compare new assignments to original (confusion matrix)- which is more similar to original?
+Use this to inform the intersect vs union choice
+Separately for ped/adult bc of ped/adult specific programs (treg, stress, etc)
+```{r}
+rank_use<-8
+intersect_name<- paste0("NMF_rank", rank_use, "_annot_mergedByintersect")
+union_name<- paste0("NMF_rank", rank_use, "_annot_mergedByunion")
+original_name<- paste0("NMF_rank", rank_use, "_annot")
+ped_adult<- "Adult"
+
+seurat_tmp<- subset(tcell_seurat, Age==ped_adult)
+meta_tmp<- seurat_tmp@meta.data[,c(intersect_name, union_name, original_name)]
+colnames(meta_tmp)<-c("byIntersect", "byUnion", "Original")
+
+## Confusion matrix for annotations
+intersect_con.mat<-as.data.frame.matrix(table(meta_tmp$Original,
+                          meta_tmp$byIntersect))
+
+union_con.mat<- as.data.frame.matrix(table(meta_tmp$Original,
+                          meta_tmp$byUnion))
+
+## Remove NMF8 (ped)- no markers, no use downstream
+intersect_con.mat<- intersect_con.mat[rownames(intersect_con.mat)!= "8",]
+union_con.mat<- union_con.mat[rownames(union_con.mat)!= "8",]
+meta_tmp<- meta_tmp[meta_tmp$Original != "8",]
+
+## Melt for plotting
+intersect_con.mat$Original<- rownames(intersect_con.mat)
+union_con.mat$Original<- rownames(union_con.mat)
+
+intersect_melt<- melt(intersect_con.mat, id="Original")
+union_melt<- melt(union_con.mat, id="Original")
+
+colnames(intersect_melt)<- c("Original", "New_byIntersect", "NCells")
+colnames(union_melt)<- c("Original", "New_byUnion", "NCells")
+
+## Convert N cells to proportion
+intersect_melt<- intersect_melt %>% dplyr::group_by(Original) %>% mutate(PerCells=NCells/sum(NCells)) %>% as.data.frame()
+union_melt<- union_melt %>% group_by(Original) %>% mutate(PerCells=NCells/sum(NCells)) %>% as.data.frame()
+
+## Plot confusion matrix
+p1<-ggplot(intersect_melt, aes(x=Original, y=New_byIntersect, fill=PerCells))+
+  geom_tile()+
+  scale_fill_gradient(low="white", high="red")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))+
+  ggtitle("Original vs New by intersect")
+
+p2<-ggplot(union_melt, aes(x=Original, y=New_byUnion, fill=PerCells))+
+  geom_tile()+
+  scale_fill_gradient(low="white", high="red")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))+
+  ggtitle("Original vs New by union")
+p1+p2
+ggsave(paste0(figure_dir, "ConfusionMat_",ped_adult, "_NMFrank", rank_use, "_union.v.intersect.png"), width=12, height=5)
+
+## Plot number of cells mismatched in each + total mismatched
+  ## Get number of cells matched/mismatched for intersection/union vs original
+  mismatch<- meta_tmp %>% group_by(Original) %>% dplyr::summarise(intersect_mismatch=sum(Original != byIntersect),
+                                                           intersect_match= sum(Original == byIntersect),
+                                                           union_mismatch=sum(Original != byUnion),
+                                                           union_match= sum(Original == byUnion)) %>% 
+    as.data.frame()
+  
+ ## Remove NMF8, add on "total"
+  mismatch<- mismatch[mismatch$Original != "8",]
+  totals<- as.data.frame(t(as.data.frame(apply(mismatch[,colnames(mismatch) != "Original"], 2, function(x){sum(x)}))))
+  rownames(totals)<- NULL
+  totals$Original<- "Total"
+  mismatch<- rbind(mismatch, totals[,colnames(mismatch)])
+
+  
+  ## melt for plotting
+  mismatch_melt<- melt(mismatch, id="Original")
+  colnames(mismatch_melt)<-c("Original", "variable", "NCells")
+  
+  ## Add on union.intersection/matching columns (splitting melt variable)
+  mismatch_melt$UnionIntersect<- sapply(as.character(mismatch_melt$variable),function(x){unlist(strsplit(x, split="_"))[1]})
+  mismatch_melt$Match<- sapply(as.character(mismatch_melt$variable),function(x){unlist(strsplit(x, split="_"))[2]})
+  
+  ## Plot
+  mismatch_melt$Original<-gsub("\\.", "\n", gsub("Effector", "Effector\n", mismatch_melt$Original))
+  ggplot(mismatch_melt, aes(x=UnionIntersect, y=NCells, fill=Match))+
+    geom_bar(stat="identity", position="stack")+
+    theme_bw()+
+    facet_grid(cols=vars(Original))+
+    theme(axis.text.x = element_text(angle=45, hjust=1))+
+    xlab("")+ylab("Number of cells")
+  
+  ggsave(paste0(figure_dir, "MismatchRate_",ped_adult, "_NMFrank", rank_use, "_union.v.intersect.png"), width=7, height=3)
+
+```
+
+
+
+## Use assignments to generate new gene list
+```{r}
+rank_use<- 8
+union_intersect<-"intersect"
+scores<- readRDS(paste0(analysis_dir, "scores_merged.ped.adultRank", rank_use, "_specific.sharedBy", union_intersect, ".Rds"))
+variable_name<- paste0("NMF_rank", rank_use, "_annot_mergedBy", union_intersect)
+
+## Add max program to seurat
+tcell_seurat@meta.data[[variable_name]]<- plyr::mapvalues(colnames(tcell_seurat), rownames(scores), scores$MaxProgram)
+
+
+## Generate new gene lists
+tcell_seurat<- SetIdent(tcell_seurat, value=tcell_seurat@meta.data[[variable_name]])
+all_markers<- FindAllMarkers(tcell_seurat, min.pct = 0.2)
+all_markers_filtered<- all_markers[all_markers$p_val_adj<0.05 & all_markers$avg_log2FC>0.5,]
+top_markers<- all_markers_filtered %>% group_by(cluster) %>% top_n(n=50, wt=avg_log2FC) %>% as.data.frame()
+
+saveRDS(all_markers_filtered, file=paste0(analysis_dir, "new_markers_NMFrank", rank_use, 
+                                          "_bySeurat_sharedBy", union_intersect, ".Rds"))
+write.csv(top_markers, file=paste0(analysis_dir, "top_markers_NMFrank", rank_use, "bySeurat_sharedBy", union_intersect, ".csv"))
+save(tcell_seurat, file=paste0("../../../01_Preprocessing/03_PreprocessAdultDatasets/analysis/Tcells_Ped.Adult_Merge/",
+                              "adult_ped_tcell_merged_seurat_harmony.Rds"))
+```
+
+
+
+## Compare gene lists between original/by seurat markers
+```{r}
+library(ggVennDiagram)
+
+## Read in annotated gene lists (see above)
+union_intersect<-"intersect"
+rank_use<- 8
+new_markers<- readRDS(paste0(analysis_dir, "new_markers_NMFrank", rank_use, "_bySeurat_sharedBy", union_intersect, ".Rds"))
+old_markers<-  readRDS(paste0(analysis_dir, "merged.ped.adultRank", rank_use, ".genes_specific_shared.union.intersect.Rds"))
+old_markers<- old_markers[[union_intersect]]
+
+
+## Split new markers into list
+new_markers<- split(new_markers, f=new_markers$cluster) 
+new_markers<- lapply(new_markers, function(x){x$gene})
+
+## Venn diagram comparing overlap for genesets
+comparisons<- names(new_markers)
+comparison_list<- lapply(comparisons, function(x){
+  list(Original=old_markers[[x]], New=new_markers[[x]])
+})
+names(comparison_list)<- comparisons
+
+all_plots<- lapply(names(comparison_list), function(x){
+  tmp_list<- comparison_list[[x]]
+  ggVennDiagram(tmp_list, label="count")+
+    scale_fill_gradient(low="white", high="red")+
+    scale_color_manual(values=rep("black", 3))+
+    ggtitle(x)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "VennDiagram_bySeurat_vs_original.sharedBy",union_intersect, "_NMFrank", rank_use, ".png"), 
+       width=9, height=7)
+```
+
+
+
+## Heatmap of top genes for new, by seurat gene lists
+```{r}
+## Read in annotated gene lists
+union_intersect<-"intersect"
+rank_use<-9
+n_top<-5
+tcell_markers<- readRDS(paste0(analysis_dir, "new_markers_NMFrank", rank_use, "_bySeurat_sharedBy", union_intersect, ".Rds"))
+variable_name<- paste0("NMF_rank", rank_use, "_annot_mergedBy", union_intersect)
+
+## Get top genes
+top_genes_lf<- tcell_markers %>% group_by(cluster) %>% top_n(n=n_top, wt=avg_log2FC) %>% as.data.frame()
+top_genes_lf<- top_genes_lf[order(as.character(top_genes_lf$cluster)),]
+  
+
+## plot on heatmap using ped/adult seurat object
+backup<- ScaleData(tcell_seurat, do.scale = FALSE, do.center=TRUE, features=rownames(tcell_seurat))
+DoHeatmap(backup, features=top_genes_lf$gene, group.by = variable_name)+
+  scale_fill_gradient2(low="blue", mid="white", high="red")
+ggsave(paste0(figure_dir, "Heatmap_AllTcells_NMFrank", rank_use, "bySeuratTopMarkers.sharedBy", union_intersect, ".png"), 
+       width = 8, height=12)
+
+```
+
+## UMAP of all tcells by NMF annot
+```{r}
+rank_use<-9
+union_intersect<-"intersect"
+variable_name<- paste0("NMF_rank", rank_use, "_annot_mergedBy", union_intersect)
+
+## With cyto/inhibitory split
+colors_use<-c(Cytotoxic.CD4="red",Cytotoxic.CD8="orange", EffectorMemory="olivedrab", `Inhibitory.CD4`="turquoise",
+              Inhibitory.CD8="blue", Memory="purple", `NK-like`="green", Stress="yellow", Treg="grey22",
+              RiboActive="pink")
+
+DimPlot(tcell_seurat, group.by=variable_name)+
+  scale_color_manual(values=colors_use)
+ggsave(paste0(figure_dir, "UMAP_AllTcells_NMFrank", rank_use, "bySeuratTopMarkers.sharedBy", union_intersect, ".png"), 
+       width=7, height=5)
+
+  ## Plot each individually
+  all_plots<- lapply(unique(tcell_seurat@meta.data[[variable_name]]), function(x){
+    tcell_seurat$tmp<- ifelse(tcell_seurat@meta.data[[variable_name]]==x, x, "Other")
+    DimPlot(tcell_seurat, group.by="tmp")+
+      scale_color_manual(values=c(colors_use, Other="grey"))+NoLegend()+
+      ggtitle(x)
+  })
+  cowplot::plot_grid(plotlist=all_plots, ncol=4)
+  ggsave(paste0(figure_dir, "UMAP_AllTcells_NMFrank", rank_use, "indv_bySeuratTopMarkers.sharedBy", union_intersect, ".png"),
+         width=12, height=9)
+  
+
+```
+
+## Breakdown of each program by age
+```{r}
+rank_use<-8
+union_intersect<-"intersect"
+variable_name<- paste0("NMF_rank", rank_use, "_annot_mergedBy", union_intersect)
+
+## Number of ped/adult cells by program
+df_bd<- as.data.frame(table(tcell_seurat$Age, tcell_seurat@meta.data[[variable_name]]))
+colnames(df_bd)<-c("Age", "Program", "Ncells")
+
+## Normalize cell counts to account for difference in cohort size- so ped/adult are weighted the same
+nCells<- table(tcell_seurat$Age)
+normFactor<- max(nCells)/nCells
+df_bd$NormFactor<- as.numeric(as.character(plyr::mapvalues(df_bd$Age, names(normFactor), normFactor)))
+df_bd$Ncells_norm<- df_bd$Ncells * df_bd$NormFactor
+
+## Proportion of normalized ped/adult counts per program
+df_bd<- df_bd %>% group_by(Program) %>% mutate(perCells_norm=Ncells_norm/sum(Ncells_norm)) %>% as.data.frame()
+
+ggplot(df_bd, aes(x=Program, y=perCells_norm, fill=Age))+
+  geom_bar(stat="identity", position="stack")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))+
+  xlab("")+ylab("Proportion of cells\nNormalized for cohort size")+
+  scale_fill_manual(values=c(Ped="red", Adult="blue"))+
+  geom_hline(yintercept = 0.5, linetype="dashed")
+ggsave(paste0(figure_dir, "NormalizedCellProportion_byAge_byProgram.rank", rank_use, "_mergedBy", union_intersect, ".png"), width=5, height=3)
+```
+
+
+## Expression of expected marker genes based on NMF annotation
+```{r}
+rank_use<-8
+union_intersect<-"union"
+variable_name<- paste0("NMF_rank", rank_use, "_annot_mergedBy", union_intersect)
+
+DotPlot(tcell_seurat, group.by = variable_name, 
+        features=c("CD4", "CD8A", "GZMK", "KLRB1","PTGER2","CTLA4","LAG3", "TIGIT","PDCD1", 
+                   "HAVCR2", "TOP2A", "CCR7", "GNLY", "HSPA1A", "FOXP3"))+
+  xlab("") + ylab("")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))
+ggsave(paste0(figure_dir, "DotPlot_expectedMarkerGenes_forNMFrank", rank_use, "_bySeuratTopMarkers.sharedBy", 
+              union_intersect, ".png"), 
+       width=7, height=4)
+
+## Split all into ped/adult
+tcell_seurat$tmp<- paste0(tcell_seurat@meta.data[[variable_name]], "_", tcell_seurat$Age)
+DotPlot(tcell_seurat, group.by = "tmp", 
+        features=c("CD4", "CD8A", "GZMK","KLRB1","PTGER2", "CTLA4","LAG3", "TIGIT","PDCD1", 
+                   "HAVCR2", "TOP2A", "CCR7", "GNLY", "HSPA1A", "FOXP3"))+
+  xlab("") + ylab("")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))
+ggsave(paste0(figure_dir, "DotPlot_expectedMarkerGenes_forNMFrank", rank_use, "_bySeuratTopMarkers.sharedBy", 
+              union_intersect, ".byAge.png"), 
+       width=8, height=5)
+
+```
+
+
+## Add on annotations to individual ped/adult tcell seurat objects
+```{r}
+cohort<- "pedOnly_nomuv63"
+ped_tcell<- readRDS(paste0("../../../01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/",
+                           cohort, "/tcell_seurat_harmony.Rds" ))
+
+adult_tcell<- readRDS(paste0("../../../02a_Tcells/01b_Adult/01_NMF/analysis/deNovoNMF/tcell_seurat.Rds"))
+
+## Map annotations on
+## A few (13 cells) not in original- removed due to annotation/clustering issue. Rename NMF as "Unclear"; so few cells, issue not worth revisitng
+rank_use<- 8
+sharedBy<- "union"
+variable_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy)
+
+ped_tcell@meta.data[[variable_name]]<-ifelse(colnames(ped_tcell) %in% colnames(tcell_seurat), 
+                                             plyr::mapvalues(colnames(ped_tcell), colnames(tcell_seurat),
+                                                       tcell_seurat@meta.data[[variable_name]],
+                                                       warn_missing = FALSE),
+                                             "Unclear")
+adult_tcell@meta.data[[variable_name]]<- ifelse(colnames(adult_tcell) %in% colnames(tcell_seurat), 
+                                             plyr::mapvalues(colnames(adult_tcell), colnames(tcell_seurat),
+                                                       tcell_seurat@meta.data[[variable_name]],
+                                                       warn_missing = FALSE),
+                                             "Unclear")
+
+
+saveRDS(ped_tcell, file=paste0("../../../01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/",
+                           cohort, "/tcell_seurat_harmony.Rds" ) )
+saveRDS(adult_tcell, file=paste0("../../../02a_Tcells/01b_Adult/01_NMF/analysis/deNovoNMF/tcell_seurat.Rds"))
+```
+
+
+
+## Exploratory- can delete
+```{r}
+adult_tregs<- subset(tcell_seurat, NMF_rank7_annot=="Treg")
+test<- as.data.frame(t(adult_tregs@assays$RNA@data[c("CTLA4", "TIGIT","HAVCR2", "FOXP3"),]))
+test<- test[rowSums(test)>0,]
+hist(test$FOXP3)
+test$lowfoxp3<- test$FOXP3<0.5 ## 430 tregs with no/low foxp3
+test<- melt(test, id="lowfoxp3")
+colnames(test)<-c("FOXP3_expr", "Gene", "logTPM")
+ggplot(test, aes(x=Gene, y=logTPM, fill=FOXP3_expr))+
+  geom_boxplot()
+
+
+ped<- subset(tcell_seurat, Age=="Ped")
+foxp3<- as.data.frame(t(ped@assays$RNA@data[c("FOXP3", "TIGIT"),]))
+foxp3$nmf<- plyr::mapvalues(rownames(foxp3), colnames(ped), ped$NMF_rank7_annot)
+foxp3$potential_tregs<- foxp3$FOXP3>2
+table(foxp3$potential_tregs, foxp3$nmf)
+
+inh_expressors<- as.data.frame(t(tcell_seurat@assays$RNA@data[c("TIGIT", "HAVCR2", "CTLA4", "FOXP3"),]))
+inh_expressors<- inh_expressors[rowSums(inh_expressors)!=0,]
+inh_expressors$mean_inh<- rowMeans(inh_expressors[,c("TIGIT", "HAVCR2", "CTLA4")])
+inh_expressors$highFOXP3<- inh_expressors$FOXP3>2
+inh_expressors$lowFox.highInh<- inh_expressors$mean_inh>2 & !inh_expressors$highFOXP3
+inh_expressors$program<- plyr::mapvalues(rownames(inh_expressors), colnames(tcell_seurat), tcell_seurat$NMF_rank7_annot_mergedByintersect,
+                                         warn_missing = FALSE)
+table(inh_expressors$program, inh_expressors$lowFox.highInh)
+
+test<- subset(tcell_seurat, NMF_rank9_annot_mergedByunion %in% c("Inhibitory.CD4", "Inhibitory.CD8",
+                                                                 "Cytotoxic.CD4", "Cytotoxic.CD8"))
+test_meta<- test@meta.data
+test<- RunFullSeurat(test@assays$RNA@counts, RunHarmony = TRUE, samples=test_meta$sampleid)
+test<- AddMetaData(test, test_meta[,!colnames(test_meta) %in% colnames(test@meta.data)])
+DimPlot(test, group.by="NMF_rank9_annot_mergedByunion")
+```
+

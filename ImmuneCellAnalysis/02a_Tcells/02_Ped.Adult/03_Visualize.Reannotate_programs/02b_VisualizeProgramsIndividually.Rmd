@@ -1,0 +1,270 @@
+---
+title: "Visualize_reannotate_programs"
+output: html_document
+---
+
+## Purpose:
+NMF programs were generated based on 1) de novo NMF separately for ped/adult Tcells 2) correlating programs 3) keeping "specific" programs separate, but merging "shared" programs --> score --> assign max -->regenerate gene lists. These programs are annotated based on correlation with original ped cd4/cd8 programs (no longer in use, archived). Some of these annotations make sense, but others (like "CD4_Inhibitory") don't. Here, basic visualizations of these programs, comparing ped/adult proportions, GO terms, marker genes- all used to help re-annotate programs as needed
+
+
+## Approach:
+First, just want to do basic visualizations (proportion of programs in cd4/cd8), then compare differences in ped/adult proportions within CD4/CD8. Then various visualizations to help annotate: GO terms, marker genes, etc. Re-annotate programs as needed, then update seurat objects + marker gene lists as needed to reflect this
+
+
+```{r}
+library(Seurat) 
+library(clusterProfiler)
+library(biomaRt)
+library(stringr)
+library(harmony)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/02a_Tcells/02_Ped.Adult/", 
+                     "03_Visualize.Reannotate_programs/")
+
+analysis_dir_tmp<- paste0(working_dir, "/analysis/VisualizeProgramsIndv/")
+figure_dir_tmp<- paste0(working_dir, "/figures/VisualizeProgramsIndv/")
+
+if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp,recursive = TRUE)}
+if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+```
+
+
+## Read in ped tcell seurat object. Contains NMF assignments (annots added in deNovoPedTcell.v.deNovoAdultTcell, based on correlation with adult T cell + correlation with ped cd4/cd8 programs)
+```{r}
+rank_use<-8
+sharedBy<- "union" 
+data_dir<- paste0("../02_detailed_annot/analysis/identifyCD4.CD8_byNMF/", "rank",rank_use, "_sharedBy", sharedBy, "/" )
+
+## figure/analysis dir based on rank + how shared programs are merged
+figure_dir<- paste0(figure_dir_tmp, "rank", rank_use, "_sharedBy", sharedBy, "/")
+analysis_dir<- paste0(analysis_dir_tmp, "rank", rank_use, "_sharedBy", sharedBy, "/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir,recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+  
+## ped/adult tcell seurat objects
+cd4_seurat<- readRDS(paste0(data_dir, "ped.adult_seurat_cd4_harmony.Rds"))
+cd8_seurat<-readRDS(paste0(data_dir, "ped.adult_seurat_cd8_harmony.Rds"))
+tcell_seurat<- readRDS(paste0(data_dir, "ped.adult_seurat_tcell_harmony.Rds"))
+
+## Read in marker genes
+program_markers<- readRDS(paste0("../01_compare_NMF/analysis/newMarkers_deNovoPed.AdultTcell/", 
+                                 "new_markers_NMFrank", rank_use, "_bySeurat_sharedBy", sharedBy, "_reAnnot.Rds"))
+
+## Read in scores
+all_scores<- readRDS(paste0("../01_compare_NMF/analysis/newMarkers_deNovoPed.AdultTcell/",
+                            "scores_merged.ped.adultRank", rank_use, "_specific.sharedBy", sharedBy, "_reAnnot.Rds"))
+
+## Read in colors to use
+program_colors<- readRDS(paste0("../../../plot_colors/Tcell.programs_rank", rank_use, "sharedBy", sharedBy, "_reAnnot.Rds"))
+celltype_colors<- readRDS(paste0("../../../plot_colors/Tcell.celltypes.Rds"))
+
+## Read in seurat list, harmony-integrated for each program separately, split by cd4/cd8 (below)
+seurat_list<- readRDS(paste0(analysis_dir, "seurat_list_splitByNMF.CD4.CD8.Rds"))
+
+## list of Nature 2020 markers
+all_markers<- list(cytotoxic= c("CX3CR1", "PRF1", "GZMA", "GZMB", "GZMH",  "FGFBP2","KLRG1", "FCGR3A"),
+                   naive=c("TCF7", "CCR7", "SELL", "LEF1"),
+                   predysfunctional=c("GZMK", "PDCD1", "CXCR3"),
+                   dysfunctional= c("HAVCR2", "GZMB","IFNG", "CXCL13", "TIGIT", "LAYN", "LAG3", 
+                                    "PDCD1", "CTLA4", "ITGAE", "ENTPD1")) 
+
+cycling_genes<- read.table(paste0(base_dir,"Dropbox (Partners HealthCare)/FilbinLab/data_analysis/",
+                                "Marker_genes/regev_lab_cell_cycle_genes.txt"))
+```
+
+
+## Cycle through each seurat list for each program, adding on detailed_annot from full seurat and splitting to CD4/CD8
+```{r}
+## For renaming genelist after AddModuleScore
+rename_cols<-paste0(names(all_markers), 1:4); names(rename_cols)<-names(all_markers)
+
+## Cycle through each seurat list for each program, adding on detailed_annot from full seurat and splitting to CD4/CD8
+new_seurat_list<- lapply(names(seurat_list), function(program){
+  x<- seurat_list[[program]]
+  x@meta.data[[program_name]]<-program
+  print(unique(x@meta.data[[program_name]]))
+  x$detailed_annotByNMF<- plyr::mapvalues(colnames(x), colnames(tcell_seurat), tcell_seurat@meta.data[[annot_name]],
+                                          warn_missing = FALSE)
+  x<- AddModuleScore(x, all_markers, name=names(all_markers))
+  colnames(x@meta.data)<- plyr::mapvalues(colnames(x@meta.data), rename_cols, names(rename_cols))
+  if(sum(x$detailed_annotByNMF=="CD4")>0){
+    cd4_tmp<- subset(x, detailed_annot=="CD4"); cd4_meta<- cd4_tmp@meta.data
+    cd4_tmp<- RunFullSeurat(cd4_tmp@assays$RNA@counts, RunHarmony = TRUE, samples=cd4_meta$sampleid)
+    cd4_tmp<- AddMetaData(cd4_tmp, cd4_meta[,!colnames(cd4_meta) %in% colnames(cd4_tmp@meta.data)])
+  }else{cd4_tmp<-NULL}
+  
+  if(sum(x$detailed_annotByNMF=="CD8")>0){
+    cd8_tmp<- subset(x, detailed_annot=="CD8"); cd8_meta<- cd8_tmp@meta.data
+    cd8_tmp<- RunFullSeurat(cd8_tmp@assays$RNA@counts, RunHarmony = TRUE, samples=cd8_meta$sampleid)
+    cd8_tmp<- AddMetaData(cd8_tmp, cd8_meta[,!colnames(cd8_meta) %in% colnames(cd8_tmp@meta.data)])
+  }else{cd8_tmp<-NULL}
+  new_list<- list(cd4=cd4_tmp, cd8=cd8_tmp)
+  return(new_list)
+  
+})
+names(new_seurat_list)<-names(seurat_list)
+saveRDS(new_seurat_list, file=paste0(analysis_dir, "seurat_list_splitByNMF.CD4.CD8.Rds"))
+```
+
+## Read in processed seurat list, split by both program and cd4/cd8
+```{r}
+new_seurat_list<- readRDS(paste0(analysis_dir, "seurat_list_splitByNMF.CD4.CD8.Rds"))
+
+
+annot_name<- paste0("detailed_annot_byNMFrank", rank_use, "_mergedBy", sharedBy)
+program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
+```
+
+## Plot Nature 2020 markers individually for each program: CD8
+```{r}
+## Plot each cd8 seurat module socres
+cd8_seurat_list<- lapply(new_seurat_list, function(x){x$cd8})
+cd8_seurat_list<- cd8_seurat_list[unlist(lapply(cd8_seurat_list, function(x){!is.null(x)}))]
+cd8_plots<- lapply(cd8_seurat_list, function(x){
+  program<- unique(x@meta.data[[program_name]])
+  all_plots<- lapply(names(all_markers), function(y){
+    FeaturePlot(x, features=y)+scale_color_gradient2(low="blue", mid="white", high="red")+
+      ggtitle(paste0(program, "\n", y))
+  })
+  p<- cowplot::plot_grid(plotlist=all_plots, ncol=2)
+  return(p)
+})
+cowplot::plot_grid(plotlist=cd8_plots, ncol=2)
+ggsave(paste0(figure_dir, "CD8_ByProgram_Nature2020ProgramScores.png"), width=12, height=24)
+
+## To support CD8 scores- expression of expected marker genes in each program
+cd8_plots<- lapply(cd8_seurat_list, function(x){
+  program<- unique(x@meta.data[[program_name]])
+  all_plots<- lapply(c("GNLY", "CCR7", "CCL4", "PDCD1"), function(y){
+    FeaturePlot(x, features=y)+scale_color_gradient(low="lightgrey", high="red")+
+      ggtitle(paste0(program, "\n", y))
+  })
+  p<- cowplot::plot_grid(plotlist=all_plots, ncol=2)
+  return(p)
+})
+cowplot::plot_grid(plotlist=cd8_plots, ncol=2)
+ggsave(paste0(figure_dir, "CD8_ByProgram_MarkerGenes.png"), width=12, height=24)
+
+## To support CD8 scores- ORIGINAL (pre-merging) NMF annotations
+cd8_plots<- lapply(cd8_seurat_list, function(x){
+  DimPlot(x, group.by = "NMF_rank8_annot")+ggtitle(unique(x@meta.data[[program_name]]))
+})
+cowplot::plot_grid(plotlist=cd8_plots, ncol=3)
+ggsave(paste0(figure_dir, "CD8_ByProgram_OriginalRank8Annots.png"), width=12, height=8)
+```
+
+
+## Plot Nature 2020 markers individually for each program: CD4
+```{r}
+## Plot each cd4 seurat module socres
+cd4_seurat_list<- lapply(new_seurat_list, function(x){x$cd4})
+cd4_seurat_list<- cd4_seurat_list[unlist(lapply(cd4_seurat_list, function(x){!is.null(x)}))]
+cd4_plots<- lapply(cd4_seurat_list, function(x){
+  program<- unique(x@meta.data[[program_name]])
+  all_plots<- lapply(names(all_markers), function(y){
+    FeaturePlot(x, features=y)+scale_color_gradient2(low="blue", mid="white", high="red")+
+      ggtitle(paste0(program, "\n", y))
+  })
+  p<- cowplot::plot_grid(plotlist=all_plots, ncol=2)
+  return(p)
+})
+cowplot::plot_grid(plotlist=cd4_plots, ncol=2)
+ggsave(paste0(figure_dir, "CD4_ByProgram_Nature2020ProgramScores.png"), width=12, height=24)
+
+```
+
+## Dotplot of Nature2020 scores + GOI, separately for CD4/CD8
+```{r}
+DotPlot(cd8_seurat, features=c("ENTPD1", "ITGAE", "TNFRSF9", "CCL4L1", "PDCD1", "CTLA4", "LAG3", "GZMK", "GNLY",
+                               names(all_markers)),
+        group.by = "tmp")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))
+
+## remove cycling genes from seurat object, rerun clustering- where does Inhibitory.Cycling fall?
+```
+
+
+
+## Subset CD8 to just cytotoxic/inhibitory programs, rerun clustering. Any pattern in markers?
+```{r}
+program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
+subset_to<- c("Cytotoxic", "Predysfunctional", "Inhibitory.Cycling", "Inhibitory")
+remove_cycling<- FALSE
+analysis_name<- "Cyto.Predys"
+
+
+## Subset to programs of interest
+cd8_seurat$tmp<- cd8_seurat@meta.data[[program_name]]
+cd8_cyto.inh<- subset(cd8_seurat, tmp %in% subset_to)
+cd8_cyto.inh_meta<- cd8_cyto.inh@meta.data
+
+## Remove cycling genes if desired
+cm<- cd8_cyto.inh@assays$RNA@counts
+if(remove_cycling){cm<- cm[!rownames(cm) %in% cycling_genes$V1,]}else{cm<- cm}
+
+## rerun clustering
+cd8_cyto.inh<- RunFullSeurat(cm, RunHarmony = TRUE, samples=cd8_cyto.inh$sampleid)
+cd8_cyto.inh<-AddMetaData(cd8_cyto.inh, cd8_cyto.inh_meta[,!colnames(cd8_cyto.inh_meta) %in% colnames(cd8_cyto.inh@meta.data)])
+
+
+## Plot by program
+DimPlot(cd8_cyto.inh, group.by = program_name, reduction="umap")+
+  scale_color_manual(values=program_colors[names(program_colors) %in% unique(cd8_cyto.inh@meta.data[[program_name]])])
+ggsave(paste0(figure_dir, "CD8_",analysis_name, "_UMAP_programs.png"), width=6, height=4.5)
+
+DimPlot(cd8_cyto.inh, group.by = program_name, reduction="pca")+
+  scale_color_manual(values=program_colors[names(program_colors) %in% unique(cd8_cyto.inh@meta.data[[program_name]])])
+ggsave(paste0(figure_dir, "CD8_",analysis_name, "_PCA_programs.png"), width=6, height=4.5)
+
+## Plot by scores for Nature2020 genesets
+FeaturePlot(cd8_cyto.inh, features=names(all_markers), reduction = "pca")
+ggsave(paste0(figure_dir, "CD8_",analysis_name, "_PCA_Nature2020.dysfunction.cyto.genesets.png"), width=9, height=9)
+
+## Plot by genes of interest
+FeaturePlot(cd8_cyto.inh, features=c("ENTPD1", "ITGAE", "TNFRSF9", "CCL4L1", "PDCD1", "CTLA4", "LAG3", "GZMK", "GNLY", "KLRB1", "TIGIT"),
+            reduction="pca")
+ggsave(paste0(figure_dir, "CD8_",analysis_name, "_PCA_dysfunction.cyto.markers.png"), width=12, height=9)
+
+## Loading genes for PC2? Based on expression pattern, high CCL4L1 expression- others?
+pca_loadings<- as.data.frame(Loadings(cd8_cyto.inh, reduction = "pca")[, 1:2])
+
+  ## Top genes contributing to PC1/PC2
+  pca_loadings_pos<- lapply(colnames(pca_loadings), function(x){
+    tmp<- pca_loadings[,x]
+    names(tmp)<- rownames(pca_loadings)
+    tmp<- tmp[order(abs(tmp), decreasing = TRUE)]
+    return(tmp)
+  })
+  names(pca_loadings_pos)<- colnames(pca_loadings)
+  
+  ## Plot PC2 genes
+  FeaturePlot(cd8_cyto.inh, features=names(pca_loadings_pos$PC_2)[1:9],reduction = "pca")
+  ggsave(paste0(figure_dir, "PC2.loading_CD8_",analysis_name, "_PCA_dysfunction.cyto.markers.png"), 
+         width=12, height=9)
+  
+  ## Plot PC1 genes
+  FeaturePlot(cd8_cyto.inh, features=names(pca_loadings_pos$PC_1)[1:9],reduction = "pca")
+  ggsave(paste0(figure_dir, "PC1.loading_CD8_",analysis_name, "_PCA_dysfunction.cyto.markers.png"), 
+         width=12, height=9)
+  
+## When removing cycling genes: what are markers of inhibitory.Cycling now?
+cd8_cyto.inh<- SetIdent(cd8_cyto.inh, value = cd8_cyto.inh$tmp)
+all_markers<- FindAllMarkers(cd8_cyto.inh, min.pct = 0.2)
+all_markers_filtered<- all_markers[all_markers$p_val_adj<0.05 & all_markers$avg_log2FC>0.2,]
+top_n<- all_markers_filtered %>% group_by(cluster) %>% top_n(n=20, wt=avg_log2FC) %>% as.data.frame()
+
+saveRDS(cd8_cyto.inh, file=paste0(analysis_dir, "cd8_seurat_",analysis_name, ".Rds"))
+```
+
+

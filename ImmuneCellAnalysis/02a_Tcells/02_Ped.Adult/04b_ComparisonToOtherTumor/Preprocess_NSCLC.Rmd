@@ -1,0 +1,285 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+## Purpose:
+Overall goal is to compare tcells in NSCLC (known to have reasonably good response to checkpoint therapies) to tcells in gliomas. Here, preprocess NSCLC scRNAseq data
+
+## Approach:
+Read in NSCLC count matrix (GSE99254), process to seurat object, add annotations
+
+Paper used: Global characterization of T cells in non-small-cell lung cancer by single-cell sequencing
+
+```{r}
+library(Seurat) 
+library(harmony)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/", 
+                     "02a_Tcells/02_Ped.Adult/04b_ComparisonToOtherTumor/")
+
+analysis_dir<- paste0(working_dir, "/analysis/NSCLC/")
+figure_dir<- paste0(working_dir, "/figures/NSCLC/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir,recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+```
+
+## Read in cell anntotations and sample metadata
+```{r}
+cell_annot<- read.csv("data/cell_annot_from_lung.cancer-pku.cn.csv")
+sample_meta<- read.csv("data/nsclc_patient_metadata.csv")
+
+## Reformat to match count matrix
+cell_annot$Cell.ID<- gsub("-", ".", cell_annot$Cell.ID)
+```
+
+## Read in count matrix 
+```{r}
+cm<- read.table("data/GSE99254_NSCLC.TCell.S12346.TPM.txt", header=TRUE)
+
+## Remove na at end of count matrix
+cm<- cm[!is.na(cm$geneID),]
+cm<- cm[!is.na(cm$symbol),]
+```
+
+#########
+## CD8 ##
+#########
+
+
+## Subset to just CD8 T cells, process
+```{r}
+cd8_cm<-cm[,colnames(cm) %in% cell_annot$Cell.ID[cell_annot$cellType=="C"]]
+rownames(cd8_cm)<- cm$symbol
+
+## Convert to numeric
+cd8_cm<- as.data.frame(apply(cd8_cm, 2, function(x){as.numeric(x)}))
+rownames(cd8_cm)<- cm$symbol
+
+## Subset annotations to cd8
+cd8_annot<- cell_annot[cell_annot$cellType=="C",]
+sum(colnames(cd8_cm)!=cd8_annot$Cell.ID)
+rownames(cd8_annot)<- cd8_annot$Cell.ID
+
+## Run seurat clustering
+cd8_seurat<- RunFullSeurat(cd8_cm, RunHarmony=TRUE, samples=cd8_annot$patient)
+
+## Add on metadata
+cd8_seurat<-AddMetaData(cd8_seurat, cd8_annot)
+cd8_seurat$age_numeric<- as.numeric(as.character(plyr::mapvalues(cd8_seurat$sample, sample_meta$Patient.ID, sample_meta$Age)))
+cd8_seurat$sex<- as.character(plyr::mapvalues(cd8_seurat$sample, sample_meta$Patient.ID, sample_meta$Sex))
+
+saveRDS(cd8_seurat, file=paste0(analysis_dir, "cd8_seurat_tumor.normal.pb_nsclc.Rds"))
+```
+
+
+## Basic plots of cd8 seurat object
+```{r}
+cd8_seurat<- readRDS(paste0(analysis_dir, "cd8_seurat_tumor.normal.pb_nsclc.Rds"))
+
+## By normal/peripheral/tumor-infiltrating
+DimPlot(cd8_seurat, group.by = "tissueType")
+ggsave(paste0(figure_dir, "NSCLC_cd8_bytissueType.png"), width=6, height=5.5)
+
+## By sample
+DimPlot(cd8_seurat, group.by = "patient")
+ggsave(paste0(figure_dir, "NSCLC_cd8_bySample.png"), width=6, height=5.5)
+
+## By major cluster
+DimPlot(cd8_seurat, group.by = "majorCluster")
+ggsave(paste0(figure_dir, "NSCLC_cd8_byCellType.png"), width=6, height=5.5)
+
+## Cell type by tissue- are all cell types found in tumor-infiltrating?
+df<- cd8_seurat@meta.data %>% 
+  group_by(tissueType, majorCluster) %>% 
+  summarise(nCells=n()) %>% 
+  group_by(tissueType) %>%
+  mutate(perCells=nCells/sum(nCells)) %>%
+  as.data.frame()
+ggplot(df, aes(x=tissueType, y=perCells, fill=majorCluster))+
+  geom_bar(stat="identity")
+ggsave(paste0(figure_dir, "NSCLC_cd8_CellTypebyTissueType.png"), width=5, height=4)
+```
+
+## Rename majorCluster in cd8 to reflect cell annot described in Nature2020
+```{r}
+major_clust<- unique(cd8_seurat$majorCluster)
+names(major_clust)<-c("CD28", "Cytotoxic","Naive", "MAIT", "Predysfunctional", "Predysfunctional.2", "Dysfunctional")
+
+cd8_seurat$majorCluster_annot<- plyr::mapvalues(cd8_seurat$majorCluster, major_clust, names(major_clust))
+
+## Summary plots by annotated clusters
+  ## By major cluster
+  DimPlot(cd8_seurat, group.by = "majorCluster_annot")
+  ggsave(paste0(figure_dir, "NSCLC_cd8_byCellType_annot.png"), width=6, height=5.5)
+  
+  ## Cell type by tissue- are all cell types found in tumor-infiltrating?
+  df<- cd8_seurat@meta.data %>% 
+    group_by(tissueType, majorCluster_annot) %>% 
+    summarise(nCells=n()) %>% 
+    group_by(tissueType) %>%
+    mutate(perCells=nCells/sum(nCells)) %>%
+    as.data.frame()
+  ggplot(df, aes(x=tissueType, y=perCells, fill=majorCluster_annot))+
+    geom_bar(stat="identity")
+  ggsave(paste0(figure_dir, "NSCLC_cd8_CellTypeAnnotbyTissueType.png"), width=5, height=4)
+  
+  ## Dotplot of GOI
+  cd8_seurat$majorCluster_annot<- factor(cd8_seurat$majorCluster_annot,
+                                         levels=c("MAIT", "CD28", "Naive", 
+                                                  "Cytotoxic", "Predysfunctional", "Predysfunctional.2", "Dysfunctional"))
+  DotPlot(cd8_seurat, group.by = "majorCluster_annot", 
+          features=c("SLC4A10","CD28", "SELL", "CCR7", 
+                     "CXCR1", "PRF1", "GNLY",
+                     "GZMK", "ITGAE", "PDCD1", "HAVCR2", "TIGIT", "CTLA4"))+
+    theme(axis.text.x = element_text(angle=45, hjust=1))
+  ggsave(paste0(figure_dir, "NSCLC_cd8_DotPlot_cellTypeAnnot.png"), width=8, height=4)
+  
+saveRDS(cd8_seurat, file=paste0(analysis_dir, "cd8_seurat_tumor.normal.pb_nsclc.Rds"))
+```
+
+#########
+## CD4 ##
+#########
+
+
+## Subset to just CD8 T cells, process
+```{r}
+cd4_cm<-cm[,colnames(cm) %in% cell_annot$Cell.ID[cell_annot$cellType!="C"]]
+rownames(cd4_cm)<- cm$symbol
+
+## Convert to numeric
+cd4_cm<- as.data.frame(apply(cd4_cm, 2, function(x){as.numeric(x)}))
+rownames(cd4_cm)<- cm$symbol
+
+## Subset annotations to cd4
+cd4_annot<- cell_annot[cell_annot$cellType!="C",]
+sum(colnames(cd4_cm)!=cd4_annot$Cell.ID)
+rownames(cd4_annot)<- cd4_annot$Cell.ID
+
+## Run seurat clustering
+cd4_seurat<- RunFullSeurat(cd4_cm, RunHarmony=TRUE, samples=cd4_annot$patient)
+
+## Add on metadata
+cd4_seurat<-AddMetaData(cd4_seurat, cd4_annot)
+cd4_seurat$age_numeric<- as.numeric(as.character(plyr::mapvalues(cd4_seurat$sample, sample_meta$Patient.ID, sample_meta$Age)))
+cd4_seurat$sex<- as.character(plyr::mapvalues(cd4_seurat$sample, sample_meta$Patient.ID, sample_meta$Sex))
+
+saveRDS(cd4_seurat, file=paste0(analysis_dir, "cd4_seurat_tumor.normal.pb_nsclc.Rds"))
+```
+
+
+## Basic plots of cd4 seurat object
+```{r}
+cd4_seurat<- readRDS(paste0(analysis_dir, "cd4_seurat_tumor.normal.pb_nsclc.Rds"))
+
+## By normal/peripheral/tumor-infiltrating
+DimPlot(cd4_seurat, group.by = "tissueType")
+ggsave(paste0(figure_dir, "NSCLC_cd4_bytissueType.png"), width=6, height=5.5)
+
+## By sample
+DimPlot(cd4_seurat, group.by = "patient")
+ggsave(paste0(figure_dir, "NSCLC_cd4_bySample.png"), width=6, height=5.5)
+
+## By major cluster
+DimPlot(cd4_seurat, group.by = "majorCluster")
+ggsave(paste0(figure_dir, "NSCLC_cd4_byCellType.png"), width=6, height=5.5)
+
+## Cell type by tissue- are all cell types found in tumor-infiltrating?
+df<- cd4_seurat@meta.data %>% 
+  group_by(tissueType, majorCluster) %>% 
+  summarise(nCells=n()) %>% 
+  group_by(tissueType) %>%
+  mutate(perCells=nCells/sum(nCells)) %>%
+  as.data.frame()
+ggplot(df, aes(x=tissueType, y=perCells, fill=majorCluster))+
+  geom_bar(stat="identity")
+ggsave(paste0(figure_dir, "NSCLC_cd4_CellTypebyTissueType.png"), width=5, height=4)
+```
+
+## Rename majorCluster in cd4 to reflect cell annot described in Nature2020
+```{r}
+major_clust<- unique(cd4_seurat$majorCluster)
+names(major_clust)<-c("CD69", "GZMA", "Cytotoxic", "Naive", "Treg", "ANXA1", "ActivatedCD4", 
+                      "ActivatedTreg", "Dysfunctional")
+
+cd4_seurat$majorCluster_annot<- plyr::mapvalues(cd4_seurat$majorCluster, major_clust, names(major_clust))
+
+## Summary plots by annotated clusters
+  ## By major cluster
+  DimPlot(cd4_seurat, group.by = "majorCluster_annot")
+  ggsave(paste0(figure_dir, "NSCLC_cd4_byCellType_annot.png"), width=6, height=5.5)
+  
+  ## Cell type by tissue- are all cell types found in tumor-infiltrating?
+  df<- cd4_seurat@meta.data %>% 
+    group_by(tissueType, majorCluster_annot) %>% 
+    summarise(nCells=n()) %>% 
+    group_by(tissueType) %>%
+    mutate(perCells=nCells/sum(nCells)) %>%
+    as.data.frame()
+  ggplot(df, aes(x=tissueType, y=perCells, fill=majorCluster_annot))+
+    geom_bar(stat="identity")
+  ggsave(paste0(figure_dir, "NSCLC_cd4_CellTypeAnnotbyTissueType.png"), width=5, height=4)
+  
+  ## Dotplot of GOI
+  DotPlot(cd4_seurat, group.by = "majorCluster_annot", 
+          features=c("CCR7", "FOXP3", "EOMES", "ANXA1", "CD69",
+                     "CXCR1", "PRF1", "GNLY",
+                     "GZMK", "ITGAE", "PDCD1", "HAVCR2", "TIGIT", "CTLA4"))+
+    theme(axis.text.x = element_text(angle=45, hjust=1))
+  ggsave(paste0(figure_dir, "NSCLC_cd4_DotPlot_cellTypeAnnot.png"), width=8, height=4)
+  
+saveRDS(cd4_seurat, file=paste0(analysis_dir, "cd4_seurat_tumor.normal.pb_nsclc.Rds"))
+```
+
+## Subset to just tumor-infiltrating
+```{r}
+cd4_seurat<- readRDS(paste0(analysis_dir, "cd4_seurat_tumor.normal.pb_nsclc.Rds"))
+
+cd4_tumor<- subset(cd4_seurat, tissueType=="T")
+
+## Rerun clustering
+cd4_tumor_meta<- cd4_tumor@meta.data
+cd4_tumor<- RunFullSeurat(cd4_tumor@assays$RNA@counts, RunHarmony = TRUE, samples=cd4_tumor_meta$sample)
+cd4_tumor<- AddMetaData(cd4_tumor, cd4_tumor_meta[,!colnames(cd4_tumor_meta) %in% colnames(cd4_tumor@meta.data)])
+
+## By major cluster
+DimPlot(cd4_tumor, group.by = "majorCluster_annot")
+ggsave(paste0(figure_dir, "NSCLC_cd4Tumor_byCellType_annot.png"), width=6, height=5.5)
+
+## Dotplot of GOI
+DotPlot(cd4_tumor, group.by = "majorCluster_annot", 
+        features=c("CCR7", "FOXP3", "EOMES", "ANXA1", "CD69",
+                     "CXCR1", "PRF1", "GNLY",
+                     "GZMK", "ITGAE", "PDCD1", "HAVCR2", "TIGIT", "CTLA4"))+
+  theme(axis.text.x = element_text(angle=45, hjust=1))
+ggsave(paste0(figure_dir, "NSCLC_cd4Tumor_DotPlot_cellTypeAnnot.png"), width=8, height=4)
+  
+saveRDS(cd4_seurat, file=paste0(analysis_dir, "cd4_seurat_nsclc.Rds"))
+```
+
+
+## Rename cluster markers with annotations
+```{r}
+nsclc_markers<- read.csv("data/nsclc_cd4_cluster_markers.csv")
+
+major_clust<- gsub("_", "-", unique(cd4_seurat$majorCluster))
+names(major_clust)<-c("CD69", "GZMA", "Cytotoxic", "Naive", "Treg", "ANXA1", "ActivatedCD4", 
+                      "ActivatedTreg", "Dysfunctional")
+
+nsclc_markers$Cluster<- plyr::mapvalues(nsclc_markers$Cluster, major_clust, names(major_clust))
+nsclc_markers$Cluster<- gsub("CD4-C9-CTLA4", "ActivatedTreg",nsclc_markers$Cluster)
+write.csv(nsclc_markers, file=paste0(analysis_dir, "nsclc_cd4_cluster_markers_annot.csv"))
+```
+

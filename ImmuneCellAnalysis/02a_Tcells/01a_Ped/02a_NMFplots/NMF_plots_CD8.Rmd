@@ -1,0 +1,444 @@
+---
+title: "Visualize_programs"
+output: html_document
+---
+
+## Purpose:
+After re-annotating programs based on markers, GO, reference genesets, etc in 01_Visualize.Reannotate_programs, visualize updated programs (CD8 only) here
+
+
+## Approach:
+Using updated annotations, plot nice plots for heatmap, UMAP, density, etc
+
+
+```{r}
+library(Seurat) 
+library(clusterProfiler)
+library(biomaRt)
+library(stringr)
+library(harmony)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/02a_Tcells/01a_Ped/", 
+                     "02a_NMFplots/")
+
+analysis_dir_tmp<- paste0(working_dir, "/analysis/CD8/")
+figure_dir_tmp<- paste0(working_dir, "/figures/CD8/")
+
+if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp,recursive = TRUE)}
+if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+```
+
+## Read in ped tcell seurat object. Contains NMF assignments (annots added in deNovoPedTcell.v.deNovoAdultTcell, based on correlation with adult T cell + correlation with ped cd4/cd8 programs)
+```{r}
+rank_use<-8
+sharedBy<- "union" 
+data_dir<- paste0("../../02_Ped.Adult/03_Visualize.Reannotate_programs/analysis/Reannotate_programs/", 
+                  "rank",rank_use, "_sharedBy", sharedBy, "/" )
+
+## figure/analysis dir based on rank + how shared programs are merged
+figure_dir<- paste0(figure_dir_tmp, "rank", rank_use, "_sharedBy", sharedBy, "/")
+analysis_dir<- paste0(analysis_dir_tmp, "rank", rank_use, "_sharedBy", sharedBy, "/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir,recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+  
+## ped/adult tcell seurat objects
+cd8_seurat<- readRDS(paste0(data_dir, "ped_seurat_cd8_harmony.Rds"))
+
+
+
+## Read in marker genes
+program_markers<- readRDS(paste0("../../02_Ped.Adult/01_compare_NMF/analysis/newMarkers_deNovoPed.AdultTcell/", 
+                                 "new_markers_NMFrank", rank_use, "_bySeurat_sharedBy", sharedBy, "_reAnnot.Rds"))
+
+## Read in scores
+all_scores<- readRDS(paste0("../../02_Ped.Adult/02_detailed_annot/analysis/identifyCD4.CD8_byNMF/",
+                              "rank", rank_use, "_sharedBy",sharedBy, "/ped_cd8_program_scores.Rds"))
+
+## Read in colors to use
+program_colors<- readRDS(paste0("../../../plot_colors/Tcell.programs_rank", rank_use, "sharedBy", sharedBy, "_reAnnot.Rds"))
+celltype_colors<- readRDS(paste0("../../../plot_colors/Tcell.celltypes.Rds"))
+subtype_colors<-  readRDS("../../../plot_colors/Subtype.Rds")
+```
+
+## Optional: remove inhibitory (may not be real CD8 program)
+```{r}
+program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
+cd8_seurat$tmp<- cd8_seurat@meta.data[[program_name]]
+cd8_seurat<- subset(cd8_seurat, tmp !="Inhibitory")
+
+top_markers<-program_markers[program_markers$cluster!="Inhibitory",]
+
+figure_dir<- paste0(figure_dir, "noInhibitory/")
+if(!dir.exists(figure_dir)){dir.create(figure_dir)}
+```
+
+## Subset to top markers for each nmf- top 10
+```{r}
+marker_genes<- program_markers
+
+## If any genes are top markers for multiple clusters- remove, then find top 10 again
+top_markers<- marker_genes %>% group_by(cluster) %>% slice_max(order_by = avg_log2FC, n = 10) %>% as.data.frame()
+if(sum(duplicated(top_markers$gene))!=0){
+  duplicated<- top_markers$gene[duplicated(top_markers$gene)]
+  print(paste0("Shared top markers: ", paste(duplicated, collapse=",")))
+  marker_genes<- marker_genes[!marker_genes$gene %in% duplicated,]
+  top_markers<- marker_genes %>% group_by(cluster) %>% slice_max(order_by = avg_log2FC, n = 10) %>% as.data.frame()
+}
+all_markers<- top_markers
+all_markers$cluster<- as.character(all_markers$cluster)
+```
+
+
+
+## Plot heatmaps of top marker gene expression
+```{r}
+rank<- "8"
+sharedBy<- "union"
+add_lines<- TRUE
+program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
+bySubtype<- TRUE
+
+top_markers<-all_markers[all_markers$cluster!="Treg",]
+
+## Pseudobulk
+if(bySubtype){
+  cd8_seurat$SubtypeEdit<- gsub("Hemispheric-BCOR", "BCOR", gsub("Hemispheric-H3G34R/V", "H3G34R/V", gsub("Midline-H3K27M", "H3K27M",
+                           gsub("GBM", "Adult.GBM",gsub("IDH-G", "Adult.IDH-G", cd8_seurat$NiceSubtype)))))
+  cd8_seurat$PB_variable<- paste0(cd8_seurat$SubtypeEdit, "_",
+                                gsub("\\.", "\n", cd8_seurat@meta.data[[program_name]]))
+  figure_append<- "_bySubtype"
+}else{
+  cd8_seurat$PB_variable<- paste0(cd8_seurat$Age, "_", 
+                                gsub("\\.", "\n", cd8_seurat@meta.data[[program_name]]))
+  figure_append<- ""
+}
+
+pb<- pseudobulk_byVariable(cd8_seurat@assays$RNA@counts, cd8_seurat@meta.data, "PB_variable")
+
+## center and score
+pb_list<- NormCenter(pb)
+pb_center<- pb_list$center_data
+
+## Plot
+p<- myHeatmap(pb_center, GOI=top_markers$gene, min.value = -3, max.value = 3, 
+              orderFactors =  gsub("\\.", "\n", unique(top_markers$cluster))) +
+  scale_fill_gradient2(high="red", low="blue", mid="white", name="Centered log2(TPM)")
+
+## Add horizontal lines around each set of nmf genes
+if(add_lines){
+  tmp<- split(top_markers, f=top_markers$cluster)
+  lastGene<- lapply(tmp, function(x){
+    x$tmp<- 1:nrow(x)
+    x<- x[x$gene %in% rownames(pb), ]
+    return(x[max(x$tmp), "gene"])
+  })
+  linePositions<- as.data.frame(pb_center[top_markers$gene,])
+  linePositions$tmp<- 1:nrow(linePositions)
+  linePositions<- linePositions[unlist(lastGene),"tmp"]
+  linePositions<- linePositions[1:length(linePositions)-1]+ 0.5
+  
+  p+geom_hline(yintercept = linePositions, linetype="dashed",size=1)
+}else{p}
+
+  
+ggsave(paste0(figure_dir, "CD8_Heatmap_TopNMFgenes_annot_rank", rank,figure_append, ".png"), width=17, height=11)
+
+
+```
+
+## UMAP with annotations
+```{r}
+rank<- "8"
+sharedBy<- "union"
+program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
+program_colors_use<- program_colors[names(program_colors) %in% unique(cd8_seurat@meta.data[[program_name]])]
+
+DimPlot(cd8_seurat, group.by = program_name)+
+  scale_color_manual(values=program_colors_use)+
+  ggtitle("")
+ggsave(paste0(figure_dir, "CD8_UMAP_annot.png"), width=6, height=4)
+
+## Plot each program one at a time
+seurat_tmp<- cd8_seurat
+all_plots<- lapply(as.character(unique(cd8_seurat@meta.data[[program_name]])), function(x){
+  seurat_tmp$tmp<- ifelse(seurat_tmp@meta.data[[program_name]]==x,
+                          x, "Other")
+  p<-DimPlot(seurat_tmp, group.by = "tmp")+scale_color_manual(values=c(program_colors_use, Other="grey"))+ggtitle(x)+NoLegend()
+  return(p)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol = 2)
+ggsave(paste0(figure_dir, "CD8_UMAP_indv.png"), width=6, height=10)
+```
+
+## Density plots
+```{r}
+## Read in scores for programs
+rank<- "8"
+sharedBy<- "union"
+program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
+
+## remove GBM? Very few cells
+removeGBM<- TRUE
+
+if(removeGBM){
+  cd8_seurat_use<- subset(cd8_seurat, NiceSubtype != "Hemispheric-HistoneWT")
+}else{
+  cd8_seurat_use<- cd8_seurat
+}
+## Create df for plotting
+df<-cd8_seurat_use@meta.data[,c("sampleid", "NiceSubtype", program_name)]
+scores_use<- all_scores[rownames(all_scores) %in% rownames(df),]
+sum(rownames(scores_use) == rownames(df)); nrow(scores_use); nrow(df)
+df<- cbind(df, scores_use[,!grepl("Max", colnames(scores_use))] )
+
+
+## get number of cells per subtype, add to df
+nCells<- as.data.frame(table(cd8_seurat_use$NiceSubtype))
+df$NCells<- plyr::mapvalues(cd8_seurat_use$NiceSubtype, nCells$Var1, nCells$Freq)
+df$JustSubtype<- df$NiceSubtype
+df$NiceSubtype<- paste0(df$NiceSubtype, "\n", "nCells=",df$NCells)
+
+
+colors_use<- subtype_colors
+names(colors_use)<- plyr::mapvalues(names(colors_use), df$JustSubtype, df$NiceSubtype, warn_missing=FALSE)
+
+
+
+## Plot each nmf program
+all_plots<- list()
+for(i in as.character(unique(cd8_seurat_use@meta.data[[program_name]]))){
+  print(i)
+  df_tmp<- df[,c(i, "NiceSubtype")]
+  colnames(df_tmp)<- c("score", "NiceSubtype")
+  p<-ggplot(df_tmp, aes(x=score, fill=NiceSubtype))+
+    geom_density(alpha=0.6)+
+    ggtitle(i)+
+    scale_fill_manual(values=colors_use)+
+    theme_classic()+
+    theme(legend.title = element_blank(),
+          legend.position = "none",
+          plot.title = element_text(size=20, face="bold", hjust=0.5))
+
+  all_plots[[i]]<-p
+}
+
+## add legend separately
+legend<-ggplot(df_tmp, aes(x=score, fill=NiceSubtype))+
+    geom_density(alpha=0.6)+
+    ggtitle(i)+
+    scale_fill_manual(values=colors_use)+
+    theme_classic()+
+    theme(legend.title = element_blank(),
+          legend.key.size = unit(1.5, 'cm'),
+          legend.text = element_text(size=20))
+all_plots$legend<-  as_ggplot(get_legend(legend))
+cowplot::plot_grid(plotlist = all_plots, ncol=3)
+
+filename<- ifelse(removeGBM,"Density_NMFScoreBySubtype_noGBM", "Density_NMFScoreBySubtype" )
+ggsave(paste0(figure_dir, filename, ".png"), width=15, height=12)
+
+```
+
+## Programs by subtype
+```{r}
+program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
+cd8_seurat$tmp<- cd8_seurat@meta.data[[program_name]]
+
+## remove GBM? Very few cells
+removeGBM<- TRUE
+
+if(removeGBM){
+  cd8_seurat_use<- subset(cd8_seurat, NiceSubtype != "Hemispheric-HistoneWT")
+}else{
+  cd8_seurat_use<- cd8_seurat
+}
+
+## By subtype
+df<- cd8_seurat_use@meta.data %>% group_by(tmp, NiceSubtype) %>% summarise(nCells=n()) %>% 
+  group_by(NiceSubtype) %>% mutate(perCells=nCells/sum(nCells)) %>% as.data.frame()
+
+ggplot(df, aes(x=NiceSubtype, y=perCells, fill=tmp))+
+  geom_bar(stat="identity")+
+  scale_fill_manual(values=program_colors[names(program_colors) %in% unique(df$tmp)])+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle=45, hjust=1),
+        axis.text = element_text(face="bold", color="black"),
+        axis.title = element_text(face="bold", color="black"))+
+  ylab("Proportion of cells")+xlab("")
+filename<- ifelse(removeGBM,"Breakdown_SubtypeByProgram_noGBM", "Density_NMFScoreBySubtype" )
+ggsave(paste0(figure_dir,filename, ".png"), width=5, height=4)
+
+
+## By Age- under 4, 4-25
+cd8_seurat_use$age_numeric<- as.numeric(cd8_seurat_use$age_numeric)
+cd8_seurat_use$Age_group<- ifelse(cd8_seurat_use$age_numeric<4, "under4",
+                              ifelse(cd8_seurat_use$age_numeric>=4 & cd8_seurat_use$age_numeric <= 25, "age4-25", "over25"))
+df<- cd8_seurat_use@meta.data %>% group_by(tmp, Age_group) %>% summarise(nCells=n()) %>% 
+  group_by(Age_group) %>% mutate(perCells=nCells/sum(nCells)) %>% as.data.frame()
+df$Age_group<- factor(df$Age_group, levels=c("under4", "age4-25"))
+
+ggplot(df, aes(x=Age_group, y=perCells, fill=tmp))+
+  geom_bar(stat="identity")+
+  scale_fill_manual(values=program_colors[names(program_colors) %in% unique(df$tmp)])+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle=45, hjust=1),
+        axis.text = element_text(face="bold", color="black"),
+        axis.title = element_text(face="bold", color="black"))+
+  ylab("Proportion of cells")+xlab("")
+filename<- ifelse(removeGBM,"Breakdown_AgeByProgram_noGBM", "Density_NMFScoreBySubtype" )
+ggsave(paste0(figure_dir,filename, ".png"), width=5, height=4)
+
+```
+
+
+## Plot GOI+ Nature2020 genesets (and individual GOI from these genesets) for each program
+```{r}
+program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
+cd8_seurat$tmp<- cd8_seurat@meta.data[[program_name]]
+
+## Order programs
+cd8_seurat$tmp<- factor(cd8_seurat$tmp, levels=c( "Effector.Memory", "Memory","Inhibitory.Cycling", "Predysfunctional",
+                                                 "Cytotoxic", "IFN.Response", "Stress"))
+
+## Nature2020 scores + subset of GOI
+DotPlot(cd8_seurat, features=c("naive", "dysfunctional","predysfunctional", "cytotoxic", 
+                               "ANXA1", "CCR7", "SELL", "TOP2A","CTLA4", "PDCD1", "LAG3","ITGAE", "GZMK",
+                               "GNLY", "PRF1", "IFIT1", "IFIT3"),
+        group.by = "tmp")+
+  theme(axis.text.x = element_text(angle=45, hjust=1),
+        axis.text = element_text(face="bold", color="black"))+
+  ylab("") + xlab("")+
+  coord_flip()
+ggsave(paste0(figure_dir, "DotPlot_Nature2020.GOI_byProgram.png"), width=6, height=5)
+
+## Inhibitory GOI
+DotPlot(cd8_seurat, features=c( "ITGAE", "TNFRSF9",  "PDCD1", "CTLA4", "LAG3", "TIGIT", "KLRB1", "HLA-DRA", "PTGER2"),
+        group.by = "tmp")+
+  theme(axis.text.x = element_text(angle=45, hjust=1),
+        axis.text = element_text(face="bold", color="black"))+
+  ylab("") + xlab("")
+ggsave(paste0(figure_dir, "DotPlot_Inhibitory.GOI_byProgram.png"), width=8, height=5)
+```
+
+
+
+## Plot scores for Nature2020 genesets (cytotoxic, dysfunctional, naive, predysfunctional), colored by program
+```{r}
+program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
+cd8_seurat$tmp<- cd8_seurat@meta.data[[program_name]]
+
+df<- cd8_seurat@meta.data[,c("tmp", "naive", "cytotoxic", "predysfunctional", "dysfunctional")]
+
+## option 1: cyto/naive on 1 scale, predys/dys on the other scale
+df$scale1<- df$cytotoxic-df$naive
+df$scale2<- df$dysfunctional - df$predysfunctional
+ggplot(df, aes(x=scale1, y=scale2, color=tmp))+
+  geom_point()+
+  xlab("high naive ----------> high cytotoxic")+
+  ylab("high predysfunctional ---------->  high dysfunctional")+
+  scale_color_manual(values=program_colors)+
+  ylim(-4, 4)
+
+ ## color separately for each program
+  all_plots<- lapply(unique(df$tmp), function(x){
+    df_tmp<- df
+    df_tmp$tmp<- ifelse(df_tmp$tmp==x, x, "Other")
+    ggplot(df_tmp, aes(x=scale1, y=scale2, color=tmp, alpha=tmp))+
+      geom_point()+
+      theme_bw()+
+      xlab("high naive ----------> high cytotoxic")+
+      ylab("high predysfunctional ---------->  high dysfunctional")+
+      scale_color_manual(values=c(program_colors, Other="grey"))+
+      scale_alpha_manual(values=c(Other=0.2))+
+      theme(legend.position = "none",
+            axis.text = element_text(face="bold", color="black"),
+            axis.title = element_text(face="bold", color="black", size=7),
+            title = element_text(face="bold", size=12))+
+      ylim(-4,4)+
+      ggtitle(x)
+  })
+  cowplot::plot_grid(plotlist=all_plots, ncol=3)
+  ggsave(paste0(figure_dir, "Nature2020Genesets.NaivCytoDysPredys_scoresByCell_indv.png"), width=9, height = 9)
+
+## Option 2: no naive score, just cyto on 1 scale, predys/dys on other scale
+df$scale1<- df$cytotoxic
+df$scale2<- df$dysfunctional - df$predysfunctional
+ggplot(df, aes(x=scale1, y=scale2, color=tmp))+
+  geom_point()+
+  xlab("low cytotoxic ----------> high cytotoxic")+
+  ylab("high predysfunctional ---------->  high dysfunctional")+
+  scale_color_manual(values=program_colors)
+  
+  ## color separately for each program
+  all_plots<- lapply(unique(df$tmp), function(x){
+    df_tmp<- df
+    df_tmp$tmp<- ifelse(df_tmp$tmp==x, x, "Other")
+    ggplot(df_tmp, aes(x=scale1, y=scale2, color=tmp, alpha=tmp))+
+      geom_point()+
+      theme_bw()+
+      xlab("low cytotoxic ----------> high cytotoxic")+
+      ylab("high predysfunctional ---------->  high dysfunctional")+
+      scale_color_manual(values=c(program_colors, Other="grey"))+
+      scale_alpha_manual(values=c(Other=0.2))+
+      theme(legend.position = "none",
+            axis.text = element_text(face="bold", color="black"),
+            axis.title = element_text(face="bold", color="black", size=7),
+            title = element_text(face="bold", size=12))+
+      ylim(-4,4)+
+      ggtitle(x)
+  })
+  cowplot::plot_grid(plotlist=all_plots, ncol=3)
+  ggsave(paste0(figure_dir, "Nature2020Genesets.CytoDysPredys_scoresByCell_indv.png"), width=9, height = 9)
+  
+## Option 3: only predysfunction/cytotoxic
+df$scale2<- df$cytotoxic
+df$scale1<- df$predysfunctional
+ggplot(df, aes(x=scale1, y=scale2, color=tmp))+
+  geom_point()+
+  theme_bw()+
+  ylab("low cytotoxic ----------> high cytotoxic")+
+  xlab("low predysfunctional ---------->  high predysfunctional")+
+  scale_color_manual(values=program_colors)+
+  theme(axis.text = element_text(face="bold", color="black"),
+        axis.title = element_text(face="bold", color="black", size=7),
+        title = element_text(face="bold", size=12))+
+  xlim(-4,4)+ylim(-2.5, 5)
+
+  ## color separately for each program
+  all_plots<- lapply(unique(df$tmp), function(x){
+    df_tmp<- df
+    df_tmp$tmp<- ifelse(df_tmp$tmp==x, x, "Other")
+    ggplot(df_tmp, aes(x=scale1, y=scale2, color=tmp, alpha=tmp))+
+      geom_point()+
+      theme_bw()+
+      ylab("low cytotoxic ----------> high cytotoxic")+
+      xlab("low predysfunctional ---------->  high predysfunctional")+
+      scale_color_manual(values=c(program_colors, Other="grey"))+
+      scale_alpha_manual(values=c(Other=0.2))+
+      theme(legend.position = "none",
+            axis.text = element_text(face="bold", color="black"),
+            axis.title = element_text(face="bold", color="black", size=7),
+            title = element_text(face="bold", size=12))+
+      ggtitle(x)+
+      xlim(-4,4)+ylim(-2.5, 5)
+  })
+  cowplot::plot_grid(plotlist=all_plots, ncol=3)
+  ggsave(paste0(figure_dir, "
+                Nature2020Genesets.CytoPredys_scoresByCell_indv.png"), width=9, height = 9)
+  
+  
+```
+
+
+

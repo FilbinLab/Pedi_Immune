@@ -1,0 +1,237 @@
+---
+title: "Preprocessing before Clonal.vs.Nonclonal analysis"
+output: html_document
+---
+
+## Purpose:
+Based on Cell 2021 paper, compare expression patterns in clonal compared to non-clonal CD8 cells. Simple DE is not as robust (according to their paper)- this approach essentially creates background distribution of randomly shuffled clonal/nonclonal labels that you compare to actual clonal/nonclonal labels for gene-wise expression + CV. This analysis is run on O2 (see 02_ClonalVsNonClonal_Analysis.Rmd). Here, necessary preprocessing is done, including subsetting the data by age/subtype.
+
+## Approach:
+Using cd8 annotations based on program-wise, ped+adult approach, split seurat into clonal non-clonal. Subset by age/subtype/etc as desired before this, then save. These files used directly on O2.
+
+```{r}
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/02a_Tcells/01a_Ped/", 
+                     "02_ClonalOverexpression/")
+
+library(Seurat)
+library(ggplot2)
+library(ggpubr)
+library(Rtreemix)
+
+figure_dir_tmp<- "figures/"
+analysis_dir_tmp<- "analysis/"
+
+if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp,recursive = TRUE)}
+if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(nmf_helper)
+clonalOverexpression<- paste0(base_dir, script_dir, "CellChat_HelperFunctions.R")
+source(clonalOverexpression)
+
+```
+
+
+## Set figure dir based on annotation approach (rank/sharedBy changes the final cd4/cd8 annotations)
+```{r}
+rank_use<-8
+sharedBy<- "union" 
+
+## figure/analysis dir based on rank + how shared programs are merged
+figure_dir<- paste0(figure_dir_tmp, "rank", rank_use, "_sharedBy", sharedBy, "/")
+analysis_dir<- paste0(analysis_dir_tmp, "rank", rank_use, "_sharedBy", sharedBy, "/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir,recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+```
+
+## Read in seurat object
+```{r}
+rank_use<-8
+sharedBy<- "union" 
+data_dir<- paste0("../../02_Ped.Adult/02_detailed_annot/analysis/identifyCD4.CD8_byNMF/", "rank",rank_use, "_sharedBy", sharedBy, "/" )
+
+## Read in seurat object
+cd8_seurat<- readRDS(paste0( data_dir, "ped_seurat_cd8_harmony.Rds"))
+
+
+## rename clonotype
+cd8_seurat$clonal_group<-cd8_seurat$clonotype
+```
+
+
+###############################################
+## Run preprocessing for multiple conditions ##
+###############################################
+
+
+## All CD8
+```{r}
+analysis_append<-"" ## append to analysis to reflect subsetting by age/subtype
+cd8_seurat_use<-cd8_seurat
+
+## Split into clonal/nonclonal
+ped_clonal_seurat<- subset(cd8_seurat_use, clonal=="clonal")
+ped_nonclonal_seurat<- subset(cd8_seurat_use, clonal=="nonclonal")
+
+## Some genes are excluded- if have less than 0.1 mean(ln(TP100K + 1)) in both clonal and nonclonal
+## For clonal/nonclonal, determine genes that don't pass this filter
+## If they don't pass in both, remove
+  ## convert tpm --> tp100K (divide by 10)
+  clonal_cm<- as.data.frame(ped_clonal_seurat@assays$RNA@counts) / 10
+  nonclonal_cm<- as.data.frame(ped_nonclonal_seurat@assays$RNA@counts) / 10
+  
+  ## mean ln(TPK100 + 1) for each gene
+  clonal_ln<- log(clonal_cm + 1); clonal_mean_ln<- rowMeans(clonal_ln)
+  nonclonal_ln<- log(nonclonal_cm + 1); nonclonal_mean_ln<- rowMeans(nonclonal_ln)
+  
+  ## genes that dont PF in clonal/nonclonal
+  clonal_fail<- names(clonal_mean_ln)[clonal_mean_ln<0.1] 
+  nonclonal_fail<- names(nonclonal_mean_ln)[nonclonal_mean_ln<0.1] 
+  fail_both<- clonal_fail[clonal_fail %in% nonclonal_fail] 
+  pass_either<- rownames(cd8_seurat)[!rownames(cd8_seurat) %in% fail_both] 
+  
+  ## subset seurat objects to passing genes
+  ped_clonal_seurat<- subset(ped_clonal_seurat, features=pass_either)
+  ped_nonclonal_seurat<- subset(ped_nonclonal_seurat, features=pass_either)
+  
+  
+## save
+ped_seurat_cnc<- list(clonal=ped_clonal_seurat, nonclonal=ped_nonclonal_seurat)
+saveRDS(ped_seurat_cnc, file=paste0(analysis_dir, "ped_cd8_seurat_cnc_preprocessed", analysis_append, ".Rds"))
+```
+
+## Under 4
+```{r}
+analysis_append<-"_under4" ## append to analysis to reflect subsetting by age/subtype
+
+cd8_seurat$age_numeric<- as.numeric(cd8_seurat$age_numeric)
+cd8_seurat_use<-subset(cd8_seurat, age_numeric<4)
+
+
+## Split into clonal/nonclonal
+ped_clonal_seurat<- subset(cd8_seurat_use, clonal=="clonal")
+ped_nonclonal_seurat<- subset(cd8_seurat_use, clonal=="nonclonal")
+
+## Some genes are excluded- if have less than 0.1 mean(ln(TP100K + 1)) in both clonal and nonclonal
+## For clonal/nonclonal, determine genes that don't pass this filter
+## If they don't pass in both, remove
+  ## convert tpm --> tp100K (divide by 10)
+  clonal_cm<- as.data.frame(ped_clonal_seurat@assays$RNA@counts) / 10
+  nonclonal_cm<- as.data.frame(ped_nonclonal_seurat@assays$RNA@counts) / 10
+  
+  ## mean ln(TPK100 + 1) for each gene
+  clonal_ln<- log(clonal_cm + 1); clonal_mean_ln<- rowMeans(clonal_ln)
+  nonclonal_ln<- log(nonclonal_cm + 1); nonclonal_mean_ln<- rowMeans(nonclonal_ln)
+  
+  ## genes that dont PF in clonal/nonclonal
+  clonal_fail<- names(clonal_mean_ln)[clonal_mean_ln<0.1] 
+  nonclonal_fail<- names(nonclonal_mean_ln)[nonclonal_mean_ln<0.1] 
+  fail_both<- clonal_fail[clonal_fail %in% nonclonal_fail] 
+  pass_either<- rownames(cd8_seurat)[!rownames(cd8_seurat) %in% fail_both] 
+  
+  ## subset seurat objects to passing genes
+  ped_clonal_seurat<- subset(ped_clonal_seurat, features=pass_either)
+  ped_nonclonal_seurat<- subset(ped_nonclonal_seurat, features=pass_either)
+  
+
+## save
+ped_seurat_cnc<- list(clonal=ped_clonal_seurat, nonclonal=ped_nonclonal_seurat)
+saveRDS(ped_seurat_cnc, file=paste0(analysis_dir, "ped_cd8_seurat_cnc_preprocessed", analysis_append, ".Rds"))
+```
+
+## over 4
+```{r}
+analysis_append<-"_over4" ## append to analysis to reflect subsetting by age/subtype
+
+cd8_seurat$age_numeric<- as.numeric(cd8_seurat$age_numeric)
+cd8_seurat_use<-subset(cd8_seurat, age_numeric>=4)
+
+
+## Split into clonal/nonclonal
+ped_clonal_seurat<- subset(cd8_seurat_use, clonal=="clonal")
+ped_nonclonal_seurat<- subset(cd8_seurat_use, clonal=="nonclonal")
+
+## Some genes are excluded- if have less than 0.1 mean(ln(TP100K + 1)) in both clonal and nonclonal
+## For clonal/nonclonal, determine genes that don't pass this filter
+## If they don't pass in both, remove
+  ## convert tpm --> tp100K (divide by 10)
+  clonal_cm<- as.data.frame(ped_clonal_seurat@assays$RNA@counts) / 10
+  nonclonal_cm<- as.data.frame(ped_nonclonal_seurat@assays$RNA@counts) / 10
+  
+  ## mean ln(TPK100 + 1) for each gene
+  clonal_ln<- log(clonal_cm + 1); clonal_mean_ln<- rowMeans(clonal_ln)
+  nonclonal_ln<- log(nonclonal_cm + 1); nonclonal_mean_ln<- rowMeans(nonclonal_ln)
+  
+  ## genes that dont PF in clonal/nonclonal
+  clonal_fail<- names(clonal_mean_ln)[clonal_mean_ln<0.1] 
+  nonclonal_fail<- names(nonclonal_mean_ln)[nonclonal_mean_ln<0.1] 
+  fail_both<- clonal_fail[clonal_fail %in% nonclonal_fail] 
+  pass_either<- rownames(cd8_seurat)[!rownames(cd8_seurat) %in% fail_both] 
+  
+  ## subset seurat objects to passing genes
+  ped_clonal_seurat<- subset(ped_clonal_seurat, features=pass_either)
+  ped_nonclonal_seurat<- subset(ped_nonclonal_seurat, features=pass_either)
+  
+
+## save
+ped_seurat_cnc<- list(clonal=ped_clonal_seurat, nonclonal=ped_nonclonal_seurat)
+saveRDS(ped_seurat_cnc, file=paste0(analysis_dir, "ped_cd8_seurat_cnc_preprocessed", analysis_append, ".Rds"))
+```
+
+## By Subtype
+```{r}
+subtypes<- unique(as.character(cd8_seurat$NiceSubtype))
+
+for(subtype in subtypes){
+  print(subtype)
+  analysis_append<-paste0("_", gsub("/","", subtype)) ## append to analysis to reflect subsetting by age/subtype
+  
+  cd8_seurat_use<- subset(cd8_seurat, NiceSubtype==subtype)
+  
+  ## Skip any subtypes without enough clonal/nonclonal cells
+  if(length(unique(cd8_seurat_use$clonal)) != 2){
+    next
+  }
+  
+  ## Split into clonal/nonclonal
+  ped_clonal_seurat<- subset(cd8_seurat_use, clonal=="clonal")
+  ped_nonclonal_seurat<- subset(cd8_seurat_use, clonal=="nonclonal")
+  
+  ## Some genes are excluded- if have less than 0.1 mean(ln(TP100K + 1)) in both clonal and nonclonal
+  ## For clonal/nonclonal, determine genes that don't pass this filter
+  ## If they don't pass in both, remove
+    ## convert tpm --> tp100K (divide by 10)
+    clonal_cm<- as.data.frame(ped_clonal_seurat@assays$RNA@counts) / 10
+    nonclonal_cm<- as.data.frame(ped_nonclonal_seurat@assays$RNA@counts) / 10
+    
+    ## mean ln(TPK100 + 1) for each gene
+    clonal_ln<- log(clonal_cm + 1); clonal_mean_ln<- rowMeans(clonal_ln)
+    nonclonal_ln<- log(nonclonal_cm + 1); nonclonal_mean_ln<- rowMeans(nonclonal_ln)
+    
+    ## genes that dont PF in clonal/nonclonal
+    clonal_fail<- names(clonal_mean_ln)[clonal_mean_ln<0.1] 
+    nonclonal_fail<- names(nonclonal_mean_ln)[nonclonal_mean_ln<0.1] 
+    fail_both<- clonal_fail[clonal_fail %in% nonclonal_fail] 
+    pass_either<- rownames(cd8_seurat)[!rownames(cd8_seurat) %in% fail_both] 
+    
+    ## subset seurat objects to passing genes
+    ped_clonal_seurat<- subset(ped_clonal_seurat, features=pass_either)
+    ped_nonclonal_seurat<- subset(ped_nonclonal_seurat, features=pass_either)
+    
+  
+  ## save
+  ped_seurat_cnc<- list(clonal=ped_clonal_seurat, nonclonal=ped_nonclonal_seurat)
+  saveRDS(ped_seurat_cnc, file=paste0(analysis_dir, "ped_cd8_seurat_cnc_preprocessed", analysis_append, ".Rds"))
+  
+}
+
+
+```
+

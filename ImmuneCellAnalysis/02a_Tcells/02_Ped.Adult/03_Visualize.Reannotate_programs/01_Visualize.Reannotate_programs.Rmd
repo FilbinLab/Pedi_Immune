@@ -1,0 +1,604 @@
+---
+title: "Visualize_reannotate_programs"
+output: html_document
+---
+
+## Purpose:
+NMF programs were generated based on 1) de novo NMF separately for ped/adult Tcells 2) correlating programs 3) keeping "specific" programs separate, but merging "shared" programs --> score --> assign max -->regenerate gene lists. These programs are annotated based on correlation with original ped cd4/cd8 programs (no longer in use, archived). Some of these annotations make sense, but others (like "CD4_Inhibitory") don't. Here, basic visualizations of these programs, comparing ped/adult proportions, GO terms, marker genes- all used to help re-annotate programs as needed
+
+
+## Approach:
+First, just want to do basic visualizations (proportion of programs in cd4/cd8), then compare differences in ped/adult proportions within CD4/CD8. Then various visualizations to help annotate: GO terms, marker genes, etc. Re-annotate programs as needed, then update seurat objects + marker gene lists as needed to reflect this
+
+
+```{r}
+library(Seurat) 
+library(clusterProfiler)
+library(biomaRt)
+library(stringr)
+library(harmony)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/02a_Tcells/02_Ped.Adult/", 
+                     "03_Visualize.Reannotate_programs/")
+
+analysis_dir_tmp<- paste0(working_dir, "/analysis/Reannotate_programs/")
+figure_dir_tmp<- paste0(working_dir, "/figures/Reannotate_programs/")
+
+if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp,recursive = TRUE)}
+if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+```
+
+## Read in ped tcell seurat object. Contains NMF assignments (annots added in deNovoPedTcell.v.deNovoAdultTcell, based on correlation with adult T cell + correlation with ped cd4/cd8 programs)
+```{r}
+rank_use<-8
+sharedBy<- "union" 
+data_dir<- paste0("../02_detailed_annot/analysis/identifyCD4.CD8_byNMF/", "rank",rank_use, "_sharedBy", sharedBy, "/" )
+
+## figure/analysis dir based on rank + how shared programs are merged
+figure_dir<- paste0(figure_dir_tmp, "rank", rank_use, "_sharedBy", sharedBy, "/")
+analysis_dir<- paste0(analysis_dir_tmp, "rank", rank_use, "_sharedBy", sharedBy, "/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir,recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+  
+## ped/adult tcell seurat objects
+tcell_seurat<- readRDS(paste0("../../../01_Preprocessing/03_PreprocessAdultDatasets/analysis/Tcells_Ped.Adult_Merge/",
+                              "adult_ped_tcell_merged_seurat_harmony.Rds"))
+
+cd4_seurat<- readRDS(paste0(data_dir, "ped.adult_seurat_cd4_harmony.Rds"))
+cd8_seurat<-readRDS(paste0(data_dir, "ped.adult_seurat_cd8_harmony.Rds"))
+
+## Read in marker genes
+program_markers<- readRDS(paste0("../01_compare_NMF/analysis/newMarkers_deNovoPed.AdultTcell/", 
+                                 "new_markers_NMFrank", rank_use, "_bySeurat_sharedBy", sharedBy, ".Rds"))
+
+## Read in colors to use
+program_colors<- readRDS(paste0("../../../plot_colors/Tcell.programs_rank", rank_use, "sharedBy", sharedBy, ".Rds"))
+celltype_colors<- readRDS(paste0("../../../plot_colors/Tcell.celltypes.Rds"))
+```
+
+
+## UMAP of programs
+```{r}
+DimPlot(cd4_seurat, group.by = program_name)+scale_color_manual(values=colors_use)
+ggsave(paste0(figure_dir, "CD4_byProgram.png"), width=7, height=5)
+
+DimPlot(cd8_seurat, group.by = program_name)+scale_color_manual(values=colors_use)
+ggsave(paste0(figure_dir, "CD8_byProgram.png"), width=7, height=5)
+```
+
+## Breakdown of programs within cd4/cd8
+```{r}
+program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy)
+annot_name<- paste0("detailed_annot_byNMFrank", rank_use, "_mergedBy", sharedBy)
+
+
+## Proportion of program by CD4/CD8
+meta<-data.frame(program=tcell_seurat@meta.data[[program_name]],
+                 celltype=tcell_seurat@meta.data[[annot_name]],
+                 sample=tcell_seurat$sampleid,
+                 age=tcell_seurat$Age)
+
+bd<- as.data.frame(table(meta$program, meta$celltype))
+colnames(bd)<- c("Program", "CellType", "Ncells")
+bd<- bd[bd$CellType!="Unclear",]
+
+  ## Cell type by program
+  bd<- bd %>% group_by(CellType) %>% mutate(PerCells=Ncells/sum(Ncells)) %>% as.data.frame()
+  ggplot(bd, aes(x=CellType, y=PerCells, fill=Program))+
+    geom_bar(stat="identity", position="stack")+
+    scale_fill_manual(values=colors_use)+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle=45, hjust=1),
+          axis.text = element_text(face="bold", color="black"),
+          axis.title = element_text(face="bold", color="black"))+
+    ylab("Proportion of cells")+xlab("")
+  ggsave(paste0(figure_dir, "CD4.CD8breakdown_byProgram.png"), width=5, height=5)
+  
+  ## Program by cell type
+  bd<- bd %>% group_by(Program) %>% mutate(PerCells=Ncells/sum(Ncells)) %>% as.data.frame()
+  ggplot(bd, aes(x=Program, y=PerCells, fill=CellType))+
+    geom_bar(stat="identity", position="stack")+
+    scale_fill_manual(values=celltype_colors)+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle=45, hjust=1),
+          axis.text = element_text(face="bold", color="black"),
+          axis.title = element_text(face="bold", color="black"))+
+    ylab("Proportion of cells")+xlab("")
+  ggsave(paste0(figure_dir, "ProgramBreakdown_byCD4.CD8.png"), width=5, height=3)
+
+## Proportion of program by CD4/CD8, grouped by age
+bd_age<- meta %>% group_by(celltype, program, age) %>% summarise(nCells=n())  %>% as.data.frame()
+bd_age<- bd_age[bd_age$celltype!="Unclear",]
+
+  ## Cell type by program
+  bd_age<- bd_age %>%  group_by(celltype,  age) %>% mutate(PerCells=nCells/sum(nCells)) %>% as.data.frame()
+  ggplot(bd_age, aes(x=age, y=PerCells, fill=program))+
+    geom_bar(stat="identity", position="stack")+
+    scale_fill_manual(values=colors_use)+
+    facet_grid(cols=vars(celltype))+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle=45, hjust=1),
+          axis.text = element_text(face="bold", color="black"),
+          axis.title = element_text(face="bold", color="black"))+
+    ylab("Proportion of cells")+xlab("")
+  ggsave(paste0(figure_dir, "CD4.CD8breakdown_byProgram.byAge.png"), width=7, height=5)
+  
+  ## Program by cell type
+  bd_age<- bd_age %>%  group_by(program,  age) %>% mutate(PerCells=nCells/sum(nCells)) %>% as.data.frame()
+  bd_age$program<- gsub("\\.", "\n", gsub("EffectorMemory", "Effector\nMemory", bd_age$program))
+  ggplot(bd_age, aes(x=age, y=PerCells, fill=celltype))+
+    geom_bar(stat="identity", position="stack")+
+    scale_fill_manual(values=celltype_colors)+
+    facet_grid(cols=vars(program))+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle=45, hjust=1),
+          axis.text = element_text(face="bold", color="black"),
+          axis.title = element_text(face="bold", color="black"))+
+    ylab("Proportion of cells")+xlab("")
+  ggsave(paste0(figure_dir, "ProgramBreakdown_byCD4.CD8.byAge.png"), width=8, height=3)
+```
+
+## GO terms
+```{r}
+OrgDb = "org.Hs.eg.db"
+dataset = "hsapiens_gene_ensembl"
+
+## Convert input using biomart
+ensembl = useMart("ensembl",dataset="hsapiens_gene_ensembl")
+allOE_genes<-getBM(attributes=c('ensembl_gene_id','hgnc_symbol'), 
+                   filters = 'hgnc_symbol', 
+                   values = rownames(tcell_seurat@assays$RNA@counts), 
+                   mart = ensembl)
+
+## Subset to top 100 markers- all have >100 except for stress (only 65)
+top_markers<- program_markers %>% group_by(cluster) %>% top_n(n=100, wt=avg_log2FC) %>% as.data.frame()
+
+## Convert marker genes to ensembl IDs too, removing any genes that don't map to ens
+top_markers$gene_ens<- as.character(plyr::mapvalues(top_markers$gene, allOE_genes$hgnc_symbol, 
+                                                    allOE_genes$ensembl_gene_id, warn_missing = FALSE))
+top_markers<-top_markers[top_markers$gene != top_markers$gene_ens,]
+
+
+## run OR analysis (GO)
+go_result = list()
+for (i in unique(top_markers$cluster)){
+  print(i)
+  genes<- top_markers[top_markers$cluster==i, "gene_ens"]
+  if(length(genes)!=1){
+    go_result[[paste0( i)]] = go_analysis(genes, allOE_genes$ensembl_gene_id)
+    }
+} 
+all_plots<- plotGO(go_result, n_terms = 15)
+cowplot::plot_grid(plotlist = all_plots, ncol=3)
+
+ggsave(paste0(figure_dir, "GO_NMF.png"), width=30, height=18)
+saveRDS(go_result, file=paste0(analysis_dir, "go_result_NMF.Rds"))
+```
+
+## Plot marker genes
+```{r}
+## CD8 by dysfunction/Cytotoxic markers
+  ## Vln
+  program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy)
+  VlnPlot(cd8_seurat, features=c("ENTPD1", "ITGAE", "TNFRSF9", "TNFRSF18", "PDCD1", "CTLA4", "LAG3", "GZMK", "IFIT1"), 
+          ncol=3, sort=TRUE,
+          group.by = program_name,
+          cols = program_colors)
+  ggsave(paste0(figure_dir, "CD8_markerGenes.dysfunctional.cyto.png"), width=9, height=9)
+
+  ## Dot plot: by program + age
+  cd8_seurat$tmp<- paste0(cd8_seurat@meta.data[[program_name]], "_", cd8_seurat$Age)
+  DotPlot(cd8_seurat, features=c("ENTPD1", "ITGAE", "TNFRSF9", "TNFRSF18", "PDCD1", "CTLA4", "LAG3", 
+                                 "GZMK", "IFIT1", "TOP2A", "CCR7", "GNLY"),
+          group.by = "tmp")+
+    theme(axis.text.x = element_text(angle=45, hjust=1))+
+    ylab("") + xlab("")
+  ggsave(paste0(figure_dir, "CD8_dotPlot_markerGenes.dysfunctional.cyto.png"), width=7, height=5)
+  
+## CD4 by dysfunction/Cytotoxic markers
+  ## Dot plot: by program + age
+  cd4_seurat$tmp<- paste0(cd4_seurat@meta.data[[program_name]], "_", cd4_seurat$Age)
+  DotPlot(cd4_seurat, features=c("ENTPD1", "ITGAE", "TNFRSF9", "TNFRSF18", "PDCD1", "CTLA4", "LAG3", 
+                                 "GZMK", "IFIT1", "TOP2A", "CCR7", "FOXP3"),
+          group.by = "tmp")+
+    theme(axis.text.x = element_text(angle=45, hjust=1))+
+    ylab("") + xlab("")
+  ggsave(paste0(figure_dir, "CD4_dotPlot_markerGenes.dysfunctional.cyto.png"), width=7, height=5)
+```
+
+## Add module score for cyto/dysfunctional markers
+Based on CD8 paper (Nature 2020)
+```{r}
+program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy)
+
+all_markers<- list(cytotoxic= c("CX3CR1", "PRF1", "GZMA", "GZMB", "GZMH",  "FGFBP2","KLRG1", "FCGR3A"),
+                   naive=c("TCF7", "CCR7", "SELL", "LEF1"),
+                   predysfunctional=c("GZMK", "PDCD1", "CXCR3"),
+                   dysfunctional= c("HAVCR2", "GZMB","IFNG", "CXCL13", "TIGIT", "LAYN", "LAG3", 
+                                    "PDCD1", "CTLA4", "ITGAE", "ENTPD1")) 
+
+## Add score to cd8/cd4
+cd8_seurat<- AddModuleScore(cd8_seurat, all_markers, name = names(all_markers))
+cd4_seurat<- AddModuleScore(cd4_seurat, all_markers, name = names(all_markers))
+rename_cols<-paste0(names(all_markers), 1:4); names(rename_cols)<-names(all_markers)
+colnames(cd8_seurat@meta.data)<- plyr::mapvalues(colnames(cd8_seurat@meta.data), rename_cols, names(rename_cols))
+colnames(cd4_seurat@meta.data)<- plyr::mapvalues(colnames(cd4_seurat@meta.data), rename_cols, names(rename_cols))
+
+## Add on max score/program from 4 gene lists- ScoreTooLow if less than 0.5
+cd8_seurat$MaxNature2020Program<- apply(cd8_seurat@meta.data[, names(all_markers)], 1, 
+                                      function(x){names(x)[which.max(x)]})
+cd4_seurat$MaxNature2020Program<- apply(cd4_seurat@meta.data[, names(all_markers)], 1, 
+                                      function(x){names(x)[which.max(x)]})
+
+cd8_seurat$MaxNature2020Score<- apply(cd8_seurat@meta.data[, names(all_markers)], 1, 
+                                      function(x){x[which.max(x)]})
+cd4_seurat$MaxNature2020Score<- apply(cd4_seurat@meta.data[, names(all_markers)], 1, 
+                                      function(x){x[which.max(x)]})
+
+cd8_seurat$MaxNature2020Program<- ifelse(cd8_seurat$MaxNature2020Score<0.5, "ScoreTooLow", cd8_seurat$MaxNature2020Program)
+cd4_seurat$MaxNature2020Program<- ifelse(cd4_seurat$MaxNature2020Score<0.5, "ScoreTooLow", cd4_seurat$MaxNature2020Program)
+
+## Plot scores
+  ## CD8
+  all_plots<- lapply(names(all_markers), function(x){
+    FeaturePlot(cd8_seurat, features=x)+scale_color_gradient2(low="blue", mid="white", high="red")
+  })
+  cowplot::plot_grid(plotlist=all_plots)
+  ggsave(paste0(figure_dir, "CD8_markerScoresFromNature2020.png"), width=8, height=6)
+  
+  ## CD4
+  all_plots<- lapply(names(all_markers), function(x){
+  FeaturePlot(cd4_seurat, features=x)+scale_color_gradient2(low="blue", mid="white", high="red")
+  })
+  cowplot::plot_grid(plotlist=all_plots)
+  ggsave(paste0(figure_dir, "CD4_markerScoresFromNature2020.png"), width=8, height=6)
+
+## Plot scores by program
+VlnPlot(cd8_seurat, features=names(all_markers), 
+        group.by = program_name,  cols = program_colors, ncol = 2, sort=TRUE, pt.size = .01)
+ggsave(paste0(figure_dir, "CD8_markerScoresFromNature2020_byProgram.png"), width=8, height=6)
+
+VlnPlot(cd4_seurat, features=names(all_markers), 
+        group.by = program_name,  cols = program_colors, ncol = 2, sort=TRUE, pt.size = .01)
+ggsave(paste0(figure_dir, "CD4_markerScoresFromNature2020_byProgram.png"), width=8, height=6)
+
+## Dotplot of scores by program, split by age- same pattern for ped/adult?
+  ## CD8
+  cd8_seurat$tmp<- paste0(cd8_seurat@meta.data[[program_name]], "_", cd8_seurat$Age)
+  DotPlot(cd8_seurat, features=names(all_markers), group.by = "tmp")+
+    theme(axis.text.x = element_text(angle=45, hjust=1))+
+    ylab("")+xlab("")
+  ggsave(paste0(figure_dir, "CD8_markerScoresFromNature2020_byProgram.Age.png"), width=6, height=5)
+  
+  ## CD
+  cd4_seurat$tmp<- paste0(cd4_seurat@meta.data[[program_name]], "_", cd4_seurat$Age)
+  DotPlot(cd4_seurat, features=names(all_markers), group.by = "tmp")+
+    theme(axis.text.x = element_text(angle=45, hjust=1))+
+    ylab("")+xlab("")
+  ggsave(paste0(figure_dir, "CD4_markerScoresFromNature2020_byProgram.Age.png"), width=6, height=5)
+  
+## Breakdown of max geneset by program
+  plot_bd<- function(bd, colors){
+    p<- ggplot(bd, aes(x=tmp, y=perCells, fill=MaxNature2020Program))+
+      geom_bar(stat="identity", position="stack")+
+      theme_classic()+
+      scale_fill_manual(values=colors)+
+      theme(axis.text.x = element_text(angle=45, hjust=1),
+            axis.text = element_text(face="bold", color="black"),
+            axis.title = element_text(face="bold", color="black"))+
+      ylab("Proportion of cells") + xlab("")
+    return(p)
+  }
+  colors<- c(cytotoxic="olivedrab", dysfunctional="red", predysfunctional="orange", naive="skyblue", ScoreTooLow="grey")
+  
+  ## CD8
+  cd8_seurat$tmp<- cd8_seurat@meta.data[[program_name]]
+  bd<- cd8_seurat@meta.data[,c("tmp", "MaxNature2020Program", "Age")] %>% 
+    group_by(tmp, MaxNature2020Program) %>% summarise(nCells=n()) %>% as.data.frame() %>%
+    group_by(tmp) %>% mutate(perCells=nCells/sum(nCells)) %>% as.data.frame()
+  plot_bd(bd, colors)
+  ggsave(paste0(figure_dir, "CD8_Nature2020Geneset_bdByProgram.png"), width=5, height=3)
+  
+    ## No ScoreToLow
+    bd<- bd %>% filter(MaxNature2020Program!="ScoreTooLow") %>% group_by(tmp) %>% mutate(perCells=nCells/sum(nCells)) %>% as.data.frame()
+    plot_bd(bd, colors[names(colors)!="ScoreTooLow"])
+    ggsave(paste0(figure_dir, "CD8_Nature2020Geneset_bdByProgram_NoScoreTooLow.png"), width=5, height=3)
+    
+  ## CD4
+  cd4_seurat$tmp<- cd4_seurat@meta.data[[program_name]]
+  bd<- cd4_seurat@meta.data[,c("tmp", "MaxNature2020Program", "Age")] %>% 
+    group_by(tmp, MaxNature2020Program) %>% summarise(nCells=n()) %>% as.data.frame() %>%
+    group_by(tmp) %>% mutate(perCells=nCells/sum(nCells)) %>% as.data.frame()
+  plot_bd(bd, colors)
+  ggsave(paste0(figure_dir, "CD4_Nature2020Geneset_bdByProgram.png"), width=5, height=3)
+  
+    ## No ScoreToLow
+    bd<- bd %>% filter(MaxNature2020Program!="ScoreTooLow") %>% group_by(tmp) %>% mutate(perCells=nCells/sum(nCells)) %>% as.data.frame()
+    plot_bd(bd, colors[names(colors)!="ScoreTooLow"])
+    ggsave(paste0(figure_dir, "CD4_Nature2020Geneset_bdByProgram_NoScoreTooLow.png"), width=5, height=3)
+    
+    
+   
+saveRDS(cd4_seurat, file=paste0(data_dir, "ped.adult_seurat_cd4_harmony.Rds"))
+saveRDS(cd8_seurat, file=paste0(data_dir, "ped.adult_seurat_cd8_harmony.Rds"))
+```
+
+
+## Plot by number of clonal cells
+```{r}
+cd8_seurat$clonal<- gsub("not clonal", "nonclonal", cd8_seurat$clonal)
+cd4_seurat$clonal<- gsub("not clonal", "nonclonal", cd4_seurat$clonal)
+
+
+## CD8: ## Proportion of clonal cells in each program
+meta<-data.frame(program=cd8_seurat@meta.data[[program_name]],
+                 clonal=cd8_seurat$clonal,
+                 sample=cd8_seurat$sampleid,
+                 age=cd8_seurat$Age)
+  
+  ## Adult/ped together
+  bd_age<- meta %>% group_by(clonal, program) %>% summarise(nCells=n())  %>% as.data.frame()
+  bd_age<- bd_age %>%  group_by(program) %>% mutate(PerCells=nCells/sum(nCells)) %>% as.data.frame()
+  ggplot(bd_age, aes(x=program, y=PerCells, fill=clonal))+
+    geom_bar(stat="identity", position="stack")+
+    scale_fill_manual(values=c(clonal="red", nonclonal="grey"))+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle=45, hjust=1),
+          axis.text = element_text(face="bold", color="black"),
+          axis.title = element_text(face="bold", color="black"))+
+    ylab("Proportion of cells")+xlab("")
+  ggsave(paste0(figure_dir, "ProgramBreakdown_byClonal.png"), width=5, height=3)
+
+
+  
+  ## By age
+  bd_age<- meta %>% group_by(clonal, program, age) %>% summarise(nCells=n())  %>% as.data.frame()
+  bd_age<- bd_age %>%  group_by(program,  age) %>% mutate(PerCells=nCells/sum(nCells)) %>% as.data.frame()
+  bd_age$program<- gsub("\\.", "\n", gsub("EffectorMemory", "Effector\nMemory", bd_age$program))
+  ggplot(bd_age, aes(x=age, y=PerCells, fill=clonal))+
+    geom_bar(stat="identity", position="stack")+
+    scale_fill_manual(values=c(clonal="red", nonclonal="grey"))+
+    facet_grid(cols=vars(program))+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle=45, hjust=1),
+          axis.text = element_text(face="bold", color="black"),
+          axis.title = element_text(face="bold", color="black"))+
+    ylab("Proportion of cells")+xlab("")
+  ggsave(paste0(figure_dir, "ProgramBreakdown_byClonal.byAge.png"), width=8, height=3)
+  
+## CD4: ## Proportion of clonal cells in each program
+meta<-data.frame(program=cd4_seurat@meta.data[[program_name]],
+                 clonal=cd4_seurat$clonal,
+                 sample=cd4_seurat$sampleid,
+                 age=cd4_seurat$Age)
+  
+  ## Adult/ped together
+  bd_age<- meta %>% group_by(clonal, program) %>% summarise(nCells=n())  %>% as.data.frame()
+  bd_age<- bd_age %>%  group_by(program) %>% mutate(PerCells=nCells/sum(nCells)) %>% as.data.frame()
+  ggplot(bd_age, aes(x=program, y=PerCells, fill=clonal))+
+    geom_bar(stat="identity", position="stack")+
+    scale_fill_manual(values=c(clonal="red", nonclonal="grey"))+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle=45, hjust=1),
+          axis.text = element_text(face="bold", color="black"),
+          axis.title = element_text(face="bold", color="black"))+
+    ylab("Proportion of cells")+xlab("")
+  ggsave(paste0(figure_dir, "CD4_ProgramBreakdown_byClonal.png"), width=5, height=3)
+
+
+  
+  ## By age
+  bd_age<- meta %>% group_by(clonal, program, age) %>% summarise(nCells=n())  %>% as.data.frame()
+  bd_age<- bd_age %>%  group_by(program,  age) %>% mutate(PerCells=nCells/sum(nCells)) %>% as.data.frame()
+  bd_age$program<- gsub("\\.", "\n", gsub("EffectorMemory", "Effector\nMemory", bd_age$program))
+  ggplot(bd_age, aes(x=age, y=PerCells, fill=clonal))+
+    geom_bar(stat="identity", position="stack")+
+    scale_fill_manual(values=c(clonal="red", nonclonal="grey"))+
+    facet_grid(cols=vars(program))+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle=45, hjust=1),
+          axis.text = element_text(face="bold", color="black"),
+          axis.title = element_text(face="bold", color="black"))+
+    ylab("Proportion of cells")+xlab("")
+  ggsave(paste0(figure_dir, "CD4_ProgramBreakdown_byClonal.byAge.png"), width=8, height=3)
+```
+
+
+
+## Find markers between 3 most unclear programs (separately for CD4/CD8): Cyto CD4, Inhibitory CD8, Inhibitory CD4 (maybe EM)
+```{r}
+program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy)
+
+cd8_seurat$tmp<- cd8_seurat@meta.data[[program_name]]
+cd8_subset<- subset(cd8_seurat, tmp %in% c("Cytotoxic.CD4", "Inhibitory.CD8", "Inhibitory.CD4", "EffectorMemory"))
+cd8_subset<- SetIdent(cd8_subset, value=cd8_subset$tmp)
+all_markers<-FindAllMarkers(cd8_subset, min.pct = 0.2)
+all_markers_filtered<- all_markers[all_markers$p_val_adj<0.05 & all_markers$avg_log2FC>0,]
+top_markers<- all_markers_filtered %>% group_by(cluster) %>% top_n(n=20, wt=avg_log2FC) %>% as.data.frame()
+rescale<- ScaleData(cd8_subset, do.scale = FALSE, do.center = TRUE, features=rownames(cd8_subset))
+DoHeatmap(rescale, group.by = "tmp", features=top_markers$gene)+scale_fill_gradient2(low="blue", mid="white", high="red")
+ggsave(paste0(figure_dir, "CD8_Heatmap_CytoCD4.InhCD8.CD4.EM.png"), width=7, height=12)
+```
+
+
+## Based on the above, update NMF annotations as needed
+```{r}
+program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy)
+new_program_name<- paste0(program_name, "_reAnnot")
+
+current_programs<- unique(as.character(tcell_seurat@meta.data[[program_name]]))
+
+## Rank8, shared by union
+names(current_programs)<-c("Memory","Inhibitory", "Inhibitory.Cycling", "IFN.Response", "Stress", "Effector.Memory",
+                           "Predysfunctional", "Treg", "Cytotoxic")
+
+## Update seurat objects
+tcell_seurat@meta.data[[new_program_name]]<- as.character(plyr::mapvalues(tcell_seurat@meta.data[[program_name]],
+                                                                          current_programs,
+                                                                          names(current_programs)))
+cd8_seurat@meta.data[[new_program_name]]<- as.character(plyr::mapvalues(cd8_seurat@meta.data[[program_name]],
+                                                                          current_programs,
+                                                                          names(current_programs)))
+cd4_seurat@meta.data[[new_program_name]]<- as.character(plyr::mapvalues(cd4_seurat@meta.data[[program_name]],
+                                                                          current_programs,
+                                                                          names(current_programs)))
+
+## Update marker lists
+program_markers$cluster<- as.character(plyr::mapvalues(program_markers$cluster, current_programs, names(current_programs)))
+
+## Update program colors
+program_colors<- readRDS(paste0("../../../plot_colors/Tcell.programs_rank", rank_use, "sharedBy", sharedBy, ".Rds"))
+names(program_colors)<- plyr::mapvalues(names(program_colors), current_programs, names(current_programs))
+
+## Update scores
+all_scores<- readRDS(paste0("../01_compare_NMF/analysis/newMarkers_deNovoPed.AdultTcell/",
+                            "scores_merged.ped.adultRank", rank, "_specific.sharedBy", sharedBy, ".Rds"))
+colnames(all_scores)<-plyr::mapvalues(colnames(all_scores), current_programs, names(current_programs))
+all_scores$MaxProgram<- plyr::mapvalues(all_scores$MaxProgram, current_programs, names(current_programs))
+
+
+## Update seurat list split by each program
+seurat_list<- readRDS(paste0("../02_detailed_annot/analysis/identifyCD4.CD8_byNMF/rank", rank_use,
+                             "_sharedBy", sharedBy, "/seurat_list_splitByNMFrank", rank_use, ".Rds"))
+names(seurat_list)<- plyr::mapvalues(names(seurat_list), current_programs, names(current_programs))
+
+## Save
+saveRDS(tcell_seurat, file=paste0(analysis_dir, "ped.adult_seurat_tcell_harmony.Rds"))
+saveRDS(cd4_seurat, file=paste0(analysis_dir, "ped.adult_seurat_cd4_harmony.Rds"))
+saveRDS(cd8_seurat, file=paste0(analysis_dir, "ped.adult_seurat_cd8_harmony.Rds"))
+
+saveRDS(program_markers, paste0("../01_compare_NMF/analysis/newMarkers_deNovoPed.AdultTcell/", 
+                                 "new_markers_NMFrank", rank_use, "_bySeurat_sharedBy", sharedBy, "_reAnnot.Rds"))
+
+saveRDS(program_colors, file=paste0("../../../plot_colors/Tcell.programs_rank", rank_use, "sharedBy", sharedBy, "_reAnnot.Rds"))
+
+saveRDS(all_scores, file=paste0("../01_compare_NMF/analysis/newMarkers_deNovoPed.AdultTcell/",
+                            "scores_merged.ped.adultRank", rank, "_specific.sharedBy", sharedBy, "_reAnnot.Rds"))
+
+saveRDS(seurat_list, file=paste0("../02_detailed_annot/analysis/identifyCD4.CD8_byNMF/rank", rank_use,
+                             "_sharedBy", sharedBy, "/seurat_list_splitByNMFrank", rank_use, ".Rds"))
+
+
+```
+
+## Remove cycling from CD8, rerun clustering- does Inhibitory.Cycling still cluster separately?
+```{r}
+cycling_genes<- read.table(paste0(base_dir,"Dropbox (Partners HealthCare)/FilbinLab/data_analysis/",
+                                "Marker_genes/regev_lab_cell_cycle_genes.txt"))
+
+cm<- cd8_seurat@assays$RNA@counts
+cm<- cm[!rownames(cm) %in% cycling_genes$V1,]
+
+cd8_seurat_noCycling<-RunFullSeurat(cm, RunHarmony = TRUE, samples=cd8_seurat$sampleid)
+cd8_seurat_noCycling<- AddMetaData(cd8_seurat_noCycling, 
+                                   cd8_seurat@meta.data[,!colnames(cd8_seurat@meta.data) %in%
+                                                          colnames(cd8_seurat_noCycling@meta.data)])
+
+DimPlot(cd8_seurat_noCycling, group.by = "tmp") +
+  scale_color_manual(values=program_colors)
+saveRDS(cd8_seurat_noCycling, file=paste0(analysis_dir, "cd8_seurat_harmony_no.cycling.genes.Rds"))
+```
+
+## Split by ped/adult
+```{r}
+## Pediatric
+ped_cd8_seurat<- subset(cd8_seurat, Age=="Ped")
+ped_cd4_seurat<- subset(cd4_seurat, Age=="Ped")
+ped_tcell_seurat<- subset(tcell_seurat, Age=="Ped")
+
+ped_cd8_meta<- ped_cd8_seurat@meta.data
+ped_cd4_meta<- ped_cd4_seurat@meta.data
+ped_tcell_meta<- ped_tcell_seurat@meta.data
+
+ped_cd8_seurat<- RunFullSeurat(ped_cd8_seurat@assays$RNA@counts, RunHarmony = TRUE, samples=ped_cd8_meta$sampleid)
+ped_cd4_seurat<- RunFullSeurat(ped_cd4_seurat@assays$RNA@counts, RunHarmony = TRUE, samples=ped_cd4_meta$sampleid)
+ped_tcell_seurat<- RunFullSeurat(ped_tcell_seurat@assays$RNA@counts, RunHarmony = TRUE, samples=ped_tcell_meta$sampleid)
+
+ped_cd8_seurat<- AddMetaData(ped_cd8_seurat, ped_cd8_meta[,!colnames(ped_cd8_meta) %in% colnames(ped_cd8_seurat@meta.data)])
+ped_cd4_seurat<- AddMetaData(ped_cd4_seurat, ped_cd4_meta[,!colnames(ped_cd4_meta) %in% colnames(ped_cd4_seurat@meta.data)])
+ped_tcell_seurat<- AddMetaData(ped_tcell_seurat, ped_tcell_meta[,!colnames(ped_tcell_meta) %in% colnames(ped_tcell_seurat@meta.data)])
+
+## Adult
+adult_cd8_seurat<- subset(cd8_seurat, Age=="Adult")
+adult_cd4_seurat<- subset(cd4_seurat, Age=="Adult")
+adult_tcell_seurat<- subset(tcell_seurat, Age=="Adult")
+
+adult_cd8_meta<- adult_cd8_seurat@meta.data
+adult_cd4_meta<- adult_cd4_seurat@meta.data
+adult_tcell_meta<- adult_tcell_seurat@meta.data
+
+adult_cd8_seurat<- RunFullSeurat(adult_cd8_seurat@assays$RNA@counts, RunHarmony = TRUE, samples=adult_cd8_meta$sampleid)
+adult_cd4_seurat<- RunFullSeurat(adult_cd4_seurat@assays$RNA@counts, RunHarmony = TRUE, samples=adult_cd4_meta$sampleid)
+adult_tcell_seurat<- RunFullSeurat(adult_tcell_seurat@assays$RNA@counts, RunHarmony = TRUE, samples=adult_tcell_meta$sampleid)
+
+adult_cd8_seurat<- AddMetaData(adult_cd8_seurat, 
+                               adult_cd8_meta[,!colnames(adult_cd8_meta) %in% colnames(adult_cd8_seurat@meta.data)])
+adult_cd4_seurat<- AddMetaData(adult_cd4_seurat, 
+                               adult_cd4_meta[,!colnames(adult_cd4_meta) %in% colnames(adult_cd4_seurat@meta.data)])
+adult_tcell_seurat<- AddMetaData(adult_tcell_seurat, 
+                                 adult_tcell_meta[,!colnames(adult_tcell_meta) %in% colnames(adult_tcell_seurat@meta.data)])
+
+## Save
+saveRDS(ped_cd8_seurat, file=paste0(analysis_dir, "ped_seurat_cd8_harmony.Rds"))
+saveRDS(ped_cd4_seurat, file=paste0(analysis_dir, "ped_seurat_cd4_harmony.Rds"))
+saveRDS(ped_tcell_seurat, file=paste0(analysis_dir, "ped_seurat_tcell_harmony.Rds"))
+saveRDS(adult_cd8_seurat, file=paste0(analysis_dir, "adult_seurat_cd8_harmony.Rds"))
+saveRDS(adult_cd4_seurat, file=paste0(analysis_dir, "adult_seurat_cd4_harmony.Rds"))
+saveRDS(adult_tcell_seurat, file=paste0(analysis_dir, "adult_seurat_tcell_harmony.Rds"))
+```
+
+## Breakdowns for scCoda-
+```{r}
+sccoda_dir<- paste0("../../../scCoda/data/",cohort, "/")
+if(!dir.exists(sccoda_dir)){dir.create(sccoda_dir)}
+
+## CD8
+meta<- cd8_seurat@meta.data
+
+  ## Program by Age
+  bd<- as.data.frame.matrix(table(meta$sampleid, meta$NMF_rank8_annot_mergedByunion_reAnnot))
+  
+  ## In a sample, can't have more than 50% of cell types be 0
+  #nPrograms<- ncol(bd)
+  #bd$nPrograms<- apply(bd, 1, function(x){sum(x>1)})
+  #bd$PF<- bd$nPrograms>(nPrograms/2)
+  #bd<- bd[bd$PF,]; bd$PF<-NULL; bd$nPrograms<-NULL
+  
+  ## Add on age group to compare proportions
+  bd$Subtype<- plyr::mapvalues(rownames(bd), meta$sampleid, meta$Age, warn_missing = FALSE)
+  bd$Sample<- rownames(bd)
+  bd$Subtype<- gsub("-", "_", bd$Subtype)
+  
+  write.csv(bd, paste0(sccoda_dir,"Ped.Adult_CD8_NMFPrograms.csv"), row.names = FALSE)
+  
+## CD4
+meta<- cd4_seurat@meta.data
+
+  ## Program by Age
+  bd<- as.data.frame.matrix(table(meta$sampleid, meta$NMF_rank8_annot_mergedByunion_reAnnot))
+  
+  ## In a sample, can't have more than 50% of cell types be 0
+  #nPrograms<- ncol(bd)
+  #bd$nPrograms<- apply(bd, 1, function(x){sum(x>1)})
+  #bd$PF<- bd$nPrograms>(nPrograms/2)
+  #bd<- bd[bd$PF,]; bd$PF<-NULL; bd$nPrograms<-NULL
+  
+  ## Add on age group to compare proportions
+  bd$Subtype<- plyr::mapvalues(rownames(bd), meta$sampleid, meta$Age, warn_missing = FALSE)
+  bd$Sample<- rownames(bd)
+  bd$Subtype<- gsub("-", "_", bd$Subtype)
+  
+  write.csv(bd, paste0(sccoda_dir,"Ped.Adult_CD4_NMFPrograms.csv"), row.names = FALSE)
+
+```

@@ -1,0 +1,231 @@
+---
+title: "NMF.Rmd"
+author: "Jenna LaBelle"
+date: "11/11/2021"
+output: html_document
+---
+
+## Purpose:
+Run de novo NMF on ped tcell cells, identify programs
+
+## Approach:
+Run NMF on O2, then finish processing here-identify gene lists, map to seurat, correlate with ped-derived CD4/CD8 programs to help annotate. Later, will correlate with ped tcell programs
+
+```{r}
+library(Seurat) 
+library(clusterProfiler)
+library(biomaRt)
+library(stringr)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/02a_Tcells/01b_Adult/01_NMF/")
+
+analysis_dir<- paste0(working_dir, "/analysis/deNovoNMF/")
+figure_dir<- paste0(working_dir, "/figures/deNovoNMF/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir,recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+#library(reticulate) 
+#use_python("/Users/jlabelle/miniconda3/bin/python", required = T)  # specify python in my conda env for scrublet
+#use_condaenv("base", conda = "/Users/jlabelle/miniconda3/condabin/conda")  # reticulate library to load the conda environnment for running
+
+source(paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/", "/Scripts/plotutils.R"))
+source(paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/", "/Scripts/seurat3utils.R"))
+source(paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/", "/Scripts/color.R"))
+
+tests <- c("wilcox", "t", "roc", "MAST", "bimod")
+test <- tests[2]
+```
+
+## Read in ped tcell seurat object.
+```{r}
+## Current seurat object
+tcell_seurat<- readRDS(paste0(analysis_dir, "tcell_seurat.Rds"))
+load(paste0("../../../data/Adult/", "tcells_seurat_obj.Robj"))
+tcell_seurat<- seurat_obj; rm(seurat_obj)
+  
+  
+## Read in ped cd4/cd8 derived programs
+cd8_markers<- read.csv(paste0("../../../CD8/analysis/", cohort, "/top_DE_genes_annotated_NMF_rank4.csv"))
+cd4_markers<- read.csv(paste0( "../../../CD4/analysis/", cohort, "/top_DE_genes_annotated_NMF_rank4.csv"))
+
+cd8_markers<- split(cd8_markers, f=cd8_markers$cluster); cd8_markers<- lapply(cd8_markers, function(x){x$gene})
+cd4_markers<- split(cd4_markers, f=cd4_markers$cluster); cd4_markers<- lapply(cd4_markers, function(x){x$gene})
+
+names(cd8_markers)<- paste0("CD8_", names(cd8_markers))
+names(cd4_markers)<- paste0("CD4_", names(cd4_markers))
+cd4.cd8_markers<- c(cd8_markers, cd4_markers)
+
+## Read in ped tcell derived programs
+ped_tcell_markers<- read.csv(paste0( "../../../All_Tcells/analysis/deNovoNMF/", cohort, "/top_DE_genes_NMF_rank7.csv"))
+ped_tcell_markers<- split(ped_tcell_markers, f=ped_tcell_markers$cluster) 
+ped_tcell_markers<- lapply(ped_tcell_markers, function(x){x$gene})
+```
+
+
+## Clustering using non-negative matrix factorization (NMF)
+Cluster data using NMF with a range of ranks. The rank is the number of metagenes and the number of clusters. The choice of the rank is heuristic. For each clustering, we also calculate DE genes.
+
+## This section run on O2
+```{r}
+# Vector of ranks for which to calculate NMF.
+rank <- 4:5
+
+# Identify variable genes within this cell subset.
+var.genes <- SelectIntegrationFeatures(SplitObject(tcell_seurat, split.by = "sampleid"), nfeatures = 2000, verbose = TRUE,
+                                       fvf.nfeatures = 2000, selection.method = "vst")
+
+VariableFeatures(tcell_seurat) <- var.genes
+
+# Number of variable genes
+print(length(VariableFeatures(tcell_seurat)))
+
+# Perform 10 NMF runs for each value of rank r.
+x <- as.matrix(tcell_seurat[['RNA']][VariableFeatures(tcell_seurat), ])
+x <- x[which(rowSums(x) > 0), ]  # remove any rows filled with 0 (just in case these exist)
+
+#estim.r <- nmf(x, rank = rank, method = "brunet", nrun = 10, seed = 123456)
+estim.r <- nmf(x, rank = rank, method = "brunet", nrun = 10, seed = 123456, .options = "tvP")
+
+saveRDS(estim.r, file=paste0(analysis_dir, "estimR_rank4-7.Rds"))
+```
+
+
+## Read in estim.R and finish processing
+```{r NMF, eval = F}
+rank <- 8:9
+
+estim.r<- readRDS(paste0(analysis_dir, "estimR_rank8-10.Rds"))
+estim.r$fit$`10`<-NULL
+
+png(paste0(figure_dir, "_NMF_plot_rank8-9.png"), width = 2000, height = 1000, res = 100)
+plot(estim.r)
+dev.off()
+
+# Iterate over different ranks and look at clustering.
+for (i in seq(rank)) {
+  r <- rank[i]
+  
+  # Plot coefficient values of metagenes for each cell.
+  png(paste0(figure_dir, "_NMF_coefmap_rank", r, ".png"), width = 2000, height = 1000, res = 100)
+  coefmap(estim.r$fit[[i]], Colv=T)
+  dev.off()
+
+  # Show genes contributing the most to each metagene (factor). 
+  # Remember, this is limited to the variable genes if that was the input to NMF.
+  for (j in seq(r)) {
+    top.features <- names(sort(estim.r$fit[[i]]@fit@W[, j], decreasing = T)[1:10])
+    print(paste(top.features, collapse = " "))
+  }
+  s <- extractFeatures(estim.r$fit[[i]], 10L)
+  for (j in seq(r)) {
+    top.features <- rownames(estim.r$fit[[i]]@fit@W)[s[[j]]]
+    print(paste(top.features, collapse = " "))
+  }
+
+  # Plot NMF residuals.
+  png(paste0(figure_dir, "_NMF_residuals_rank", r, ".png"), width = 2000, height = 1000, res = 100)
+  plot(estim.r$fit[[i]])
+  dev.off()
+
+  # Check coefficient matrix has cell names in same order as Seurat object tcell_seurat.
+  H <- estim.r$fit[[i]]@fit@H
+  all.equal(as.integer(as.character(predict(estim.r$fit[[i]], what = "samples"))), as.integer(apply(H, 2, which.max)))
+  all.equal(colnames(H), colnames(tcell_seurat))
+  all.equal(rownames(estim.r$fit[[i]]@fit@W), VariableFeatures(tcell_seurat))
+  
+  # Cluster cells based on maximum coefficient for metagene.
+  tcell_seurat[[paste0("NMF_rank", r)]] <- predict(estim.r$fit[[i]], what = "samples")
+  Idents(tcell_seurat) <- paste0("NMF_rank", r)
+
+  # UMAP visualization and tcell and tcell expression across clusters and find DE genes.
+  DimPlot(tcell_seurat, reduction = "umap", cols = material.heat(n_distinct(Idents(tcell_seurat))), label = T)
+  ggsave(paste0(figure_dir,  "UMAP_NMF_rank", r, ".png"), width = 6, height = 6)
+  VlnPlot(tcell_seurat, features = c("CSF1R", "CD3G"), cols = material.heat(n_distinct(Idents(tcell_seurat))), 
+          ncol = 1, pt.size = 0.5) 
+  ggsave(paste0(figure_dir, "vln_NMF_rank", r, ".png"), width = 8, height = 8)
+  
+  # Find differentially expressed genes for each cluster.
+  tcell_seurat.markers <- FindAllMarkers(tcell_seurat, min.pct = 0.1, logfc.threshold = 0.5, 
+                                           max.cells.per.ident = 1500, test.use = test, 
+                                           return.thresh = 0.1 / nrow(tcell_seurat), verbose = T)
+  top10genes <- tcell_seurat.markers %>% filter(avg_log2FC > 0) %>% group_by(cluster) %>% top_n(10, avg_log2FC)
+  top100genes <- tcell_seurat.markers %>% filter(avg_log2FC > 0) %>% group_by(cluster) %>% top_n(100, avg_log2FC)
+  
+  # Write cluster markers to csv file.
+  write.csv(top100genes, file = paste0(analysis_dir,  "top_DE_genes_NMF_rank", r, ".csv"))
+  tcell_seurat <- ScaleData(tcell_seurat, features = c(top10genes$gene), do.center = T, do.scale = F)
+  DoHeatmap(tcell_seurat, features = top10genes$gene) + scale_fill_distiller(palette = "RdYlBu")
+  ggsave(paste0(figure_dir,  "DE_genes_expression_rank", r, ".png"), width = 18, height = 24)
+}
+
+
+saveRDS(tcell_seurat, file=paste0(analysis_dir, "tcell_seurat.Rds"))
+```
+
+## Correlate with ped cd4/cd8 programs to help annotate tcell programs
+```{r}
+## Norm/center current cm
+cm_list<- NormCenter(tcell_seurat@assays$RNA@counts)
+cm_mean<- log2(rowMeans(cm_list$raw_data)+1)
+
+## score for cd8/cd4 programs
+cd4.cd8_scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, cd4.cd8_markers)))
+
+cd4.cd8.tcell_scores<-list()
+
+## for merged rank 5/6, score, then correlate scores with ped program scores
+ranks<- 8:9
+for(rank in ranks){
+  print(rank)
+  
+  ## Read in current marker genes- rank 6. Convert to list
+  current_markers<- read.csv(paste0(analysis_dir, "top_DE_genes_NMF_rank", rank, ".csv"))
+  current_markers<- split(current_markers, f=current_markers$cluster)
+  current_markers<- lapply(current_markers, function(x){x$gene})
+  names(current_markers)<- paste0("NewNMF_", names(current_markers))
+  
+  ## Score current cm 
+  tcell_scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, current_markers)))
+  
+  ## Merge current ped/adult scores with scores for ped programs
+  scores<- cbind(tcell_scores, cd4.cd8_scores)
+  cd4.cd8.tcell_scores[[rank]]<- scores
+  
+  ## Correlate and plot heatmap
+  scores_factor_hc = clusterNmfFactors(scores)
+  scores_factor_cor = scores_factor_hc$cor_coef[scores_factor_hc$hc_obj$order, scores_factor_hc$hc_obj$order]
+  
+  ## Heatmap of correlations
+  hm_colors = rev((brewer.pal(n=9, name="RdBu")))
+  hm_colors = colorRampPalette(colors = hm_colors)
+  pheatmap(scores_factor_cor, color = hm_colors(100), 
+           cluster_rows = F, cluster_cols = F, 
+           annotation_names_row = F, annotation_names_col =T,
+           show_rownames = T, show_colnames = F,
+           filename = paste0(figure_dir, "Cor_PedCD4.CD8rank4_Tcellrank",rank, ".png"),
+           width = 8, height = 4)
+  
+  ## Dendrogram of hierarchical clustering 
+  jpeg(filename=paste0(figure_dir, "HC_PedCD4.CD8rank4_Tcellrank",rank, ".png"), width = 400, height = 600)
+  plot(scores_factor_hc$hc_obj)
+  dev.off()
+  
+}
+
+
+saveRDS(cd4.cd8.tcell_scores, file=paste0(analysis_dir, "scores_Adult_rank8-10.Rds"))
+```
+
+
+
+

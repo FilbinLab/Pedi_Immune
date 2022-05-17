@@ -1,0 +1,372 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+```{r}
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/02a_Tcells/01b_Adult/", 
+                     "02_ClonalOverexpression/")
+library(Seurat)
+library(ggplot2)
+library(ggpubr)
+library(Rtreemix)
+
+figure_dir_tmp<- "figures/"
+analysis_dir_tmp<- "analysis/"
+data_dir<- "fromO2/"
+
+if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp,recursive = TRUE)}
+if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(nmf_helper)
+clonalOverexpression<- paste0(base_dir, script_dir, "CellChat_HelperFunctions.R")
+source(clonalOverexpression)
+
+```
+
+## Set figure dir/analysis dir
+```{r}
+rank_use<-8
+sharedBy<- "union" 
+
+figure_dir<- paste0(figure_dir_tmp, "rank", rank_use, "_sharedBy", sharedBy, "/")
+analysis_dir<- paste0(analysis_dir_tmp, "rank", rank_use, "_sharedBy", sharedBy, "/")
+```
+
+## For each analysis:
+1) read in results
+2) Plot expression/CV z scores, labeling GOI + outliers
+3) Plot expression of outliers in clonal/nonclonal cells to confirm
+4) Save top 100 outliers for comparison
+```{r}
+all_files<- list.files(data_dir, pattern=".Rds")
+all_files<- all_files[grepl("WithBackground", all_files)]
+analysis_names<-gsub("WithBackgroundx100_ClonalVsNonclonal_Expression.CV_Zscores_adult_cd8_", "", gsub(".Rds", "", all_files))
+
+GOI<- c("KLRB1", "GZMB", "NKG7", "CCL5", "IL7R", "CCR7", "KLRK1", "ITGAE", "CCL4", "KLRD1", "GPR56", "PTGER2", "SELPLG")
+outliers_plot<- 20
+
+all_outliers<- list()
+for(analysis in analysis_names){
+  print(analysis)
+  file<- paste0(data_dir, "WithBackgroundx100_ClonalVsNonclonal_Expression.CV_Zscores_adult_cd8_", analysis, ".Rds")
+  
+  ## 1. Read in CNC res + seurat object
+  cnc_res<- readRDS(file)
+  cnc_res<- cnc_res[!is.na(cnc_res$Expr_background_zscore) & !is.na(cnc_res$CV_background_zscore),]
+  seurat_list<- readRDS(paste0(analysis_dir, "adult_cd8_seurat_cnc_preprocessed_",  analysis, ".Rds"))
+  
+  ## 2. Plot difference in expression vs difference in CV 
+    ## GOI to color/label
+    cnc_res$GOI<- ifelse(rownames(cnc_res) %in% GOI, "yes", "no")
+    cnc_res$label<-ifelse(rownames(cnc_res) %in% GOI, rownames(cnc_res), "")
+      
+    ## assign outliers- expression + cv filter, then top n by expression
+    outliers_all<- cnc_res[cnc_res$Expr_background_zscore>1.5 & cnc_res$CV_background_zscore < -1.2,]
+    outliers_all<- outliers_all[order(outliers_all$Expr_background_zscore, decreasing =TRUE),]
+    outliers<- rownames(outliers_all)[1:outliers_plot]
+    
+    ## Label as GOI, outlier
+    cnc_res$GOI<- ifelse(rownames(cnc_res) %in% GOI, "GOI", ifelse(rownames(cnc_res) %in% outliers, "outlier", "no"))
+    cnc_res$label<-ifelse(rownames(cnc_res) %in% c(outliers, GOI), rownames(cnc_res), "")
+    
+    ggplot(cnc_res, aes(x=CV_background_zscore, y=Expr_background_zscore, color=GOI, alpha=GOI))+
+      geom_point()+
+      #scale_color_manual(values=c(yes="red", no="grey71"))+
+      scale_color_manual(values=c(GOI="red",outlier="black", no="grey71"))+
+      geom_text(aes(label=label), size=2, nudge_x = 0.3, nudge_y=-0.1)+
+      scale_alpha_manual(values=c(GOI=1, outlier=1, no=0.2))+
+      theme_classic()+
+      xlim(-6.5,6.5)+
+      ggtitle(analysis)
+    
+    ggsave(paste0(figure_dir, analysis, "_ExprCVZscores_GOI.outliers.png"), width=6, height=4.5)
+    
+  ## 3. Plot top 20 genes in DotPlot
+    ## merge clonal/nonclonal seurat objects
+    cnc_seurat<- merge(seurat_list$clonal, seurat_list$nonclonal)
+    DotPlot(cnc_seurat, features=unique(c(GOI, outliers)), group.by = "clonal")+
+      coord_flip()+
+      ylab("") + xlab("")+
+      ggtitle(analysis)+
+      theme(axis.text.x = element_text(angle=45, hjust=1))
+    ggsave(paste0(figure_dir, analysis, "_DotPlot_GOI.outliers.png"), width=5, height=8)
+    
+  ## 4. Save top outliers- up to 50
+    outliers_all$rank<- 1:nrow(outliers_all)
+    top_outliers<- na.omit(outliers_all[1:100,c("Expr_Clonal", "Expr_NonClonal", 
+                                       "CV_clonal", "CV_NonClonal",
+                                       "Expr_background_zscore", "CV_background_zscore", "rank")])
+    top_outliers$analysis<- analysis
+    top_outliers$gene<- rownames(top_outliers)
+    all_outliers[[analysis]]<- top_outliers
+}
+all_outliers<- do.call("rbind", unname(all_outliers))
+
+## Add column denoting how many analyses each gene is an outlier in. export
+nOcc<- as.data.frame(table(all_outliers$gene))
+all_outliers$nAnalysisFoundIn<- as.character(plyr::mapvalues(all_outliers$gene, nOcc$Var1, nOcc$Freq))
+write.csv(all_outliers, file=paste0(analysis_dir, "top100.outliers_allAnalyses.csv"))
+
+```
+
+
+## Venn diagram of top 100 outliers across all analyses
+## Not run now- can run if IDH-mut analysis is completed
+```{r}
+all_outliers<- read.csv(paste0(analysis_dir, "top100.outliers_allAnalyses.csv"))
+
+## Split to list by analysis
+outlier_list<- split(all_outliers, f=all_outliers$analysis)
+
+## separate lists- all/subtypes. Subset to # of outliers in smallest group
+  
+  ## all/subtypes
+  subtype_outlier_list<- outlier_list[names(outlier_list) 
+                                      %in% c(names(outlier_list)[!names(outlier_list) %in% names(age_outlier_list)])]
+  min_length<- min(unlist(lapply(subtype_outlier_list, nrow)))
+  subtype_outlier_list<- lapply(subtype_outlier_list, function(x){
+    tmp<- x[order(x$rank),]
+    tmp<- tmp[1:min_length,]
+    return(tmp$gene)
+  })
+
+
+## Venn diagram: age
+ggVennDiagram::ggVennDiagram(age_outlier_list, label="count")+
+  scale_fill_gradient(low="white", high = "red")+
+  scale_color_manual(values=rep("black", 3))+
+  ggtitle(paste0("top ", length(age_outlier_list$all), " outliers"))
+ggsave(paste0(figure_dir, "Venn_Outliers_all.vs.under4.vs.over4.png"), width=4, height=4)
+
+
+## Venn diagram: subtype
+ggVennDiagram::ggVennDiagram(subtype_outlier_list, label="count")+
+  scale_fill_gradient(low="white", high = "red")+
+  scale_color_manual(values=rep("black", 6))+
+  ggtitle(paste0("top ", length(subtype_outlier_list$Ependymoma), " outliers"))
+ggsave(paste0(figure_dir, "Venn_Outliers_subtypes.png"), width=5, height=5)
+```
+
+
+
+#################################
+## Nothing run past this point ## 
+#################################
+
+
+
+
+## Alternative to background zscore approach: differential expression
+```{r}
+## Merge clonal/nonclonal seurat objects
+seurat_obj<- merge(seurat_list$clonal, seurat_list$nonclonal)
+
+
+## Set ident to clonality, find markers
+seurat_obj<- SetIdent(seurat_obj, value=seurat_obj$clonal)
+all_markers<- FindAllMarkers(seurat_obj, min.pct = 0.2)
+all_markers_filtered<- all_markers[all_markers$p_val<0.05 & all_markers$avg_log2FC>0,]
+
+DotPlot(seurat_obj, features =c(outliers[1:2], "PTGER2", "KLRB1"))
+  coord_flip()
+```
+
+
+
+
+## Volcano plot
+## Plotting zscores as pvalue (-log10) vs logFC
+```{r}
+GOI<- c("KLRB1", "GZMB", "NKG7", "CCL5", "IL7R", "CCR7", "KLRK1", "ITGAE", "CCL4", "KLRD1", "GPR56")
+outliers<- c("GNLY", "WBP11", "CCL4L2", "CCL4L1", "PRDM1", "SRP9", "PGK1", "SAMSN1", "EIF3C", "TMEM241", 
+             "KDELR2", "ILKAP", "CIR1", "SNRPD2", "WIPF1", "CLNS1A", "CLIC3")
+
+## pvalues
+  ## Calculate based on z score
+  vplot_df<- df_final
+  vplot_df$zscore_pvalue<- ifelse(vplot_df$Expr_Clonal>vplot_df$Expr_NonClonal, 
+                           pnorm(q=vplot_df$Expr_background_zscore, lower.tail=FALSE),
+                           pnorm(q=vplot_df$Expr_background_zscore, lower.tail=TRUE))
+
+                         
+
+## Log FC
+vplot_df$Expr_log2FC<- log2(vplot_df$Expr_Clonal/vplot_df$Expr_NonClonal) 
+vplot_df<- na.omit(vplot_df)
+
+
+
+## volcano with ggplot
+  ## select pvalue to use
+  vplot_df$pvalue<- vplot_df$zscore_pvalue
+  
+  ## add adjusted pvalue. will color points that are also sig with MTC
+  vplot_df$adj_pvalue<- p.adjust(vplot_df$pvalue, method = "fdr")
+  vplot_df$Significant_AfterMultipleTestCorrection<- ifelse(vplot_df$adj_pvalue<0.1 & vplot_df$Expr_log2FC>0, "yes", "no")
+  padj_genes<- rownames(vplot_df)[vplot_df$Significant_AfterMultipleTestCorrection=="yes"]
+  
+vplot_df$log10pvalue<- -log10(vplot_df$pvalue)
+sig_genes<- rownames(vplot_df)[vplot_df$pvalue<0.05 & vplot_df$Expr_log2FC>1.5]
+
+vplot_df$GOI<- ifelse(rownames(vplot_df) %in% GOI, "GOI", 
+                      ifelse(vplot_df$Significant_AfterMultipleTestCorrection=="yes", "Putative GOI\nsignificant after MTC", 
+                             ifelse(rownames(vplot_df) %in% sig_genes, "Putative GOI", "no")))
+vplot_df$label<- ifelse(rownames(vplot_df) %in% c(GOI, sig_genes, padj_genes), rownames(vplot_df), "")
+
+
+ggplot(vplot_df, aes(y=log10pvalue, x=Expr_log2FC, color=GOI, alpha=GOI, size=GOI))+
+  geom_point()+
+  scale_color_manual(values=c(`Known GOI`="red", 
+                              `Putative GOI`="black", 
+                              `Putative GOI\nsignificant after MTC`="blue", 
+                              PTGER2="darkgreen",
+                              no="grey71"))+
+  geom_text(aes(label=label), size=1.8, nudge_x = 0.12, nudge_y=-0.05)+
+  scale_size_manual(values=c(`Known GOI`=1.5, 
+                              `Putative GOI`=1.5, 
+                              `Putative GOI\nsignificant after MTC`=1.5, 
+                             PTGER2=1.5,
+                              no=1.5))+
+  scale_alpha_manual(values=c(`Known GOI`=1, 
+                              `Putative GOI`=1, 
+                              `Putative GOI\nsignificant after MTC`=1,
+                              PTGER2=1,
+                              no=0.2))+
+  theme_classic()+
+  geom_hline(yintercept = 1.3, color="red", linetype="dotted")+
+  geom_vline(xintercept = 1.5, color="red", linetype="dotted")+
+  geom_vline(xintercept = -1.5, color="red", linetype="dotted")+
+  xlim(-3,3)
+ggsave(paste0(figure_dir, "VolcanoPlot_FDRInfo_", analysis_append, ".png"), width=12, height =6)
+
+write.csv(vplot_df, file=paste0(analysis_dir, "LogFC_pvalues_WithFDR_", analysis_name, ".csv"))
+```
+
+
+## Pathway analysis using top genes
+```{r}
+load(paste0(analysis_dir, "adult_cd8_seurat_cnc_preprocessed.Robj"))
+load(paste0(analysis_dir, "adult_gbm_cd8_seurat_cnc_preprocessed.Robj"))
+
+seurat_list<- adult_seurat_cnc
+analysis_name<-"test_norm_noClonoMerge_PedCD8"
+
+
+library(clusterProfiler)
+library(biomaRt)
+library(stringr)
+
+##
+OrgDb = "org.Hs.eg.db"
+dataset = "hsapiens_gene_ensembl"
+
+## Convert using biomart
+ensembl = useMart("ensembl",dataset="hsapiens_gene_ensembl")
+allOE_genes<-getBM(attributes='ensembl_gene_id', 
+                   filters = 'hgnc_symbol', 
+                   values = rownames(seurat_list$clonal@assays$RNA@counts), 
+                   mart = ensembl)
+
+
+## Convert marker genes to ensembl IDs too, then run OR analysis (GO)
+genes<- rownames(cnc_res[cnc_res$Expr_background_zscore>2,])
+sigOE_genes = getBM(attributes='ensembl_gene_id', 
+                        filters = 'hgnc_symbol', 
+                        values = genes,
+                        mart = ensembl)$ensembl_gene_id
+go_results = go_analysis(sigOE_genes, allOE_genes$ensembl_gene_id)
+ 
+
+
+
+## Plot top pathways for all clusters, display on one plot
+dotplot(go_results$ego, 
+        showCategory=30, 
+        font.size = 15, 
+        label_format=10) +
+     scale_y_discrete(labels=function(x) str_wrap(x, width=60))+
+      theme(plot.title = element_text(hjust = 0.5, face = "bold", 
+                                      color="black", size = 28),
+            axis.title = element_text(face = "bold", color="black"), 
+            axis.text.x = element_text(angle = 45, hjust = 1, color="black"),
+            axis.text.y = element_text( color="black",face = "bold"))
+
+
+
+ggsave(paste0("GO_ORA_top30_", analysis_name, ".png"), path=figure_dir, width=9, height=12)
+save(go_result, file=paste0(seurat_analysis_folder, "go_result_NoInt_BetweenSamples.Robj"))
+```
+
+
+## Histogram of zscores for expr and cv
+```{r}
+
+expr_hist<- ggplot(cnc_res, aes(x=Expr_background_zscore))+ 
+  geom_histogram() + 
+  ggtitle("expression zscores: compared to background")
+
+cv_hist<- ggplot(cnc_res, aes(x=CV_background_zscore))+ 
+  geom_histogram() + 
+  ggtitle("cv zscores: compared to background")
+
+expr_hist + cv_hist
+```
+
+
+## Exploratory- can delete later
+```{r}
+## Expect potential correlation b/w SELPLG various exhaustion markers- test
+GOI<- c("SELPLG", "PDCD1", "HAVCR2", "LAG3", "CD160", "BTLA", "IL7R", "IL2RA")
+
+## subset to predysfunctional, cytotoxic
+
+seurat_use<- subset(cd8_seurat, NMF_rank8_annot_mergedByunion_reAnnot =="Inhibitory.Cycling")
+
+goi_expr_full<- as.data.frame(t(as.data.frame(seurat_use@assays$RNA@data[GOI,])))
+goi_expr_full$age<- plyr::mapvalues(rownames(goi_expr_full), colnames(cd8_seurat), cd8_seurat$Age, warn_missing = FALSE)
+goi_expr_full$clonal<- plyr::mapvalues(rownames(goi_expr_full), colnames(cd8_seurat), cd8_seurat$clonal, warn_missing = FALSE)
+
+all_plots<- lapply(GOI[GOI != "SELPLG"], function(x){
+  goi_expr<- goi_expr_full
+  goi_expr$y<- goi_expr[[x]]
+  ggplot(goi_expr, aes(x=SELPLG, y=y, color=clonal))+
+    geom_point()+
+    theme_classic()+
+    facet_grid(cols = vars(age))+
+    ylab(paste0(x, " logTPM"))+
+    xlab("SELPLG logTPM")+
+    scale_color_manual(values=c(clonal="red", nonclonal="grey"))+
+    geom_smooth(method="lm", se=FALSE, color="black")+
+    ggtitle(paste0(x, " vs SELPLG"))
+})
+cowplot::plot_grid(plotlist = all_plots, ncol=4)
+ggsave(paste0(figure_dir, "SELPLGexpr.vs.exhaustionMarkers.png"), width=18, height=6)
+
+## same as above, remove 0 expressors
+all_plots<- lapply(GOI[GOI != "SELPLG"], function(x){
+  goi_expr<- goi_expr_full
+  goi_expr$y<- goi_expr[[x]]
+  goi_expr<- goi_expr[goi_expr$y>0 & goi_expr$SELPLG>0,]
+  ggplot(goi_expr, aes(x=SELPLG, y=y, color=clonal))+
+    geom_point()+
+    theme_classic()+
+    facet_grid(cols = vars(age))+
+    ylab(paste0(x, " logTPM"))+
+    xlab("SELPLG logTPM")+
+    scale_color_manual(values=c(clonal="red", nonclonal="grey"))+
+    geom_smooth(method="lm", se=FALSE, color="black")+
+    ggtitle(paste0(x, " vs SELPLG"))
+})
+cowplot::plot_grid(plotlist = all_plots, ncol=4)
+ggsave(paste0(figure_dir, "SELPLGexpr.vs.exhaustionMarkers_no0Counts.png"), width=18, height=6)
+```
+
+
