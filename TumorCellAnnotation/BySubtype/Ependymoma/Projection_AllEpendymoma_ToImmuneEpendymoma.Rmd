@@ -1,0 +1,431 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/", 
+                     "TumorCellAnnotation/BySubtype/Ependymoma/")
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+stat_helper = paste0(base_dir, script_dir, "common_stat_test.R")
+source(preprocessing)
+source(stat_helper)
+
+nmf_analysis_folder = "analysis/nmf/Merge/"
+seurat_analysis_folder = "analysis/seurat/"
+liger_analysis_folder<- paste0(working_dir, "analysis/liger/")
+
+figure_dir<- "figures/Projection_AllEpn_ToImmuneEpn"
+analysis_dir<- "analysis/Projection_AllEpn_ToImmuneEpn"
+
+
+
+## Set colors for use later- better for discriminating against groups
+library(sparseMatrixStats)
+library(RColorBrewer)
+library(harmony)
+n <- 50
+qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+
+subtypes<- read.csv("../../../Subtypes.csv")
+```
+
+## read in ependymoma seurat object- just immune samples
+## remove any samples that were run in the 2020 ependymoma paper- will just use their annotation
+## Subset to each subtype, rerun seurat pipeline
+```{r}
+seurat_filename = paste0(seurat_analysis_folder, "seurat_obj.Robj")
+if(file.exists(seurat_filename)){
+  load(seurat_filename)
+}
+immune_seurat_obj<- seurat_obj
+immune_samples<-unique(immune_seurat_obj$sample)
+
+## Load in previously published datasets
+published_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/PublishedDatasets/FilbinPublishedDatasets/SeuratV3/")
+load(paste0(published_dir, "seurat_obj_EPN_PF.Robj"))
+PD_seurat_pf<- seurat_objV3; rm(seurat_objV3)
+
+load(paste0(published_dir, "seurat_obj_EPN_SP.Robj"))
+PD_seurat_sp<- seurat_objV3; rm(seurat_objV3)
+
+load(paste0(published_dir, "seurat_obj_EPN_ST.Robj"))
+PD_seurat_st<- seurat_objV3
+
+## subset to cells that have annotations in one of the above objects
+PD_cells<- unique(c(colnames(PD_seurat_pf),
+                    colnames(PD_seurat_sp),
+                    colnames(PD_seurat_st)))
+PD_immune_seurat<- subset(immune_seurat_obj, cells=PD_cells) 
+dim(immune_seurat_obj); dim(PD_immune_seurat)
+
+## re-run seurat pipeline on just these cells
+cm<- PD_immune_seurat@assays$RNA@counts
+meta<-PD_immune_seurat@meta.data
+PD_immune_seurat_new<-RunFullSeurat(cm=cm, RunHarmony=TRUE, samples=meta$sample)
+
+
+## For samples in published dataset: extract best annotation for each cell
+## Merge metadata across all 3 subtypes, then subset to just cells in immune
+meta_pf<- PD_seurat_pf@meta.data[,c("subtype", "score_1", "signature_1")]
+meta_sp<- PD_seurat_sp@meta.data[,c("subtype",  "score_1", "signature_1")]
+meta_st<- PD_seurat_st@meta.data[,c("subtype", "score_1", "signature_1")]
+
+meta_PD<- rbind(meta_pf, meta_sp); meta_PD<-rbind(meta_PD, meta_st)
+meta_PD<-meta_PD[rownames(meta_PD) %in% colnames(PD_immune_seurat),]
+meta_PD<- meta_PD[order(colnames(PD_immune_seurat_new)),]
+
+sum(rownames(meta_PD) == colnames (PD_immune_seurat_new))
+
+## add PD annotation to immune PD object
+annot_PD<- meta_PD$signature_1; names(annot_PD)<- rownames(meta_PD)
+annot_PD<- annot_PD[order(match(names(annot_PD), colnames(PD_immune_seurat_new)))]
+sum(names(annot_PD)==colnames(PD_immune_seurat_new))
+
+PD_immune_seurat_new@meta.data$annot_PD<- annot_PD
+
+DimPlot(PD_immune_seurat_new, group.by = "annot_PD")
+ggsave(paste0(figure_dir, "AnnotatedByPrevious/PF_SP_Samples/PF_SP_AnnotsFromPublishedEpendymoma.png"), width=8,height=8)
+
+DimPlot(PD_immune_seurat_new, group.by = "sample")
+ggsave(paste0(figure_dir, "AnnotatedByPrevious/PF_SP_Samples/PF_SP_sample.png"), width=8,height=8)
+```
+
+# Subset to cells that are NOT in published dataset
+## split by subtype, rerun seurat, then project
+```{r}
+## subset to samples that are not in PD
+PD_samples<- unique(c(PD_seurat_pf$sample, PD_seurat_sp$sample, PD_seurat_st$sample))
+noPD_samples<- immune_samples[!immune_samples %in% PD_samples] 
+noPD_immune_seurat<-subset(immune_seurat_obj, sample %in% noPD_samples)
+
+## Re-run seurat pipeline for these 2 samples- separately
+bt1733<- subset(noPD_immune_seurat, sample=="BT1733")
+bt1717<- subset(noPD_immune_seurat, sample=="BT1717")
+
+bt1733_seurat<- RunFullSeurat(cm=bt1733@assays$RNA@counts, RunHarmony=FALSE, samples=bt1733@meta.data$sample)
+bt1717_seurat<- RunFullSeurat(cm=bt1717@assays$RNA@counts, RunHarmony=FALSE, samples=bt1717@meta.data$sample)
+
+
+## Projection for ST sample (BT1717)
+meta<-PD_seurat_st@meta.data
+PD_seurat_st<- RunFullSeurat(cm=PD_seurat_st@assays$RNA@counts, RunHarmony = FALSE, samples=PD_seurat_st$sample)
+PD_seurat_st$signature_1<- meta$signature_1
+seurat_list<- list(immune_st=bt1717_seurat, PD_st=PD_seurat_st)
+
+transferAnchors<-FindTransferAnchors(reference = seurat_list$PD_st, query=seurat_list$immune_st)
+
+predictions <- TransferData(anchorset = transferAnchors, 
+                            refdata = PD_seurat_st$signature_1)
+
+  ## add predictions to immune seurat object
+  prediction_seurat<- predictions$predicted.id; names(prediction_seurat)<- rownames(predictions)
+  sum(names(prediction_seurat)==colnames(bt1717_seurat)); dim(bt1717_seurat)
+  
+  bt1717_seurat$ProjectedPredictions<- prediction_seurat
+  DimPlot(bt1717_seurat, group.by="ProjectedPredictions", label=TRUE)
+  ggsave(paste0(figure_dir, "UPDATED_STRela_ProjectSTepn_to_BT1717.png"))
+
+## Projection for PF sample (BT1733)
+meta<-PD_seurat_pf@meta.data
+PD_seurat_pf<- RunFullSeurat(cm=PD_seurat_pf@assays$RNA@counts, RunHarmony = FALSE, samples=PD_seurat_pf$sample)
+PD_seurat_pf$signature_1<- meta$signature_1
+seurat_list<- list(immune_st=bt1733_seurat, PD_pf=PD_seurat_pf)
+
+transferAnchors<-FindTransferAnchors(reference = seurat_list$PD_pf, query=seurat_list$immune_st)
+
+predictions <- TransferData(anchorset = transferAnchors, 
+                            refdata = PD_seurat_pf$signature_1)
+
+  ## add predictions to immune seurat object
+  prediction_seurat<- predictions$predicted.id; names(prediction_seurat)<- rownames(predictions)
+  sum(names(prediction_seurat)==colnames(bt1733_seurat)); dim(bt1733_seurat)
+  
+  bt1733_seurat$ProjectedPredictions<- prediction_seurat
+  DimPlot(bt1733_seurat, group.by="ProjectedPredictions", label=TRUE)
+  ggsave(paste0(figure_dir, "UPDATED_STRela_ProjectPFepn_to_BT1733.png"))
+
+
+```
+
+## NO LONGER IN USE
+## Subset to cells that are NOT in published dataset
+## split by subtype, rerun seurat, then project
+## old analysis- both samples considered ST-RELA, but BT1873 is actually PF
+## BT1873 should be projected from PF
+```{r}
+## subset to samples that are not in PD
+PD_samples<- unique(c(PD_seurat_pf$sample, PD_seurat_sp$sample, PD_seurat_st$sample))
+noPD_samples<- immune_samples[!immune_samples %in% PD_samples] 
+noPD_immune_seurat<-subset(immune_seurat_obj, sample %in% noPD_samples)
+
+## Re-run seurat pipeline for these 2 samples
+cm<-noPD_immune_seurat@assays$RNA@counts
+meta<-noPD_immune_seurat@meta.data
+noPD_immune_seurat_new<- RunFullSeurat(cm=cm, RunHarmony=TRUE, samples=meta$sample)
+
+## Run PCA/UMAP/Clustering for the previous seurat object
+cm<- PD_seurat_st@assays$RNA@counts
+meta<-PD_seurat_st@meta.data
+PD_seurat_st_new<-RunFullSeurat(cm=cm, RunHarmony=TRUE, samples=meta$sample)
+PD_seurat_st_new@meta.data<- meta
+DimPlot(PD_seurat_st_new, group.by="signature_1")
+
+## Project previous ST seurat object onto these 2 samples
+seurat_list<- list(immune_st=noPD_immune_seurat_new, PD_st=PD_seurat_st_new)
+
+transferAnchors<-FindTransferAnchors(reference = seurat_list$PD_st, query=seurat_list$immune_st)
+
+predictions <- TransferData(anchorset = transferAnchors, 
+                            refdata = PD_seurat_st_new$signature_1)
+
+## add predictions to immune seurat object
+prediction_seurat<- predictions$predicted.id; names(prediction_seurat)<- rownames(predictions)
+sum(names(prediction_seurat)==colnames(noPD_immune_seurat_new)); dim(noPD_immune_seurat_new)
+
+noPD_immune_seurat_new$ProjectedPredictions<- prediction_seurat
+DimPlot(noPD_immune_seurat_new, group.by="ProjectedPredictions", label=TRUE)
+ggsave(paste0(figure_dir, "AnnotatedByPrevious/ST_RELA_Samples/STRela_ProjectedAnnots_FromPublishedEpendymoma.png"))
+
+DimPlot(noPD_immune_seurat_new, group.by="sample")
+ggsave(paste0(figure_dir, "AnnotatedByPrevious/ST_RELA_Samples/STRela_Sample_FromPublishedEpendymoma.png"))
+```
+
+```{r}
+save(noPD_immune_seurat_new, file=paste0(analysis_dir, "/STRela_ProjectedAnnotsFromPublished_seurat.Robj"))
+save(PD_immune_seurat_new, file=paste0(analysis_dir, "/PF_SP_AnnotsFromPublished_seurat.Robj"))
+```
+
+## Merge 3 seurat objects- direct label transfer for most samples, BT1733 projections, BT1717 projections
+## Will use same annotations obtained separately, merged into 1 seurat object
+```{r}
+## Load in seurat object containing all samples
+load("analysis/seurat/seurat_obj.Robj")
+
+## Add updated cell annot to object
+  ## Merge metadata for updated cell annots
+  BT1733_meta<- dplyr::rename(bt1733_seurat@meta.data,
+                            CellAnnot=ProjectedPredictions)
+  
+  BT1717_meta<- dplyr::rename(bt1717_seurat@meta.data,
+                          CellAnnot=ProjectedPredictions)
+  
+  PD_meta<- dplyr::rename(PD_immune_seurat_new@meta.data,
+                          CellAnnot=annot_PD)
+  
+  meta_merged<- rbind(PD_meta, BT1717_meta)
+  meta_merged<- rbind(meta_merged, BT1733_meta)
+  meta_merged$Cell<- rownames(meta_merged)
+  
+  ## Remove cells from full seurat not in updated meta
+  ## Only 18 cells
+  seurat_obj<- subset(seurat_obj, 
+                      cells=colnames(seurat_obj)[colnames(seurat_obj) %in%
+                                                   meta_merged$Cell])
+  sum(!colnames(seurat_obj) %in% meta_merged$Cell)
+  
+  ## add updated cell annot to full seurat_obj
+  seurat_obj$Cell<- colnames(seurat_obj)
+  seurat_obj$UpdatedAnnot<- plyr::mapvalues(seurat_obj$Cell,
+                                            from=meta_merged$Cell,
+                                            to=meta_merged$CellAnnot)
+save(seurat_obj, file=paste0(analysis_dir, "UPDATED_seurat_obj_ProjectedAnnots.Robj"))
+
+```
+
+
+
+## NOT IN USE- OUT OF DATE
+## Merge 2 seurat objects
+## Currently running cellchat separately for 2 objects/annotations
+## But want to visualize ligand/receptor expression simultaneously across all epn samples
+## Will use same annotations obtained separately, merged into 1 seurat object
+```{r}
+## Load in seurat object containing all samples
+load("analysis/seurat/seurat_obj.Robj")
+
+## Add updated cell annot to object
+  ## Merge metadata for updated cell annots
+  noPD_meta<- dplyr::rename(noPD_immune_seurat_new@meta.data,
+                            CellAnnot=ProjectedPredictions)
+  
+  PD_meta<- dplyr::rename(PD_immune_seurat_new@meta.data,
+                          CellAnnot=annot_PD)
+  meta_merged<- rbind(noPD_meta, PD_meta)
+  meta_merged$Cell<- rownames(meta_merged)
+  
+  ## Remove cells from full seurat not in updated meta
+  ## Only 18 cells
+  seurat_obj<- subset(seurat_obj, 
+                      cells=colnames(seurat_obj)[colnames(seurat_obj) %in%
+                                                   meta_merged$Cell])
+  sum(!colnames(seurat_obj) %in% meta_merged$Cell)
+  
+  ## add updated cell annot to full seurat_obj
+  seurat_obj$Cell<- colnames(seurat_obj)
+  seurat_obj$UpdatedAnnot<- plyr::mapvalues(seurat_obj$Cell,
+                                            from=meta_merged$Cell,
+                                            to=meta_merged$CellAnnot)
+save(seurat_obj, file=paste0(analysis_dir, "seurat_obj_ProjectedAnnots.Robj"))
+
+```
+
+
+## Get marker genes for all previous ependymoma programs
+```{r}
+## Load in previous seurat objects
+load("../../../PublishedDatasets/SeuratV3Objects/seurat_obj_EPN_PF.Robj")
+PD_seurat_pf<- seurat_objV3; rm(seurat_objV3)
+
+load("../../../PublishedDatasets/SeuratV3Objects/seurat_obj_EPN_SP.Robj")
+PD_seurat_sp<- seurat_objV3; rm(seurat_objV3)
+
+load("../../../PublishedDatasets/SeuratV3Objects/seurat_obj_EPN_ST.Robj")
+PD_seurat_st<- seurat_objV3
+
+## Set idents to annotations
+PD_seurat_pf<- SetIdent(PD_seurat_pf, value=PD_seurat_pf$signature_1)
+PD_seurat_sp<- SetIdent(PD_seurat_sp, value=PD_seurat_sp$signature_1)
+PD_seurat_st<- SetIdent(PD_seurat_st, value=PD_seurat_st$signature_1)
+
+## Find markers
+pf_markers<-FindAllMarkers(PD_seurat_pf, min.pct = .5, logfc.threshold = .2)
+pf_Markers_filt<-pf_markers[pf_markers$p_val_adj<0.05 & pf_markers$avg_logFC >0.2 ,]
+save(pf_Markers_filt, file=paste0(analysis_dir, "epn_pf_Markers.Robj"))
+
+sp_markers<-FindAllMarkers(PD_seurat_sp, min.pct = .5, logfc.threshold = .2)
+sp_Markers_filt<-sp_markers[sp_markers$p_val_adj<0.05 & sp_markers$avg_logFC >0.2,]
+save(sp_Markers_filt, file=paste0(analysis_dir, "epn_sp_Markers.Robj"))
+
+st_markers<-FindAllMarkers(PD_seurat_st, min.pct = .5, logfc.threshold = .2)
+st_Markers_filt<-st_markers[st_markers$p_val_adj<0.05 & st_markers$avg_logFC >0.2,]
+save(st_Markers_filt, file=paste0(analysis_dir, "epn_st_Markers.Robj"))
+```
+
+
+
+## Updated annotation: same annotations used for CellChat
+```{r}
+load(paste0(analysis_dir, "UPDATED_seurat_obj_ProjectedAnnots.Robj"))
+
+## Change subtype of CPDM0785 from PF-A to ST-Midline
+seurat_obj$Subtype<- ifelse(seurat_obj$sample=="CPDM0785", "ST-Midline", seurat_obj$Subtype)
+
+## Change subtype of BT1733 from ST-RELA to PF-A
+seurat_obj$Subtype<- ifelse(seurat_obj$sample=="BT1733", "PF-A", seurat_obj$Subtype)
+
+## make cell annotation column for each- name needs to match
+cellAnnots<- c("PF_Ependymal_like", "SP_Ependymal_like", "ST_Ependymal_like",
+               "PF_Astroependymal_like", "PF_Metabolic", "ST_Metabolic",
+               "PF_Immune_Reactive", "SP_Immune_Reactive",
+               "PF_Astroglial_like","ST_Metabolic", "ST_Ependymal_like","ST_Interferon_Response",
+               "PF_G2M_Phase","ST_G2M_Phase", "PF_S_Phase", "ST_S_Phase")
+names(cellAnnots)<- c(rep("Ependymal_like", 4), rep("Metabolic", 2), rep("Immune_Reactive",2), "AC-like",
+                      "Metabolic", "Ependymal_like", "Immune_Reactive", rep("G2M",2),rep("SPhase",2))
+
+seurat_obj$CellChatAnnot<- plyr::mapvalues(seurat_obj$UpdatedAnnot,
+                                             cellAnnots, names(cellAnnots))
+
+
+```
+
+## Subset to pf/st/sp and rerun pipeline
+```{r}
+subtypes<- list(PF=c("PF-A", "PF-SE"),
+                SP=c("SP-MPE"),
+                ST=c("ST-RELA", "ST-Midline"))
+
+epn_seurat_split<- lapply(subtypes, function(i){
+  print(i)
+  seurat_tmp<- subset(seurat_obj, Subtype %in% unlist(i))
+  meta_tmp<- seurat_tmp@meta.data
+  
+  seurat_tmp<- preprocessSeuratObject(seurat_tmp@assays$RNA@counts, project="")
+  seurat_tmp <- RunPCA(seurat_tmp, features = seurat_tmp@assays$RNA@var.features, npcs = 100)
+  seurat_tmp$sample<- meta_tmp$sample
+  seurat_tmp$CellAnnot<- meta_tmp$CellChatAnnot
+  
+  seurat_tmp = RunHarmony(seurat_tmp, "sample", theta = 2, 
+                        max.iter.harmony = 50, plot_convergence = TRUE)
+  
+  seurat_tmp <- RunUMAP(seurat_tmp, reduction = "harmony", dims = 1:20)
+
+
+  seurat_tmp <- FindNeighbors(seurat_tmp,
+                              reduction = "harmony",
+                              dims = 1:20,
+                              force.recalc = TRUE)   %>% 
+                FindClusters(resolution = 0.8)
+  
+  return(seurat_tmp)
+})
+names(epn_seurat_split)<- names(subtypes)
+save(epn_seurat_split, file=paste0(analysis_dir, "UPDATED_ProjectedAnnot_AllEPN_SplitBySubtype_seurat.Robj"))
+
+```
+
+## UMAP of each epn subtype, same annots as for CellChat
+## Breakdown of number of cells per sample
+```{r}
+## Set colors so they're shared across all subtypes
+load("../../cellTypeColors.Robj")
+cellTypes<- unique(seurat_obj$CellChatAnnot)
+newCellTypes<- cellTypes[c(1:2,4:5,9,7, 11:14,8,3)]
+newColors<- c(brewer.pal(8, "Dark2"), "grey", "darksalmon", "indianred", "gold2")
+names(newColors)<- newCellTypes
+colorsUse<- c(colorsUse, newColors)
+save(colorsUse, file="../../../cellTypeColors.Robj")
+
+
+## UMAP
+load(paste0(analysis_dir, "UPDATED_ProjectedAnnot_AllEPN_SplitBySubtype_seurat.Robj"))
+all_plots<- list()
+for(subtype in names(epn_seurat_split)){
+  epn_seurat<- epn_seurat_split[[subtype]]
+  
+  ## Remove any cell types with less than 10 cells
+  cellTypeKeep<- table(epn_seurat$CellAnnot); cellTypeKeep<- names(cellTypeKeep)[cellTypeKeep>10]
+  epn_seurat<- subset(epn_seurat, CellAnnot %in% cellTypeKeep)
+  p<- DimPlot(object = epn_seurat, reduction="umap", group.by = "CellAnnot", 
+        label = TRUE, pt.size = 2, label.size = 6) + NoAxes() +
+    ggtitle(subtype)+
+    scale_color_manual(values=colorsUse)
+  all_plots[[subtype]]<- p
+}
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave("UPDATED_UMAP_clustering_CellChatAnnot_EPNsubtypesSplit_Label.jpg",
+         path=figure_dir, width=25, height=6)
+
+
+## Breakdown of cell annots
+for(subtype in names(epn_seurat_split)){
+  epn_seurat<- epn_seurat_split[[subtype]]
+  
+  annotBreakdown<- as.data.frame(table(epn_seurat$sample, epn_seurat$CellAnnot))
+  colnames(annotBreakdown)<- c("Sample", "CellType", "NCells")
+  
+  plot_list<-list()
+  for(i in unique(annotBreakdown$Sample)){
+    df<- annotBreakdown[annotBreakdown$Sample==i,]
+    p<-ggplot(df, aes(x="", y=NCells, fill=CellType))+
+      geom_bar(stat="identity", color="white")+
+      coord_polar("y", start=0)+
+      theme_void()+
+      ggtitle(i)+theme(plot.title = element_text(size=15, face="bold", hjust=0.5))+
+      scale_fill_manual(values=colorsUse)
+    plot_list[[i]]<- p
+  }
+  cowplot::plot_grid(plotlist=plot_list, ncol=length(plot_list))
+  ggsave(paste0(fig_dir, "UPDATED_CellBreakdown_", subtype,".png"), 
+         width=length(plot_list)*4, height=4)
+}
+
+```
+

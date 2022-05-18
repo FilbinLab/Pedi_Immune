@@ -1,5 +1,5 @@
 ---
-title: "NMF_template"
+title: "NMF_ImmuneRegev_Ependymoma"
 output: html_document
 ---
 
@@ -10,10 +10,12 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r setup, include=FALSE}
 library(NMF)
 
-base_dir = "C:/Users/jenna/"
+base_dir = "/Users/jlabelle/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
-working_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/TumorCellAnnotation/",
-                     "BySubtype/Midline/Midline_HistoneMutant")
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/", 
+                     "TumorCellAnnotation/BySubtype/Ependymoma/")
+
 
 preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
 nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
@@ -66,17 +68,16 @@ nmf_gene_list = list()
 ## Just use filtered count matrix 
 ## Both cells and genes need to be filtered (implemented in the next block)
 ## Feel free to use other ways to subset genes/cells 
-load("../analysis/midlineHistoneMut_cm_list.Robj")
-tumor_stat = readRDS("../analysis/inferCNV/seurat/midlineHistoneMut_call_tumor.rds")
-samples = readRDS("../analysis/midlineHistoneMut_samples.rds")
-cm_list<-midlineHistoneMut_cm_list
+input_dir<- "../../Preprocessing/SplitBySubtype/analysis/"
+load(paste0(input_dir, "epn_cm_list.Robj"))
+samples = readRDS(paste0(input_dir,"epn_samples.rds"))
+tumor_stat = readRDS(paste0(input_dir,"epn_call_tumor.rds"))
+cm_list<-epn_cm_list
+
 
 ## Compute highly variable genes for tumor cells only 
 genes_to_keep<-hvgSeurat(cm_list$raw_data[, tumor_stat=="Malignant"], variableFeatures=10000)
 
-## Alternative- pagoda
-#ode = hvgPagoda(cm_list$raw_data[, tumor_stat])
-#genes_to_keep = rownames(ode)[1:10000]
 
 saveRDS(genes_to_keep, file=paste0(nmf_folder, "top_10000_ode.rds"))
 

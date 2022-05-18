@@ -1,0 +1,123 @@
+---
+title: "ImmuneRegev_PreviousMetaprogram scoring"
+output: html_document
+---
+
+```{r read-data}
+knitr::opts_chunk$set(echo = TRUE)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/", 
+                     "TumorCellAnnotation/BySubtype/Ependymoma/")
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+
+
+seurat_analysis_folder = "analysis/seurat/"
+seurat_fig_folder = "figures/seurat/"
+nmf_analysis_folder = "analysis/nmf/all_subtypes/new/"
+
+## Set colors for use later- better for discriminating against groups
+library(RColorBrewer)
+n <- 50
+qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+
+
+
+## Function for Norm/center count matrix, score signature, then add scores to seurat object
+ScoreSig_Seurat<- function(seurat_obj, metaprograms){
+  ## Norm and center cm, get mean counts for each gene
+  cm_list<-NormCenter(seurat_obj@assays$RNA@counts)
+  cm_center<-cm_list$center_data
+  cm_mean<-rowMeans(log2(cm_list$raw_data+1))
+  
+  ## Score, assign each cell to its highest scoring metaprogram
+  scores<-lapply(metaprograms,function(x){scoreSignature(cm_center, cm_mean, x)})
+  scores<-as.data.frame(scores)
+  
+  annotation<-colnames(scores)[apply(scores,1,which.max)]
+  names(annotation)<-rownames(scores)
+  
+  maxScore<-apply(scores, 1, max)
+  
+  ## Add metaprogram annotation to seurat object
+  seurat_obj@meta.data$PreviousMetaprogram<-annotation
+  seurat_obj@meta.data$MaxMetaprogramScore<-maxScore
+  
+  return(seurat_obj)
+}
+```
+
+## Load pre-computed seurat object 
+```{r load-seurat-obj}
+seurat_filename = paste0(seurat_analysis_folder, "seurat_obj.Robj")
+if(file.exists(seurat_filename)){
+  load(seurat_filename)
+}
+```
+
+
+## Load previous metaprograms, subset to needed programs
+```{r}
+## ependymoma
+published_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/PublishedDatasets/FilbinPublishedDatasets/Metaprograms/")
+epn_metaprograms<- read.csv(paste0(published_dir,"TableS2_epn2020Paper_Metaprograms_AllMerged.csv"))
+epn_metaprograms<- as.list(epn_metaprograms)
+ 
+```
+
+
+## Score each seurat count matrix for each sample using its respective metaprogram
+```{r}
+seurat_obj<- ScoreSig_Seurat(seurat_obj, epn_metaprograms)
+```
+
+## Plot UMAP, coloring by highest scoring program
+```{r}
+DimPlot(object = seurat_obj, reduction = "umap", pt.size = 1, 
+        group.by = "PreviousMetaprogram", cols = col_vector[10:38])
+ggsave(paste0(seurat_fig_folder, "PreviousMetaprograms_AllMerged.png"), width=10,height=7)
+
+```
+
+
+# Pie chart of breakdown of each cluster, programs identified
+```{r}
+table_epn<-as.data.frame.matrix(table(seurat_obj@meta.data$PreviousMetaprogram, 
+                 seurat_obj@meta.data$seurat_clusters))
+group_colors<- col_vector[1:length(unique(seurat_obj@meta.data$PreviousMetaprogram))]
+names(group_colors)<- unique(seurat_obj@meta.data$PreviousMetaprogram)
+
+all_pie_charts<-list()
+for (cluster in colnames(table_epn)){
+  df<- as.data.frame(table_epn[,as.character(cluster)])
+  colnames(df)<-"Cluster"
+  df$Program<-rownames(table_epn)
+  df<-df[df$Cluster>3,] ## at least 3 cells
+  p<-ggplot(df, aes(x="", y=Cluster, fill=Program))+
+    geom_bar(stat="identity") + 
+    coord_polar("y", start=0)+
+    ggtitle(paste0("Cluster", cluster))+
+    scale_fill_manual(values=group_colors)
+  all_pie_charts[[paste0("Cluster", cluster)]]<-p
+}
+
+cowplot::plot_grid(plotlist = all_pie_charts, ncol=2)
+ggsave(paste0(seurat_fig_folder, "PieChartBreakdown_PreviousProgramsAllMerged.png"),
+       width=10,height=10)
+
+
+```
+
+
+
+## Save seurat object
+
+```{r}
+save(seurat_obj, file= paste0(seurat_analysis_folder, "seurat_obj.Robj"))
+```
+

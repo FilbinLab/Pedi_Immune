@@ -9,8 +9,8 @@ knitr::opts_chunk$set(echo = TRUE)
 base_dir = "C:/Users/jenna/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
 project_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/")
-working_dir<- paste0(project_dir, 
-                     "Annotation/BySubtype/Midline/Midline_HistoneMutant/WithNewSample/BT1873Only/")
+working_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/TumorCellAnnotation/",
+                     "BySubtype/Midline/Midline_HistoneMutantWithNewSample/BT1873Only/")
 
 library(Seurat, lib.loc = "C:/Users/jenna/OneDrive/Documents/R/win-library/4.0/Seurat/V4") 
 

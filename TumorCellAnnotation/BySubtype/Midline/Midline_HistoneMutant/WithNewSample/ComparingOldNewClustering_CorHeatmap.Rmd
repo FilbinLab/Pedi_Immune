@@ -9,8 +9,8 @@ library(Seurat, lib.loc = "C:/Users/jenna/OneDrive/Documents/R/win-library/4.0/S
 base_dir = "C:/Users/jenna/"
 project_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/")
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
-working_dir<- paste0(project_dir, 
-                     "Annotation/BySubtype/Midline/Midline_HistoneMutant/WithNewSample/")
+working_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/TumorCellAnnotation/",
+                     "BySubtype/Midline/Midline_HistoneMutant/WithNewSample/")
 
 seurat_fig_folder = "figures/seurat/"
 

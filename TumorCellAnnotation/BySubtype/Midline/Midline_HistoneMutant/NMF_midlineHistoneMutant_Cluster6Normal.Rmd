@@ -12,7 +12,8 @@ library(NMF)
 
 base_dir = "C:/Users/jenna/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
-working_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/Midline_HistoneMutant")
+working_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/TumorCellAnnotation/",
+                     "BySubtype/Midline/Midline_HistoneMutant")
 
 
 preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
