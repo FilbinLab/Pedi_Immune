@@ -1,0 +1,171 @@
+---
+title: "NMF_template"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r setup, include=FALSE}
+library(NMF)
+
+base_dir = "C:/Users/jenna/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/")
+
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+
+source(preprocessing)
+source(nmf_helper)
+
+nmf_folder = "analysis/nmf/"
+if (!dir.exists(nmf_folder)){
+  dir.create(nmf_folder)
+}
+
+nmf_fig_folder = "figures/nmf/"
+if (!dir.exists(nmf_fig_folder)){
+  dir.create(nmf_fig_folder)
+}
+```
+
+## Set global options for nmf 
+```{r set_up_new_lists}
+## Set global options for nmf 
+
+## This sets the number of cores for computing NMF (P6 means 6 cores)
+## NMF is super computationally heavy, so I usually use all cores; 
+## also the computer still uses all cores even I change P6 to P4...
+## 'snmf/r' is the algorithm Volker suggests to use and we keep that
+## I turned off shared.memory. If it is left on, it may sometimes cause memory leak (likely a bug)
+nmf.options(verbose=TRUE, p="vP6", default.algorithm="snmf/r", shared.memory=FALSE)
+
+## ranges of ranks to check out if you decide to computationally estimate the optimal ranks to use (OPTIONAL)
+rank_range = 2:8
+## Number of NMF repeats for estimating optimal rank (OPTIONAL)
+nrun_multi = 30
+## Number of NMF repeats for when using the determined/optimal rank for final NMF calculation
+nrun_single = 100
+## A list to store preprocessed count matrix for each sample 
+cm_sample = list()
+## A list to store NMF results with differentt ranks for each sample (OPTIONAL)
+nmf_estim_r_obj_list = list()
+## A list to store the optimal rank for each sample (OPTIONAL)
+rank_list = list()
+## A list to store the final NMF result object for each sample 
+nmf_obj_list = list()
+## A list to store the final top 30 weighted genes for each sample 
+nmf_gene_list = list()
+```
+
+## Load cm, tumor_stat and samples; compute and save overdispersed genes and top 10K variable genes 
+```{r load-precomputed-data}
+## Just use filtered count matrix 
+## Both cells and genes need to be filtered (implemented in the next block)
+## Feel free to use other ways to subset genes/cells 
+load("analysis/cm_list.Robj")
+tumor_stat = readRDS("analysis/inferCNV/seurat/call_tumor.rds")
+samples = readRDS("analysis/samples.rds")
+## Compute highly variable genes for tumor cells only 
+genes_to_keep<-hvgSeurat(cm_list$raw_data, variableFeatures=10000)
+
+## Alternative- pagoda
+#ode = hvgPagoda(cm_list$raw_data[, tumor_stat])
+#genes_to_keep = rownames(ode)[1:10000]
+
+saveRDS(genes_to_keep, file=paste0(nmf_folder, "top_10000_ode.rds"))
+
+## If the analysis is already done
+##load("analysis/nmf_obj_list.Robj")
+##load("analysis/nmf_gene_list.Robj")
+```
+
+## Subset tumor cells and normalize/center cm 
+```{r subset_tumor_cells}
+## Keep only tumor cells and top 10000 highly variable genes for raw and log transformed data
+cm = cm_list$raw_data[rownames(cm_list$raw_data) %in% genes_to_keep,
+                      tumor_stat=="Malignant"]
+cm_norm = cm_list$norm_data[rownames(cm_list$raw_data) %in% genes_to_keep,
+                      tumor_stat=="Malignant"]
+cm_mean = log2(rowMeans(cm)+1)
+
+## Re-centering the data for tumor cells only 
+cm_center = cm_norm - rowMeans(cm_norm)
+samples_tumor = samples[tumor_stat=="Malignant"]
+
+rm(cm_list); gc()
+```
+
+## Estimate optimal # of nmf factors 
+## This is OPTIONAL, as it is not very effective and super slow 
+## I used to do this, but realize computationally determined optimal rank might not be biologically optimal 
+## So I switched to specify a pre-determined rank, based on the number of clusters from Seurat's clustering algorithm 
+## In the EPN paper, we compared using a rank of 6 vs 10 and got pretty similar results, indicating a rank of 5-10 probably yields similar results
+## Most tumors we have worked so far only show 5-10 subpopulations in total, and usually 3-6 in each patient, so I would suggest starting with a rank of 5 or 6, which is also faster than a rank of 10. 
+```{r estim-r}
+## For each patient (1) filter out genes with 0 in all cells 
+## (2) convert negative values to 0
+for (current_sample in unique(samples_tumor)){
+  cm_sample[[current_sample]] = nmf_df_preprocessing(cm_center[,samples_tumor == current_sample])
+}
+
+## OPTIONAL, computationally estimate the optimal rank 
+# for (current_sample in unique(samples_tumor)){
+#   # perform 30 runs for each value of r in range 2:10
+#   message(paste0("Current sample: ", current_sample, "Starting time: ", Sys.time()))
+#   nmf_estim_r_obj_list[[current_sample]] <- nmf(cm_sample[[current_sample]], rank_range, nrun=nrun_multi, seed=123456)
+#   message(paste0("Ending time: ", Sys.time()))
+# }
+# save(nmf_estim_r_obj_list, file=paste0(nmf_folder, "nmf_estim_r_obj_list.Robj"))
+# ##load("analysis/nmf/nmf_estim_r_obj_list.Robj")
+
+## Manual assignment of ranks for each sample 
+for (current_sample in unique(samples_tumor)){
+  rank_list[[current_sample]] = 5
+}
+save(rank_list, file=paste0(nmf_folder, "nmf_rank_list.Robj"))
+```
+
+## NMF with optimal k and compute top 30 marker genes for each nmf factor 
+```{r nmf-fitting-genes}
+## NMF with optimal rank 
+for (current_sample in names(rank_list)){
+  message(paste0("Current sample: ", current_sample, "; Starting time: ", Sys.time(), "\n"))
+  nmf_obj_list[[current_sample]] = nmf(cm_sample[[current_sample]], rank=rank_list[[current_sample]], 
+                                       nrun=nrun_single, seed=123456)
+  message(paste0("Ending time: ", Sys.time(), "\n"))
+}
+save(nmf_obj_list, file=paste0(nmf_folder, "nmf_obj_list.Robj"))
+
+cat("Computing NMF genes...")
+for (current_sample in names(rank_list)){
+  ##nmf_gene_list[[current_sample]] = findNmfCorrelatedGenes(basis(nmf_obj_list[[current_sample]]), current_sample, return_list=F)
+  nmf_gene_list = append(nmf_gene_list, findNmfCorrelatedGenes(basis(nmf_obj_list[[current_sample]]), current_sample, return_list=T))
+}
+save(nmf_gene_list, file=paste0(nmf_folder, "nmf_gene_list.Robj"))
+```
+
+## NMF scores for each nmf factor 
+```{r nmf_score}
+## Compute signature score for each NMF factor (30 representative genes) in all cells 
+nmf_score = scoreNmfGenes(cm_center, cm_mean, nmf_gene_list)
+```
+
+## SD for each nmf factor 
+## A previous paper exclude NMF factors with low variation among samples (SD < 0.8)
+## But we don't really exclude any NMF factors based on that
+```{r SD of cell score}
+## SD of cell score for each nmf factor within each sample 
+nmf_samples = sapply(rownames(nmf_score), function(x) unlist(strsplit(x, split = "_", fixed = T))[1])
+nmf_sd = NULL
+for (sample in unique(samples_tumor)){
+  tmp = nmf_score[nmf_samples == sample,which(samples_tumor == sample)]
+  nmf_sd =  c(nmf_sd, apply(tmp, 1, sd))
+}
+table(nmf_sd > 0.8)
+```
+
+
