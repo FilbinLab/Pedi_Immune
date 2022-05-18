@@ -1,0 +1,505 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+project_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/")
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/",
+                     "Annotation/BySubtype/Midline/Midline_HistoneMutant/WithNewSample")
+library(Seurat) 
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+stat_helper = paste0(base_dir, script_dir, "common_stat_test.R")
+source(preprocessing)
+source(stat_helper)
+
+
+seurat_analysis_folder = "analysis/seurat/"
+fig_folder = "figures/LabelTransferOptimization/"
+for (folder in c(seurat_analysis_folder, fig_folder)){
+  if (!dir.exists(folder)){
+    dir.create(folder)
+  }
+}
+
+
+## Set colors for use later- better for discriminating against groups
+library(sparseMatrixStats)
+library(RColorBrewer)
+n <- 50
+qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+
+subtypes<- read.csv(paste0(project_dir, "Subtypes.csv"))
+```
+
+## Load in original and current seurat objs
+```{r}
+load(paste0(seurat_analysis_folder, "seurat_obj_Cluster6Removed.Robj"))
+current_seurat_obj<- seurat_obj_annot; rm(seurat_obj_annot)
+
+load("../analysis/seurat/seurat_obj_Cluster6Removed.Robj")
+original_seurat_obj<-seurat_obj_annot; rm(seurat_obj_annot)
+```
+
+## Wrapper function for transfering labels
+```{r}
+runTransferAnchors<- function(seurat_list, query_seurat_obj, ref_seurat_obj,
+                              FTA_reduction, FTA_reference.reduction,
+                              TD_refdata, TD_weight.reduction){
+  
+  transferAnchors<-FindTransferAnchors(reference = ref_seurat_obj, 
+                                       query=query_seurat_obj,
+                                       reduction=FTA_reduction,
+                                       reference.reduction = FTA_reference.reduction)
+  
+  predictions <- TransferData(anchorset = transferAnchors, 
+                              refdata = TD_refdata,
+                              weight.reduction = TD_weight.reduction)
+  
+  predictions_final<- predictions$predicted.id; names(predictions_final)<- rownames(predictions)
+  query_seurat_obj$Predictions<- predictions_final
+  return(query_seurat_obj)
+}
+```
+
+## Tests:
+## Accuracy determined by % of cells that match between current/original (minus new sample)
+1. query current seurat (MINUS new sample): reduction method optimization
+2. query current seurat (MINUS new sample) with OPC-* collapsed: reduction method optimization
+3. Compare "best" settings from #1/#2 to current seurat INCLUDING new sample
+4. Compare "best" settings from #1/#2 to current seurat INCLUDING new sample, with OPC-* collapsed
+5. Query full current seurat vs 1 sample (do for each sample independently). Use best reduction settings.
+
+## Test 1: reduction method optimization
+options for FindTransferAnchors: pp + pca, pp + harmony, rpca, cca (must run cca for transferData as well)
+options for TransferData: pcaproject, cca
+
+1. pp + pca / pp
+2. pp + harmony / pp
+3. cca / cca
+4. rpca / pcaproject
+
+```{r}
+seurat_list<-list(current=subset(current_seurat_obj, sample != "BT1873vent"),
+                  original=original_seurat_obj)
+
+test1_results<-list()
+## 1: pp+pca / pp
+test1_results[["option1"]]<-runTransferAnchors(seurat_list=seurat_list,
+                                               query_seurat_obj=seurat_list$current,
+                                               ref_seurat_obj = seurat_list$original,
+                                               FTA_reduction = "pcaproject", FTA_reference.reduction = "pca",
+                                               TD_refdata = seurat_list$original$ManualAnnot,
+                                               TD_weight.reduction = "pcaproject")
+## 2: pp+harmony / pp
+test1_results[["option2"]]<-runTransferAnchors(seurat_list=seurat_list,
+                                               query_seurat_obj=seurat_list$current,
+                                               ref_seurat_obj = seurat_list$original,
+                                               FTA_reduction = "pcaproject", FTA_reference.reduction = "harmony",
+                                               TD_refdata = seurat_list$original$ManualAnnot,
+                                               TD_weight.reduction = "pcaproject")
+
+## 3: cca / pp
+test1_results[["option3"]]<-runTransferAnchors(seurat_list=seurat_list,
+                                               query_seurat_obj=seurat_list$current,
+                                               ref_seurat_obj = seurat_list$original,
+                                               FTA_reduction = "cca", FTA_reference.reduction = NULL,
+                                               TD_refdata = seurat_list$original$ManualAnnot,
+                                               TD_weight.reduction = "cca")
+
+## 4: rpca / pp
+test1_results[["option4"]]<-runTransferAnchors(seurat_list=seurat_list,
+                                               query_seurat_obj=seurat_list$current,
+                                               ref_seurat_obj = seurat_list$original,
+                                               FTA_reduction = "rpca", FTA_reference.reduction = NULL,
+                                               TD_refdata = seurat_list$original$ManualAnnot,
+                                               TD_weight.reduction = "pcaproject")
+
+```
+
+## Quantify accuracy of each of the above methods- what percent of cells match between original/current?
+```{r}
+percentAccurate<- lapply(test1_results, function(seurat_transfer){
+  ## Subset to cells also found in original (only a few differences due to inferCNV)
+  commonCells<- colnames(seurat_transfer)[colnames(seurat_transfer) %in% colnames(seurat_list$original)]
+  seurat_transfer<-subset(seurat_transfer, cells=commonCells)
+  seurat_original<- subset(seurat_list$original, cells=commonCells)
+  print(sum(colnames(seurat_transfer) == colnames(seurat_original))); print(ncol(seurat_transfer)); print(ncol(seurat_original))
+  
+  perMatches<- round(sum(seurat_transfer$Predictions==seurat_original$ManualAnnot)/ncol(seurat_transfer),3)
+  return(perMatches)
+})
+
+## bar plot of accuracy
+df<-as.data.frame(t(as.data.frame(percentAccurate))); colnames(df)<- "PercentMatching"
+df$settings<- c("pcaproject+pca\npcaproject",
+                "pcaproject+harmony\npcaproject",
+                "cca\ncca",
+                "rpca\npcaproject")
+ggplot(df, aes(x=settings, y=PercentMatching))+
+  geom_bar(position="stack", stat="identity")+
+  ylim(0,1)+
+  xlab("")+
+  theme(axis.text.x = element_text(angle=45, hjust=1, face="bold"))+
+  ggtitle("Percent accuracy in transfer vs original:\nReduction method optimization")+
+  geom_hline(yintercept = max(df$PercentMatching), linetype="dotted", color="red")
+ggsave(paste0(fig_folder, "ReductionMethodOptimization.png"), width=5, height=5)
+```
+ best is pp + pca, pp (88%)
+
+## Test 2: reduction method optimization, with OPC-* collapsed
+options for FindTransferAnchors: pp + pca, pp + harmony, rpca, cca (must run cca for transferData as well)
+options for TransferData: pcaproject, cca
+
+1. pp + pca / pp
+2. pp + harmony / pp
+3. cca / cca
+4. rpca / pcaproject
+
+```{r}
+seurat_list<-list(current=subset(current_seurat_obj, sample != "BT1873vent"),
+                  original=original_seurat_obj)
+
+seurat_list$original$ManualAnnot<-gsub("OPC-like_Ribosomal", "OPC-like", 
+                                  gsub("OPC-like_MES", "OPC-like",
+                                  gsub("OPC-like_Alt", "OPC-like", seurat_list$original$ManualAnnot)))
+
+test2_results<-list()
+## 1: pp+pca / pp
+test2_results[["option1"]]<-runTransferAnchors(seurat_list=seurat_list,
+                                               query_seurat_obj=seurat_list$current,
+                                               ref_seurat_obj = seurat_list$original,
+                                               FTA_reduction = "pcaproject", FTA_reference.reduction = "pca",
+                                               TD_refdata = seurat_list$original$ManualAnnot,
+                                               TD_weight.reduction = "pcaproject")
+## 2: pp+harmony / pp
+test2_results[["option2"]]<-runTransferAnchors(seurat_list=seurat_list,
+                                               query_seurat_obj=seurat_list$current,
+                                               ref_seurat_obj = seurat_list$original,
+                                               FTA_reduction = "pcaproject", FTA_reference.reduction = "harmony",
+                                               TD_refdata = seurat_list$original$ManualAnnot,
+                                               TD_weight.reduction = "pcaproject")
+
+## 3: cca / pp
+test2_results[["option3"]]<-runTransferAnchors(seurat_list=seurat_list,
+                                               query_seurat_obj=seurat_list$current,
+                                               ref_seurat_obj = seurat_list$original,
+                                               FTA_reduction = "cca", FTA_reference.reduction = NULL,
+                                               TD_refdata = seurat_list$original$ManualAnnot,
+                                               TD_weight.reduction = "cca")
+
+## 4: rpca / pp
+test2_results[["option4"]]<-runTransferAnchors(seurat_list=seurat_list,
+                                               query_seurat_obj=seurat_list$current,
+                                               ref_seurat_obj = seurat_list$original,
+                                               FTA_reduction = "rpca", FTA_reference.reduction = NULL,
+                                               TD_refdata = seurat_list$original$ManualAnnot,
+                                               TD_weight.reduction = "pcaproject")
+
+```
+
+## Quantify accuracy of each of the above methods- what percent of cells match between original/current?
+```{r}
+percentAccurate<- lapply(test2_results, function(seurat_transfer){
+  ## Subset to cells also found in original (only a few differences due to inferCNV)
+  commonCells<- colnames(seurat_transfer)[colnames(seurat_transfer) %in% colnames(seurat_list$original)]
+  seurat_transfer<-subset(seurat_transfer, cells=commonCells)
+  seurat_original<- subset(seurat_list$original, cells=commonCells)
+  print(sum(colnames(seurat_transfer) == colnames(seurat_original))); print(ncol(seurat_transfer)); print(ncol(seurat_original))
+  
+  perMatches<- round(sum(seurat_transfer$Predictions==seurat_original$ManualAnnot)/ncol(seurat_transfer),3)
+  return(perMatches)
+})
+
+## bar plot of accuracy
+df<-as.data.frame(t(as.data.frame(percentAccurate))); colnames(df)<- "PercentMatching"
+df$settings<- c("pcaproject+pca\npcaproject",
+                "pcaproject+harmony\npcaproject",
+                "cca\ncca",
+                "rpca\npcaproject")
+ggplot(df, aes(x=settings, y=PercentMatching))+
+  geom_bar(position="stack", stat="identity")+
+  ylim(0,1)+
+  xlab("")+
+  theme(axis.text.x = element_text(angle=45, hjust=1, face="bold"))+
+  ggtitle("Percent accuracy in transfer vs original:\nReduction method optimization, OPC collapsed")+
+  geom_hline(yintercept = max(df$PercentMatching), linetype="dotted", color="red")
+ggsave(paste0(fig_folder, "ReductionMethodOptimization_OPCcollapsed.png"), width=5, height=5)
+```
+
+best is pp + pca , pp- 95.5% (just barely) same as above
+
+## Test 3: Reduction method optimization: Compare to current seurat INCLUDING new sample
+```{r}
+seurat_list<-list(current=current_seurat_obj,
+                  original=original_seurat_obj)
+
+
+test3_results<-list()
+## 1: pp+pca / pp
+test3_results[["option1"]]<-runTransferAnchors(seurat_list=seurat_list,
+                                               query_seurat_obj=seurat_list$current,
+                                               ref_seurat_obj = seurat_list$original,
+                                               FTA_reduction = "pcaproject", FTA_reference.reduction = "pca",
+                                               TD_refdata = seurat_list$original$ManualAnnot,
+                                               TD_weight.reduction = "pcaproject")
+## 2: pp+harmony / pp
+test3_results[["option2"]]<-runTransferAnchors(seurat_list=seurat_list,
+                                               query_seurat_obj=seurat_list$current,
+                                               ref_seurat_obj = seurat_list$original,
+                                               FTA_reduction = "pcaproject", FTA_reference.reduction = "harmony",
+                                               TD_refdata = seurat_list$original$ManualAnnot,
+                                               TD_weight.reduction = "pcaproject")
+
+## 3: cca / pp
+test3_results[["option3"]]<-runTransferAnchors(seurat_list=seurat_list,
+                                               query_seurat_obj=seurat_list$current,
+                                               ref_seurat_obj = seurat_list$original,
+                                               FTA_reduction = "cca", FTA_reference.reduction = NULL,
+                                               TD_refdata = seurat_list$original$ManualAnnot,
+                                               TD_weight.reduction = "cca")
+
+## 4: rpca / pp
+test3_results[["option4"]]<-runTransferAnchors(seurat_list=seurat_list,
+                                               query_seurat_obj=seurat_list$current,
+                                               ref_seurat_obj = seurat_list$original,
+                                               FTA_reduction = "rpca", FTA_reference.reduction = NULL,
+                                               TD_refdata = seurat_list$original$ManualAnnot,
+                                               TD_weight.reduction = "pcaproject")
+
+```
+
+## Quantify accuracy of each of the above methods- what percent of cells match between original/current?
+```{r}
+percentAccurate<- lapply(test3_results, function(seurat_transfer){
+  ## Subset to cells also found in original (only a few differences due to inferCNV)
+  commonCells<- colnames(seurat_transfer)[colnames(seurat_transfer) %in% colnames(seurat_list$original)]
+  seurat_transfer<-subset(seurat_transfer, cells=commonCells)
+  seurat_original<- subset(seurat_list$original, cells=commonCells)
+  print(sum(colnames(seurat_transfer) == colnames(seurat_original))); print(ncol(seurat_transfer)); print(ncol(seurat_original))
+  
+  perMatches<- round(sum(seurat_transfer$Predictions==seurat_original$ManualAnnot)/ncol(seurat_transfer),3)
+  return(perMatches)
+})
+
+## bar plot of accuracy
+df<-as.data.frame(t(as.data.frame(percentAccurate))); colnames(df)<- "PercentMatching"
+df$settings<- c("pcaproject+pca\npcaproject",
+                "pcaproject+harmony\npcaproject",
+                "cca\ncca",
+                "rpca\npcaproject")
+ggplot(df, aes(x=settings, y=PercentMatching))+
+  geom_bar(position="stack", stat="identity")+
+  ylim(0,1)+
+  xlab("")+
+  theme(axis.text.x = element_text(angle=45, hjust=1, face="bold"))+
+  ggtitle("Percent accuracy in transfer vs original:\nReduction method optimization")+
+  geom_hline(yintercept = max(df$PercentMatching), linetype="dotted", color="red")
+ggsave(paste0(fig_folder, "ReductionMethodOptimization_NewSampleIncluded.png"), width=5, height=5)
+```
+
+best is still pp,pca,pp at 88.5
+
+## Test 2: reduction method optimization, with OPC-* collapsed, including new sample
+options for FindTransferAnchors: pp + pca, pp + harmony, rpca, cca (must run cca for transferData as well)
+options for TransferData: pcaproject, cca
+
+1. pp + pca / pp
+2. pp + harmony / pp
+3. cca / cca
+4. rpca / pcaproject
+
+```{r}
+seurat_list<-list(current=current_seurat_obj,
+                  original=original_seurat_obj)
+
+seurat_list$original$ManualAnnot<-gsub("OPC-like_Ribosomal", "OPC-like", 
+                                  gsub("OPC-like_MES", "OPC-like",
+                                  gsub("OPC-like_Alt", "OPC-like", seurat_list$original$ManualAnnot)))
+
+test4_results<-list()
+## 1: pp+pca / pp
+test4_results[["option1"]]<-runTransferAnchors(seurat_list=seurat_list,
+                                               query_seurat_obj=seurat_list$current,
+                                               ref_seurat_obj = seurat_list$original,
+                                               FTA_reduction = "pcaproject", FTA_reference.reduction = "pca",
+                                               TD_refdata = seurat_list$original$ManualAnnot,
+                                               TD_weight.reduction = "pcaproject")
+## 2: pp+harmony / pp
+test4_results[["option2"]]<-runTransferAnchors(seurat_list=seurat_list,
+                                               query_seurat_obj=seurat_list$current,
+                                               ref_seurat_obj = seurat_list$original,
+                                               FTA_reduction = "pcaproject", FTA_reference.reduction = "harmony",
+                                               TD_refdata = seurat_list$original$ManualAnnot,
+                                               TD_weight.reduction = "pcaproject")
+
+## 3: cca / pp
+test4_results[["option3"]]<-runTransferAnchors(seurat_list=seurat_list,
+                                               query_seurat_obj=seurat_list$current,
+                                               ref_seurat_obj = seurat_list$original,
+                                               FTA_reduction = "cca", FTA_reference.reduction = NULL,
+                                               TD_refdata = seurat_list$original$ManualAnnot,
+                                               TD_weight.reduction = "cca")
+
+## 4: rpca / pp
+test4_results[["option4"]]<-runTransferAnchors(seurat_list=seurat_list,
+                                               query_seurat_obj=seurat_list$current,
+                                               ref_seurat_obj = seurat_list$original,
+                                               FTA_reduction = "rpca", FTA_reference.reduction = NULL,
+                                               TD_refdata = seurat_list$original$ManualAnnot,
+                                               TD_weight.reduction = "pcaproject")
+
+```
+
+## Quantify accuracy of each of the above methods- what percent of cells match between original/current?
+```{r}
+percentAccurate<- lapply(test4_results, function(seurat_transfer){
+  ## Subset to cells also found in original (only a few differences due to inferCNV)
+  commonCells<- colnames(seurat_transfer)[colnames(seurat_transfer) %in% colnames(seurat_list$original)]
+  seurat_transfer<-subset(seurat_transfer, cells=commonCells)
+  seurat_original<- subset(seurat_list$original, cells=commonCells)
+  print(sum(colnames(seurat_transfer) == colnames(seurat_original))); print(ncol(seurat_transfer)); print(ncol(seurat_original))
+  
+  perMatches<- round(sum(seurat_transfer$Predictions==seurat_original$ManualAnnot)/ncol(seurat_transfer),3)
+  return(perMatches)
+})
+
+## bar plot of accuracy
+df<-as.data.frame(t(as.data.frame(percentAccurate))); colnames(df)<- "PercentMatching"
+df$settings<- c("pcaproject+pca\npcaproject",
+                "pcaproject+harmony\npcaproject",
+                "cca\ncca",
+                "rpca\npcaproject")
+ggplot(df, aes(x=settings, y=PercentMatching))+
+  geom_bar(position="stack", stat="identity")+
+  ylim(0,1)+
+  xlab("")+
+  theme(axis.text.x = element_text(angle=45, hjust=1, face="bold"))+
+  ggtitle("Percent accuracy in transfer vs original:\nReduction method optimization, OPC collapsed")+
+  geom_hline(yintercept = max(df$PercentMatching), linetype="dotted", color="red")
+ggsave(paste0(fig_folder, "ReductionMethodOptimization_OPCcollapsed_WithNewSample.png"), width=5, height=5)
+```
+
+
+best is still pp,pca,pp at 95.7%
+
+## Test5: Query full current seurat vs 1 sample (do for each sample independently). Use best reduction settings.
+```{r}
+samples<- unique(original_seurat_obj$sample)
+
+test5_results<- list()
+for(s in samples){
+  print(s)
+  seurat_list<- list(current=subset(current_seurat_obj, sample==s),
+                     original=original_seurat_obj)
+  test5_results[[s]]<- runTransferAnchors(seurat_list=seurat_list,
+                                          query_seurat_obj=seurat_list$current,
+                                          ref_seurat_obj = seurat_list$original,
+                                          FTA_reduction = "pcaproject", FTA_reference.reduction = "pca",
+                                          TD_refdata = seurat_list$original$ManualAnnot,
+                                          TD_weight.reduction = "pcaproject")
+  
+}
+```
+
+## Quantify accuracy of each of the above methods- what percent of cells match between original/current?
+```{r}
+percentAccurate<- lapply(test5_results, function(seurat_transfer){
+  ## Subset to cells also found in original (only a few differences due to inferCNV)
+  commonCells<- colnames(seurat_transfer)[colnames(seurat_transfer) %in% colnames(seurat_list$original)]
+  seurat_transfer<-subset(seurat_transfer, cells=commonCells)
+  seurat_original<- subset(seurat_list$original, cells=commonCells)
+  print(sum(colnames(seurat_transfer) == colnames(seurat_original))); print(ncol(seurat_transfer)); print(ncol(seurat_original))
+  
+  perMatches<- round(sum(seurat_transfer$Predictions==seurat_original$ManualAnnot)/ncol(seurat_transfer),3)
+  return(perMatches)
+})
+
+## bar plot of accuracy
+df<-as.data.frame(t(as.data.frame(percentAccurate))); colnames(df)<- "PercentMatching"
+df$Sample<-rownames(df)
+
+## Manually add a row with the percent matching rate when using all samples, same reduction, also w/o opc collapse
+df[nrow(df)+1,]<- c(.88, "AllSamples")
+df$PercentMatching<- as.numeric(df$PercentMatching)
+df$Comparison<- ifelse(df$Sample=="AllSamples", "yes", "no")
+
+ggplot(df, aes(x=Sample, y=PercentMatching, fill=Comparison))+
+  geom_bar(position="stack", stat="identity")+
+  ylim(0,1)+
+  xlab("")+
+  theme(axis.text.x = element_text(angle=45, hjust=1, face="bold"),
+        legend.position = "none")+
+  ggtitle("Percent accuracy in transfer vs original:\nSingle samples vs all together")+
+  geom_hline(yintercept = max(df$PercentMatching), linetype="dotted", color="red")+
+  scale_fill_manual(values=c(yes="red", no="black"))
+ggsave(paste0(fig_folder, "LabelTransferSepForEachSample.png"), width=5, height=5)
+```
+
+
+## Test 6: Query full current seurat vs 1 sample (do for each sample independently). Use best reduction settings.
+OPC-* collapsed
+```{r}
+samples<- unique(original_seurat_obj$sample)
+
+test6_results<- list()
+for(s in samples){
+  print(s)
+  seurat_list<- list(current=subset(current_seurat_obj, sample==s),
+                     original=original_seurat_obj)
+  
+  seurat_list$original$ManualAnnot<-gsub("OPC-like_Ribosomal", "OPC-like", 
+                                  gsub("OPC-like_MES", "OPC-like",
+                                  gsub("OPC-like_Alt", "OPC-like", seurat_list$original$ManualAnnot)))
+  print(table(seurat_list$original$ManualAnnot))
+  test6_results[[s]]<- runTransferAnchors(seurat_list=seurat_list,
+                                          query_seurat_obj=seurat_list$current,
+                                          ref_seurat_obj = seurat_list$original,
+                                          FTA_reduction = "pcaproject", FTA_reference.reduction = "pca",
+                                          TD_refdata = seurat_list$original$ManualAnnot,
+                                          TD_weight.reduction = "pcaproject")
+  
+}
+```
+
+## Quantify accuracy of each of the above methods- what percent of cells match between original/current?
+```{r}
+percentAccurate<- lapply(test6_results, function(seurat_transfer){
+  ## Subset to cells also found in original (only a few differences due to inferCNV)
+  commonCells<- colnames(seurat_transfer)[colnames(seurat_transfer) %in% colnames(seurat_list$original)]
+  seurat_transfer<-subset(seurat_transfer, cells=commonCells)
+  seurat_original<- subset(seurat_list$original, cells=commonCells)
+  print(sum(colnames(seurat_transfer) == colnames(seurat_original))); print(ncol(seurat_transfer)); print(ncol(seurat_original))
+  
+  perMatches<- round(sum(seurat_transfer$Predictions==seurat_original$ManualAnnot)/ncol(seurat_transfer),3)
+  return(perMatches)
+})
+
+## bar plot of accuracy
+df<-as.data.frame(t(as.data.frame(percentAccurate))); colnames(df)<- "PercentMatching"
+df$Sample<-rownames(df)
+
+## Manually add a row with the percent matching rate when using all samples, same reduction, also w/o opc collapse
+df[nrow(df)+1,]<- c(.95, "AllSamples")
+df$PercentMatching<- as.numeric(df$PercentMatching)
+df$Comparison<- ifelse(df$Sample=="AllSamples", "yes", "no")
+
+ggplot(df, aes(x=Sample, y=PercentMatching, fill=Comparison))+
+  geom_bar(position="stack", stat="identity")+
+  ylim(0,1)+
+  xlab("")+
+  theme(axis.text.x = element_text(angle=45, hjust=1, face="bold"),
+        legend.position = "none")+
+  ggtitle("Percent accuracy in transfer vs original:\nSingle samples vs all together, OPC collapsed")+
+  geom_hline(yintercept = max(df$PercentMatching), linetype="dotted", color="red")+
+  scale_fill_manual(values=c(yes="red", no="black"))
+ggsave(paste0(fig_folder, "LabelTransferSepForEachSample_OPCcollapsed.png"), width=5, height=5)
+```
+

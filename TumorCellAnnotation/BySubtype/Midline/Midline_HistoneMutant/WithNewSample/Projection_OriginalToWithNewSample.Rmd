@@ -1,0 +1,93 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+project_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/")
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/",
+                     "Annotation/BySubtype/Midline/Midline_HistoneMutant/WithNewSample")
+library(Seurat, lib.loc = "C:/Users/jenna/OneDrive/Documents/R/win-library/4.0/Seurat/V4") 
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+stat_helper = paste0(base_dir, script_dir, "common_stat_test.R")
+source(preprocessing)
+source(stat_helper)
+
+
+seurat_analysis_folder = "analysis/seurat/"
+seurat_fig_folder = "figures/seurat/"
+for (folder in c(seurat_analysis_folder, seurat_fig_folder)){
+  if (!dir.exists(folder)){
+    dir.create(folder)
+  }
+}
+
+
+## Set colors for use later- better for discriminating against groups
+library(sparseMatrixStats)
+library(RColorBrewer)
+n <- 50
+qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+
+subtypes<- read.csv(paste0(project_dir, "Subtypes.csv"))
+```
+
+## Load in original and current seurat objs
+```{r}
+load(paste0(seurat_analysis_folder, "seurat_obj_Cluster6Removed.Robj"))
+current_seurat_obj<- seurat_obj_annot; rm(seurat_obj_annot)
+
+load("../analysis/seurat/seurat_obj_Cluster6Removed.Robj")
+original_seurat_obj<-seurat_obj_annot; rm(seurat_obj_annot)
+```
+
+```{r}
+seurat_list<-list(current=current_seurat_obj, original=original_seurat_obj)
+
+transferAnchors<-FindTransferAnchors(reference = seurat_list$original, query=seurat_list$current)
+
+predictions <- TransferData(anchorset = transferAnchors, 
+                            refdata = original_seurat_obj$ManualAnnot)
+
+predictions_final<- predictions$predicted.id; names(predictions_final)<- rownames(predictions)
+current_seurat_obj@meta.data$Predictions<- predictions_final
+current_seurat_obj@meta.data$Scores<- predictions
+
+DimPlot(current_seurat_obj, group.by="Predictions", pt.size = 2,
+        label = TRUE, label.size = 6)+NoLegend()
+ggsave(paste0(seurat_fig_folder, "Predictions_fromOriginal_Projection.png"), width=8, height=7)
+```
+## Barplot of cell type breakdown
+## For new sample only
+```{r}
+seurat_tmp<- subset(current_seurat_obj, sample=="BT1873vent")
+
+df<- as.data.frame(table(seurat_tmp$Predictions))
+colnames(df)<- c("ProjectedCellType", "NCells")
+ggplot(df, aes(x="", y=NCells, fill=ProjectedCellType ))+
+  geom_bar(stat="identity", width=1) +
+  coord_polar("y", start=0)
+ggsave("figures/seurat/ProjectedAnnot_Breakdown_BT1873Only.png", width=5, height=4)
+```
+
+## Save
+```{r}
+save(current_seurat_obj, file=paste0(seurat_analysis_folder,
+                                     "AnnotationsProjectedFromOriginal_seurat.Robj"))
+```
+
+## Identify markers
+```{r}
+current_seurat_obj<- SetIdent(current_seurat_obj, value=current_seurat_obj$Predictions)
+all_markers<- FindAllMarkers(current_seurat_obj, min.pct=0.5)
+all_markers_filtered<- all_markers[all_markers$p_val_adj<0.05 &
+                                     all_markers$avg_log2FC>0.5,]
+```
+

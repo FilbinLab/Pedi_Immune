@@ -1,0 +1,387 @@
+---
+title: "NMF_merge_template"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r setup, include=FALSE}
+library(NMF)
+
+base_dir = "C:/Users/jenna/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/Midline_HistoneMutant/")
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+plot_helper = paste0(base_dir, script_dir, "Plotting_helper_functions.R")
+stat_helper = paste0(base_dir, script_dir, "common_stat_test.R")
+source(preprocessing)
+source(nmf_helper)
+source(plot_helper)
+source(stat_helper)
+
+nmf_folder = "analysis/nmf/"
+
+nmf_analysis_folder = "analysis/nmf/Merge/"
+if (!dir.exists(nmf_analysis_folder)){
+  dir.create(nmf_analysis_folder)
+}
+
+nmf_fig_folder = "figures/nmf/Merge/"
+if (!dir.exists(nmf_fig_folder)){
+  dir.create(nmf_fig_folder)
+}
+```
+
+# Load and preprocess raw data
+
+## Load cm, tumor_id, samples and genes_to_keep
+```{r load-precomputed-data}
+load("../analysis/midlineHistoneMut_cm_list.Robj")
+tumor_stat = readRDS("../analysis/inferCNV/seurat/midlineHistoneMut_call_tumor.rds")
+samples = readRDS("../analysis/midlineHistoneMut_samples.rds")
+genes_to_keep = readRDS(paste0(nmf_folder, "top_10000_ode.rds"))
+
+cm_list<-midlineHistoneMut_cm_list
+
+sum(colnames(cm_list$raw_data)==names(samples)); length(samples)
+sum(names(samples)==names(tumor_stat))
+```
+
+## Load precomputed cm_mean, cm_center, basis and samples in the list 
+## Only do this after you have ran through this code before
+## When you want to re-compute metaprograms 
+```{r}
+fname = paste0(nmf_folder, "nmf_raw_data.Robj")
+if(file.exists(fname)){
+  load(fname)
+  
+  cm_mean = nmf_raw_data$cm_mean
+  cm_center = nmf_raw_data$cm_center
+  nmf_basis_concat = nmf_raw_data$basis
+  samples_tumor = nmf_raw_data$samples
+  
+  nmf_score = nmf_raw_data[["nmf_score"]] = 
+  nmf_factor_cor = nmf_raw_data[["nmf_factor_cor"]]
+  nmf_basis_concat = nmf_raw_data[["basis"]]
+
+  rm(nmf_raw_data);gc()
+}
+```
+
+## Normalize and center cm 
+## Still only keep malignant cells and all genes that pass the filter 
+```{r subset tumor cells}
+## Subset raw and log transformed data
+cm = cm_list$raw_data[, tumor_stat=="Malignant"]
+cm_norm = cm_list$norm_data[, tumor_stat=="Malignant"]
+cm_mean = log2(rowMeans(cm)+1)
+##cm_mean = rowMeans(cm_norm)
+## Remake centered values 
+cm_center = cm_norm - rowMeans(cm_norm)
+samples_tumor = samples[tumor_stat=="Malignant"]
+rm(cm_list); gc()
+```
+
+## Save computed cm, normalized/centered cm and samples in a list 
+## For computing metaprograms again later if needed
+## Saving these intermediate steps occupies quite some space 
+```{r}
+nmf_raw_data = list()
+nmf_raw_data[["cm"]] = cm
+nmf_raw_data[["cm_norm"]] = cm_norm
+nmf_raw_data[["cm_center"]] = cm_center 
+nmf_raw_data[["cm_mean"]] = cm_mean
+nmf_raw_data[["samples"]] = samples_tumor 
+```
+
+## Load computed nmf_obj_list and nmf_gene_list
+```{r load-computed-NMF-factors}
+load(paste0(nmf_folder, "nmf_obj_list.Robj"))
+load(paste0(nmf_folder, "nmf_gene_list.Robj"))
+```
+
+# Cluster individual NMF factors and merge them into metaprograms
+
+## Compute nmf scores for each nmf factor in the nmf_gene_list
+```{r nmf_score}
+## Compute signature score for each NMF factor (30 representative genes) in all cells 
+nmf_score = scoreNmfGenes(cm_center, cm_mean, nmf_gene_list)
+nmf_score = t(nmf_score)
+```
+
+## Concatenate basis matrix of each sample together 
+```{r}
+nmf_basis_concat = concatNmfFactor(nmf_obj_list, genes_to_keep)
+nmf_raw_data[["basis"]] = nmf_basis_concat
+```
+
+## Hierarchical clustering of nmf factors with correlation among nmf scores 
+## The resulting heatmap and dendrogram will help you aggregate individual NMF factors into metaprograms
+```{r NMF_factor_merge_2}
+## NMF factor correlation based on cell score 
+nmf_factor_hc = clusterNmfFactors(nmf_score)
+nmf_factor_cor = nmf_factor_hc$cor_coef[nmf_factor_hc$hc_obj$order, nmf_factor_hc$hc_obj$order]
+
+## Heatmap of correlations
+hm_colors = rev((brewer.pal(n=9, name="RdBu")))
+hm_colors = colorRampPalette(colors = hm_colors)
+pheatmap(nmf_factor_cor, color = hm_colors(100), 
+         cluster_rows = F, cluster_cols = F, 
+         annotation_names_row = F, annotation_names_col =T,
+         show_rownames = F, show_colnames = T,
+         filename = paste0(nmf_fig_folder, "nmf_factors_pairwise_cor.png"),
+         width = 12, height = 8)
+
+## Dendrogram of hierarchical clustering 
+jpeg(filename=paste0(nmf_fig_folder, "nmf_factors_hc.png"), width = 1200, height = 800)
+plot(nmf_factor_hc$hc_obj)
+dev.off()
+```
+
+
+
+## Merge nmf factors into metagene programs with correlation among gene weights or nmf scores 
+## We can go over your heatmap and dendrograms to see how to aggregate them
+```{r nmf_factor_merge}
+## Concatenate all basis vectors with gene weights
+nmf_raw_data[["nmf_score"]] = nmf_score
+nmf_raw_data[["nmf_factor_cor"]] = nmf_factor_cor 
+save(nmf_raw_data, file=paste0("analysis/nmf/", "nmf_raw_data.Robj"))
+```
+
+
+
+
+
+```{r}
+NameOfMetaprogramList<-"Merge2"
+## NMF metaprograms
+## Adapt this to your dataset
+nmf_meta_programs = list()
+
+
+nmf_meta_programs[["NMF1"]]<- colnames(nmf_factor_cor)[1:6]
+nmf_meta_programs[["NMF2"]]<- colnames(nmf_factor_cor)[7:9]
+nmf_meta_programs[["NMF3"]]<- colnames(nmf_factor_cor)[10:15]
+nmf_meta_programs[["NMF4"]]<- colnames(nmf_factor_cor)[16:19]
+#nmf_meta_programs[["NMF5"]]<- colnames(nmf_factor_cor)[21:22]
+nmf_meta_programs[["NMF5"]]<- colnames(nmf_factor_cor)[23:30]
+nmf_meta_programs[["NMF6"]]<- colnames(nmf_factor_cor)[31:35]
+
+
+
+save(nmf_meta_programs, file = paste0(nmf_analysis_folder, "nmf_meta_programs", NameOfMetaprogramList, ".Robj"))
+```
+
+
+
+## Compuate average cor
+## OPTIONAL, may exclude cluster of NMF factors (metaprograms) with low average correlations
+```{r}
+tmp = sapply(nmf_meta_programs, computeAverageCor, nmf_factor_cor)
+```
+
+## Compute top30 marker genes and diagnostic statistics for merged metagene programs 
+```{r metaprogram_score_stats}
+program_names = names(nmf_meta_programs)
+nmf_marker_genes_final = list()
+nmf_programs_stats = list()
+
+for (i in seq(length(program_names))){
+  ## Metaprogram marker genes 
+  nmf_marker_genes_final[[program_names[[i]]]] = mergeNmfGenes(nmf_basis_concat, 
+                                                    nmf_meta_programs[[i]], n = 30)
+  ## Metaprogram statistics
+  nmf_programs_stats[[program_names[[i]]]] = calculateNmfProgramStats(nmf_basis_concat, 
+                                                                      nmf_meta_programs[[i]])
+}
+
+save(nmf_marker_genes_final, file=paste0(nmf_analysis_folder, "nmf_marker_genes_final", NameOfMetaprogramList, ".Robj"))
+save(nmf_programs_stats, file=paste0(nmf_analysis_folder, "nmf_program_stats", NameOfMetaprogramList, ".Robj"))
+```
+
+```{r}
+## Check overlap of gene programs 
+for (i in 1:(length(nmf_marker_genes_final)-1)){
+  for (j in (i+1):length(nmf_marker_genes_final)){
+    tmp = intersect(nmf_marker_genes_final[[i]], nmf_marker_genes_final[[j]])
+    if (length(tmp) >= 10){
+      print("========================")
+      print(names(nmf_marker_genes_final)[i])
+      print(names(nmf_marker_genes_final)[j])
+      print(tmp)
+      print(length(tmp))
+    }
+  }
+}
+```
+
+
+# Assign metaprogram to each cell 
+
+## Compute metagene scores for metagene programs 
+```{r final_NMF_scores}
+nmf_score_final = scoreNmfGenes(cm_center, cm_mean, nmf_marker_genes_final)
+nmf_score_final = t(nmf_score_final) 
+
+## Compute and save metagene scores and 1-3 highest metagene programs and scores 
+
+num_meta_program = length(nmf_marker_genes_final)
+nmf_score_final_t = data.frame(nmf_score_final)
+
+for (i in 1:3){
+  nmf_score_final_t = metagene_score_signature(nmf_score_final_t, num_meta_program, i)
+}
+
+saveRDS(nmf_score_final_t, file=paste0(nmf_analysis_folder, "nmf_score", NameOfMetaprogramList, ".rds"))
+```
+
+## Exclude cell cycle scores and recompute/save metagene scores and 1-3 highest metagene programs and scores 
+## May need to adapt this if you only have a single cell cycle program (not splited into S and G2M phase)
+```{r}
+nmf_score_final_tmp = data.frame(nmf_score_final)
+## s_score = nmf_score_final_tmp$S_phase
+## g2m_score = nmf_score_final_tmp$G2M_phase
+cellcycle_score<- nmf_score_final_tmp$CellCycle
+nmf_score_final_without_cc = nmf_score_final_tmp[,1:num_meta_program]
+## nmf_score_final_without_cc = subset(nmf_score_final_without_cc, select=-c(S_phase, G2M_phase))
+nmf_score_final_without_cc = subset(nmf_score_final_without_cc, select=-c(CellCycle))
+num_meta_program = ncol(nmf_score_final_without_cc)
+
+for (i in 1:3){
+  nmf_score_final_without_cc = metagene_score_signature(nmf_score_final_without_cc, num_meta_program, i)
+}
+
+## nmf_score_final_without_cc$S_phase = s_score
+## nmf_score_final_without_cc$G2M_phase = g2m_score
+nmf_score_final_without_cc$CellCycle = cellcycle_score
+## nmf_score_final_without_cc$CC_binary = apply(nmf_score_final_without_cc[,c("S_phase", "G2M_phase")], 1,
+                                             ## function(x) max(x)>=1)
+nmf_score_final_without_cc$CC_binary = sapply(nmf_score_final_without_cc[,c("CellCycle")],
+                                             function(x) max(x)>=1)
+saveRDS(nmf_score_final_without_cc, file=paste0(nmf_analysis_folder, "nmf_score_updated", NameOfMetaprogramList, ".rds"))
+```
+
+## Save metaprogram genes as a txt file
+```{r}
+tmp = matrix(unlist(nmf_marker_genes_final), ncol=length(nmf_marker_genes_final))
+colnames(tmp) = names(nmf_marker_genes_final)
+tmp = data.frame(tmp)
+write.table(tmp, file=paste0(nmf_analysis_folder, "metaprogram_genes", NameOfMetaprogramList, ".txt"),
+            sep="\t", quote = F, row.names = F, col.names = T)
+```
+
+# Visulization of metaprograms (heatmap and histogram)
+
+## Hierarchical clustering of metagene programs and cells using metagene scores
+```{r hc_on_nmf_scores}
+## HC on this 
+cell_dist = 1-cor(t(nmf_score_final), method="pearson")
+hc_cell = hclust(as.dist(cell_dist), method="ward.D2")
+metagene_dist = 1-cor(nmf_score_final, method="pearson")
+hc_metagene = hclust(as.dist(metagene_dist), method="ward.D2")
+```
+
+## Heatmap for metagene scores
+```{r heatmap}
+metagene_order = hc_metagene$labels[hc_metagene$order]
+plotMetaScore(nmf_score_final, nmf_score_final_t$signature_1, metagene_order)
+```
+
+## Heatmap for metagene marker genes 
+```{r}
+plotMetaGeneExpr(cm_center, nmf_score_final, 
+                 nmf_score_final_t$signature_1, metagene_order)
+```
+
+## Hierarchical clustering on metagene programs 
+```{r HC_on_metagenes}
+num_metagenes = length(nmf_marker_genes_final)
+tmp = nmf_score_final_t[,1:num_metagenes]
+pairwise_cor = cor(tmp[,1:num_metagenes])
+pairwise_dist = 1 - pairwise_cor
+hc = hclust(dist(pairwise_dist), method = "ward.D2")
+
+jpeg(paste0(nmf_fig_folder, "nmf_program_dendrogram",NameOfMetaprogramList, ".jpg"), width = 1200, height = 1800, res = 300)
+plot(hc)
+dev.off()
+```
+
+## Histogram of metagene scores
+```{r histogram_of_nmf_scores}
+tmp = nmf_score_final_t[,1:num_metagenes]
+tmp = melt(tmp)
+colnames(tmp) = c("metagene", "score")
+ggplot(data=tmp, aes(x=score, fill=metagene)) + geom_histogram() + theme_bw() + facet_wrap(.~metagene)
+ggsave(paste0(nmf_fig_folder, "metagene_score_histogram.jpg"), width=12, height=12)
+```
+
+# Preliminary annotation of metaprograms 
+
+## ORA with DIPG and GBM genesets
+## Compare with metaprograms from previously defined metaprograms from DIPG/GBM
+```{r}
+DIPG_GBM_genesets = readRDS("../../Marker_genes/Brain_tumor_metaprograms/2019_GBM/all_metaprograms.rds")
+ordered_clusters<- order(unique(all_markers_filtered$cluster))
+tmp = sapply(ordered_clusters, function(x){
+    sapply(DIPG_GBM_genesets, function(y){
+        fisher_test(all_markers_filtered[all_markers_filtered$cluster == x, "gene"],
+                    y, rownames(seurat_obj@assays$RNA@counts))
+    })
+})
+
+tmp = data.frame(tmp)
+
+
+tmp2 = sapply(nmf_marker_genes_final, function(x){
+    sapply(DIPG_GBM_genesets, function(y){
+        fisher_test(x, y, unlist(union(DIPG_GBM_genesets, nmf_marker_genes_final)))
+    })
+})
+tmp2 = data.frame(tmp2)
+apply(tmp2, 2, function(x) {p.adjust(x) < 0.05})
+```
+
+## GO-term overrespresentation test 
+```{r over-representation-test}
+library(clusterProfiler)
+
+## Gene annotations 
+OrgDb = "org.Hs.eg.db"
+dataset = "hsapiens_gene_ensembl"
+
+## Convert by biomart
+allOE_genes <- as.character(gene_symbol_to_ensembl_id(rownames(cm_center), dataset)$ensembl_gene_id)
+allsigOE_genes<- lapply(nmf_marker_genes_final, function(x){
+  print(head(x))
+  as.character(gene_symbol_to_ensembl_id(x, dataset)$ensembl_gene_id)})
+saveRDS(allsigOE_genes, file=paste0(nmf_analysis_folder, "sigOEGenes_Ensembl", NameOfMetaprogramList, ".rds"))
+
+go_result = list()
+nmf_factor_names = names(nmf_marker_genes_final)
+for (i in 1:length(nmf_marker_genes_final)){
+  sigOE_genes = allsigOE_genes[[i]]
+  print(sigOE_genes)
+  go_result[[nmf_factor_names[i]]] = go_analysis(sigOE_genes, allOE_genes)
+} 
+
+
+## Plot top pathways for all clusters, display on one plot
+allDotPlots_20<-list()
+for (c in 1:length(nmf_factor_names)){
+  program=nmf_factor_names[c]
+  print(program)
+  allDotPlots_20[[c]]<-dotplot(go_result[[program]]$ego, showCategory=20, font.size = 12, title = program)
+}
+
+cowplot::plot_grid(plotlist = allDotPlots_20, ncol=3)
+ggsave(paste0("GO_OVA_NMFFactors_Top20",NameOfMetaprogramList, ".jpg"), path=nmf_fig_folder, width=30, height=30)
+save(go_result, file=paste0(nmf_analysis_folder, "go_result_metagene_DEGs", NameOfMetaprogramList, ".Robj"))
+
+
+```

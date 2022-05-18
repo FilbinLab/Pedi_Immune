@@ -1,0 +1,458 @@
+---
+title: "_clustering"
+output: html_document
+---
+
+```{r read-data}
+knitr::opts_chunk$set(echo = TRUE)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/Midline_All/Midline_HistoneWT")
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+seurat_analysis_folder = "analysis/seurat/"
+seurat_fig_folder = "figures/seurat/"
+for (folder in c(seurat_analysis_folder, seurat_fig_folder)){
+  if (!dir.exists(folder)){
+    dir.create(folder)
+  }
+}
+
+## Set colors for use later- better for discriminating against groups
+library(sparseMatrixStats)
+library(RColorBrewer)
+n <- 50
+qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+
+subtypes<-read.csv("../../../../Subtypes.csv")
+```
+
+## Load pre-computed seurat object 
+```{r load-seurat-obj}
+seurat_filename = paste0(seurat_analysis_folder, "seurat_obj.Robj")
+if(file.exists(seurat_filename)){
+  load(seurat_filename)
+}
+```
+
+## Load counts and metadata for initiating seurat object
+```{r load-data}
+load("../../../../SplitBySubtype/analysis/midlineHistoneWT_cm_list.Robj")
+samples = readRDS("../../../../SplitBySubtype/analysis/midlineHistoneWT_samples.rds")
+tumor_stat = readRDS(".../../../../SplitBySubtype/analysis/midlineHistoneWT_call_tumor.rds")
+
+cm_list<-midlineHistoneWT_cm_list
+
+sum(colnames(cm_list$raw_data) == names(tumor_stat)); length(tumor_stat)
+sum(names(samples)==names(tumor_stat))
+```
+
+## Subset cm to remove noise/normal samples
+```{r subset-tumor-cells}
+cm = cm_list$raw_data; rm(cm_list); gc()
+cm = cm[,tumor_stat=="Malignant"]
+samples = samples[tumor_stat=="Malignant"]
+
+any(colnames(cm) != names(samples))
+```
+
+## Initiate seurat obj and add metadata 
+```{r seurat_obj_meta_data}
+## Create seurat project
+seurat_obj = preprocessSeuratObject(cm, project="", min.cells=0, min.genes=0, scale.factor=1E5, do.scale=F, do.center=T)
+
+
+## Add samples and subtype as meta.data 
+seurat_obj@meta.data$sample = samples
+
+sample_df<- as.data.frame(samples); sample_df$cell<- rownames(sample_df)
+subtype_df<- merge(sample_df, subtypes, by="samples")
+
+seurat_obj@meta.data$subtype<- subtype_df$subtype
+seurat_obj@meta.data$AdditionalSubtype<- subtype_df$Diagnosis
+```
+
+## OPTIONAL: plot highly variable genes
+```{r}
+top10 <- head(VariableFeatures(seurat_obj), 10)
+
+# plot variable features with and without labels
+plot1 <- VariableFeaturePlot(seurat_obj)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot1 + plot2
+```
+
+## PCA and PC selection
+```{r PCA_selection}
+## PCA
+seurat_obj <- RunPCA(
+  object = seurat_obj, 
+  features = seurat_obj@assays$RNA@var.features, 
+  npcs = 100,
+  verbose = TRUE, 
+  ndims.print  = 1:5, 
+  nfeatures.print = 5
+)
+
+
+```
+
+## Harmony data integration 
+```{r run_harmony}
+library(harmony)
+library(magrittr)
+library(cowplot)
+
+## Run Harmony
+seurat_obj = RunHarmony(seurat_obj, "sample", theta = 2, 
+                        max.iter.harmony = 50, plot_convergence = TRUE)
+
+## Simple dim and vlnplot to examine integration 
+options(repr.plot.height = 6, repr.plot.width = 12)
+
+p1 <- DimPlot(object = seurat_obj, reduction = "pca", pt.size = .1, group.by = "sample")
+p2<- DimPlot(object = seurat_obj, reduction = "harmony", pt.size = .1, group.by = "sample")
+p3 <- VlnPlot(object = seurat_obj, features = "PC_1", pt.size = .1, group.by = "sample")
+p4 <- VlnPlot(object = seurat_obj, features = "harmony_1", pt.size = .1, group.by = "sample")
+
+plot_grid(p1,p2, p3, p4)
+#ggsave("Harmony_diagnostics_theta2.jpg", path=seurat_fig_folder, width=12, height=8)
+
+
+## DimHeatmap
+#DimHeatmap(object = seurat_obj, reduction = "harmony", cells = 500, dims = 1:6, balanced = TRUE)
+```
+
+## Clustering and UMAP
+```{r clustering_tSNE}
+## Run UMAP and clustering using reduced dimensions from Harmony
+## You may play around with resolution parameter to tune the clustering result
+resolution = .8
+reduction_type = "harmony"
+dims = 20
+
+## Run UMAP
+seurat_obj <- RunUMAP(seurat_obj, reduction = reduction_type, dims = 1:dims)
+
+
+seurat_obj <- FindNeighbors(seurat_obj,
+                            reduction = reduction_type,
+                            dims = 1:dims,
+                            force.recalc = TRUE)   %>% 
+              FindClusters(resolution = resolution)
+
+
+r0.8<-DimPlot(seurat_obj, reduction="umap", pt.size = 2.5) + ggtitle("Resolution_0.8")
+r0.5<-DimPlot(seurat_obj, reduction="umap", pt.size = 2.5)+ ggtitle("Resolution_0.5")
+r1.0<-DimPlot(seurat_obj, reduction = "umap", pt.size = 2.5)+ ggtitle("Resolution_1")
+
+r0.5+r0.8+r1.0 #resolution of 0.8 may be best
+ggsave("UMAP_clustering_VaryResolution.jpg", path=seurat_fig_folder, width=15, height=6)
+
+## Clustering results 
+table(Idents(seurat_obj))
+
+
+## Save the seurat object
+save(seurat_obj, file = paste0(seurat_analysis_folder, "seurat_obj.Robj"))
+```
+
+## UMAP plot colored by clustering and samples
+## Can color tSNE with other metadata features (e.g. primary/recurrence, treatment)
+```{r UMAP_plots}
+## By clustering
+DimPlot(object = seurat_obj, reduction="umap", group.by = "seurat_clusters", 
+        label = TRUE, pt.size = 2, label.size = 8) + NoAxes() + NoLegend()
+ggsave("UMAP_clustering.jpg", path=seurat_fig_folder, width=8, height=8)
+
+## By samples
+DimPlot(object = seurat_obj, reduction="umap", group.by = "sample", label = FALSE, 
+        pt.size = 2, label.size = 5) + NoAxes() 
+ggsave("UMAP_sample.jpg", path=seurat_fig_folder, width=10, height=8)
+
+```
+
+## DEGs for each cluster 
+```{r differential_gene_expressions}
+all_markers = FindAllMarkers(seurat_obj, only.pos = TRUE, 
+                             logfc.threshold = .25, min.pct = 0.25)
+all_markers_filtered = all_markers[all_markers$p_val_adj < 0.05 & all_markers$avg_logFC > 0.5, ]
+
+
+## Subset the top 30 DEGs for each cluster
+num_marker_genes = 30
+top_marker_genes<- all_markers_filtered %>% 
+                   group_by(cluster) %>% 
+                   top_n(num_marker_genes, avg_logFC) %>%
+                   as.data.frame()
+save(all_markers_filtered, file=paste0(seurat_analysis_folder, "all_markers.Robj"))
+write.csv(top_marker_genes, file=paste0(seurat_analysis_folder, "Top30Markers_Theta1.csv"))
+
+## Heatmap for initial inspection
+DoHeatmap(seurat_obj, 
+          features=all_markers_filtered$gene) + NoLegend() + NoAxes()
+ggsave("Heatmap_all_degs_theta1.jpg", path=seurat_fig_folder)
+```
+
+## Quick annotation by OPC/OC/AC marker genes 
+```{r}
+## OPC-like
+FeaturePlot(seurat_obj,
+            c("PDGFRA", "OLIG1", "APOD",
+              "CCND1", "CD24", "ASCL1",
+              "ETV1", "SEZ6L", "HES6"),
+            cols = c("lightgrey", "red"),
+            ncol = 3)
+ggsave("OPC_markers.jpg", path=seurat_fig_folder, width = 9, height=9)
+
+## OC-like cells
+FeaturePlot(seurat_obj,
+            c("BCAS1", "SIRT2", "RGR", 
+              "GPR17", "NFASC", "MBP",
+              "TF", "MOG", "PLP1"),
+            cols = c("lightgrey", "red"),
+            ncol = 3)
+ggsave("OC_markers.jpg", path=seurat_fig_folder, width = 9, height=9)
+
+## AC-like cells 
+FeaturePlot(seurat_obj,
+            c("APOE", "AQP4", "AGT", 
+              "SPARCL1","ATP1A2", "GFAP",
+              "S100B", "ALDOC", "CLU"),
+            cols = c("lightgrey", "red"),
+            ncol = 3)
+ggsave("AC_markers.jpg", path=seurat_fig_folder, width=9, height=9)
+
+## Neuronal-like cells
+FeaturePlot(seurat_obj,
+            c("STMN2", "STMN1", "STMN4", 
+              "TUBB3", "INA", "ELAVL4",
+              "SNAP25", "GABRG2", "ST18"),
+            cols = c("lightgrey", "red"),
+            ncol = 3)
+ggsave("Neuron_markers.jpg", path=seurat_fig_folder, width=9, height=9)
+
+##CLEC2D
+FeaturePlot(seurat_obj,
+            c("CLEC2D"),
+            cols = c("lightgrey", "red"),
+            ncol = 2)
+ggsave("CLEC2D_KLRB1_markers.jpg", path=seurat_fig_folder, width=9, height=4.5)
+```
+
+## ORA test 
+```{r over-representation-test}
+library(clusterProfiler)
+
+##
+OrgDb = "org.Hs.eg.db"
+dataset = "hsapiens_gene_ensembl"
+
+## Convert using biomart
+allOE_genes <- as.character(gene_symbol_to_ensembl_id(rownames(seurat_obj@assays$RNA@counts),dataset)$ensembl_gene_id)
+
+
+## Convert marker genes to ensembl IDs too, then run OR analysis (GO)
+go_result = list()
+for (i in unique(all_markers_filtered$cluster)){
+  sigOE_genes = as.character(gene_symbol_to_ensembl_id(subset(all_markers_filtered, cluster==i,
+                                                              gene)[,], dataset)$ensembl_gene_id)
+  go_result[[paste0("c", i)]] = go_analysis(sigOE_genes, allOE_genes)
+} 
+
+## Optional: remove biosynthetic/metabolic pathwasy
+RemoveMetabolicBiosynthetic<- lapply(go_result, function(x){
+  BS_MB<- x$ego[grep("metabolic", x$ego@result$Description, invert=TRUE),asis=TRUE]
+  BS_MB<- BS_MB[grep("biosynthetic", BS_MB$Description, invert=TRUE),asis=TRUE]
+})
+
+
+
+## Plot top pathways for all clusters, display on one plot
+clusters = paste0("c", sort(levels(seurat_obj@active.ident)))
+allDotPlots_20_NoBCMB<-list()
+for (c in 1:length(levels(seurat_obj@active.ident))){
+  cluster=clusters[c]
+  print(cluster)
+  allDotPlots_20_NoBCMB[[c]]<-dotplot(RemoveMetabolicBiosynthetic[[cluster]], 
+                                      showCategory=20, font.size = 12, title = cluster)
+}
+
+cowplot::plot_grid(plotlist = allDotPlots_20_NoBCMB, ncol=2)
+ggsave("GO_OVA_AllClusters_top20_NoBiosyntheticMetabolicPathways.jpg", path=seurat_fig_folder, width=16, height=20)
+save(go_result, file=paste0(seurat_analysis_folder, "go_result_metagene_DEGs_Clusters1_0Separate_LowerThreshold.Robj"))
+```
+
+# Score cells based on previous midline histone WT samples
+
+```{r}
+## read in seurat object of previous programs
+backup_seurat<-seurat_obj
+load("analysis/seurat_obj_MidlineHistoneWT_FromLi_V2.Robj")
+previousWT_seurat<- seurat_obj
+seurat_obj<- backup_seurat
+
+## Convert to v3
+previousWT_seuratv3<- UpdateSeuratObject(previousWT_seurat)
+save(previousWT_seuratv3, file="analysis/seurat_obj_MidlineHistoneWT_FromLi_V3.Robj")
+load("analysis/seurat_obj_MidlineHistoneWT_FromLi_V3.Robj")
+
+## Subset to remove U1/U2/U3- not really informative
+previousWT_seuratv3<- subset(previousWT_seuratv3, signature_1 %in% c("AC-MES-like",
+                                                                     "Cycling",
+                                                                     "OPC-like",
+                                                                     "AC-like"))
+
+## set ident to signature 1, then find top 50 markers
+previousWT_sig1<-SetIdent(previousWT_seuratv3, value="signature_1")
+allSig1Markers<-FindAllMarkers(previousWT_sig1, min.pct = .50, 
+                               logfc.threshold = .25, only.pos = TRUE)
+allSig1Markers_filtered<-allSig1Markers[allSig1Markers$p_val_adj<0.05 &
+                                          allSig1Markers$avg_logFC > .75,]
+top50Markers<- allSig1Markers_filtered %>% 
+                   group_by(cluster) %>% 
+                   top_n(50, avg_logFC) %>%
+                   as.data.frame()
+
+
+## split into gene list
+gene_list<- split(top50Markers, top50Markers$cluster)
+gene_list<- lapply(gene_list, function(x){x$gene})
+
+## Norm and center my data
+cm_center<- NormCenter(seurat_obj@assays$RNA@counts)$center_data
+cm_mean<- log2(rowMeans(seurat_obj@assays$RNA@counts)+1)
+
+## score my data for each signature
+scores<- scoreNmfGenes(cm_center, cm_mean, gene_list)
+scores = t(scores)
+
+topScore<- apply(scores[,1:length(gene_list)], 1, 
+                  function(x) sort(x, decreasing = T)[1])
+topSig<-apply(scores[,1:length(gene_list)], 1, 
+                  function(x) names(sort(x, decreasing = T))[1])
+
+## Add to seurat metadata, plot
+seurat_obj@meta.data$TopSigPrevious<- topSig
+DimPlot(seurat_obj, group.by="TopSigPrevious", pt.size = 2) + NoAxes()
+ggsave(paste0(seurat_fig_folder, "ScoredBasedOnPreviousHistoneWTMidline_NoU.png"))
+save(seurat_obj, file="analysis/seurat/seurat_obj.Robj")
+```
+
+
+
+## Set identity to top scoring program, identify marker genes, heatmap
+```{r}
+seurat_obj<- SetIdent(seurat_obj, value=seurat_obj$TopSigPrevious)
+
+all_markers = FindAllMarkers(seurat_obj, only.pos = TRUE, 
+                             logfc.threshold = .25, min.pct = 0.25)
+all_markers_filtered = all_markers[all_markers$p_val_adj < 0.05 & all_markers$avg_logFC > 0.5, ]
+
+
+## Subset the top 30 DEGs for each cluster
+num_marker_genes = 30
+top_marker_genes<- all_markers_filtered %>% 
+                   group_by(cluster) %>% 
+                   top_n(num_marker_genes, avg_logFC) %>%
+                   as.data.frame()
+save(all_markers_filtered, file=paste0(seurat_analysis_folder, "all_markers.Robj"))
+write.csv(top_marker_genes, file=paste0(seurat_analysis_folder, "Top30Markers_Theta1.csv"))
+
+## Heatmap for initial inspection
+DoHeatmap(seurat_obj, 
+          features=all_markers_filtered$gene) + NoLegend() + NoAxes()
+ggsave("Heatmap_all_degs_theta1.jpg", path=seurat_fig_folder)
+```
+
+
+
+## Make pseudobulk
+```{r}
+metagene_program_names = sort(unique(nmf_score$signature_1))
+pseudobulk = NULL
+aggr_method = "mean"
+for (metagene in metagene_program_names){
+  cm = seurat_obj@assays$RNA@counts[,nmf_score$signature_1 == metagene & nmf_score$score_1 >= 1]
+  if (aggr_method == "mean"){
+    pseudobulk = cbind(pseudobulk, rowMeans(cm))
+  }
+  if (aggr_method == "median"){
+    pseudobulk = cbind(pseudobulk, rowMedians(cm))
+  }
+}
+colnames(pseudobulk) = metagene_program_names
+rownames(pseudobulk) = rownames(seurat_obj@assays$RNA@counts)
+saveRDS(pseudobulk, file=paste0(seurat_analysis_folder, 
+                                "pseudobulk_cm_unique_only_", aggr_method, NameOfMetaprogramList,".RDS"))
+
+## All cell types together- single pseudobulk for each sample
+## Sum of counts across each sample
+pseudobulk<- data.frame(gene=rownames(seurat_obj))
+mySamples<- unique(seurat_obj$sample)
+for (i in mySamples){
+  seurat_tmp<- subset(seurat_obj, sample==i)
+  cm_tmp<-seurat_tmp@assays$RNA@counts
+  sumGene<- as.data.frame(rowSums(cm_tmp))
+  colnames(sumGene)<- i
+  sumGene$gene<- rownames(sumGene)
+  pseudobulk<- merge(pseudobulk, sumGene, by="gene")
+}
+
+rownames(pseudobulk)<- pseudobulk$gene
+pseudobulk<- pseudobulk[,-1]
+
+save(pseudobulk, file="../../data/PseudobulkCounts/MidlineHistoneWT_Pseudobulk.Robj")
+```
+
+## Metagene program specific genes as overall DEGs
+```{r}
+seurat_obj = SetIdent(seurat_obj, value = seurat_obj@meta.data$signaure_1_without_cc)
+
+all_markers_nmf = FindAllMarkers(seurat_obj, only.pos = TRUE, logfc.threshold = 1, min.pct = 0.5)
+all_markers_nmf = all_markers[all_markers$p_val_adj < 0.05, ]
+saveRDS(all_markers, paste0(seurat_analysis_folder, "deg.rds"))
+##sapply(names(nmf_marker_genes_final), function(x) table(nmf_marker_genes_final[[x]] %in% gene_signatures[[x]]))
+signature_genes = unique(all_markers$gene)
+saveRDS(signature_genes, paste0(seurat_analysis_folder, "signature_genes.rds"))
+```
+
+## Updated annotation: same annotations used for CellChat
+## UMAP and sample breakdown
+```{r}
+seurat_obj$CellChatAnnot<- gsub("AC-MES-like", "AC-like",seurat_obj$TopSigPrevious)
+
+## Set colors so they're shared across all subtypes
+load("../../../cellTypeColors.Robj")
+cellTypes<- unique(seurat_obj$CellChatAnnot)
+colorsUse<- c(colorsUse, Cycling="gold2")
+save(colorsUse, file="../../../cellTypeColors.Robj")
+
+DimPlot(object = seurat_obj, reduction="umap", group.by = "CellChatAnnot", 
+        label = TRUE, pt.size = 2, label.size = 8) + NoAxes() + NoLegend()+ scale_color_manual(values=colorsUse)
+ggsave("UMAP_clustering_CellChatAnnot.jpg", path=seurat_fig_folder, width=8, height=8)
+
+
+annotBreakdown<- as.data.frame(table(seurat_obj$sample, seurat_obj$CellChatAnnot))
+colnames(annotBreakdown)<- c("Sample", "CellType", "NCells")
+
+plot_list<-list()
+for(i in unique(annotBreakdown$Sample)){
+  df<- annotBreakdown[annotBreakdown$Sample==i,]
+  p<-ggplot(df, aes(x="", y=NCells, fill=CellType))+
+    geom_bar(stat="identity", color="white")+
+    coord_polar("y", start=0)+
+    theme_void()+
+    ggtitle(i)+theme(plot.title = element_text(size=15, face="bold", hjust=0.5))+
+    scale_fill_manual(values=colorsUse)
+  plot_list[[i]]<- p
+}
+cowplot::plot_grid(plotlist=plot_list, ncol=2)
+ggsave(paste0(seurat_fig_folder, "CellBreakdown.png"), width=12, height=3)
+```
