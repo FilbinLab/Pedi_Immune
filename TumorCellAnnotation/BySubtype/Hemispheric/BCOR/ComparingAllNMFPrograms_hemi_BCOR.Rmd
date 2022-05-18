@@ -1,0 +1,98 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+```{r}
+base_dir = "C:/Users/jenna/"
+working_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/Hemispheric/BCOR/")
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+
+nmf_fig_folder = paste0("figures/nmf/Merge/")
+nmf_analysis_folder = paste0("analysis/nmf/Merge/")
+nmf_folder = "analysis/nmf/"
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+```
+
+## Load in count matrix
+```{r}
+load("../../analysis/hemiBCOR_cm_list.Robj")
+tumor_stat = readRDS("../../analysis/inferCNV/seurat/hemiBCOR_call_tumor.rds")
+samples = readRDS("../../analysis/hemiBCOR_samples.rds")
+
+cm_list<-hemiBCOR_cm_list
+
+## Keep maligant cells
+cm<- cm_list$raw_data
+cm = cm_list$raw_data[, tumor_stat=="Malignant"]
+samples_tumor = samples[tumor_stat=="Malignant"]
+length(samples_tumor); sum(colnames(cm)==names(samples_tumor))
+
+```
+
+## read in my NMF programs- already scored
+```{r}
+## My nmf programs
+NameOfMetaprogramList<-"Merge1"
+nmf_score = readRDS(paste0("analysis/nmf/Merge/nmf_score", NameOfMetaprogramList, ".rds"))
+
+nmf_score<- nmf_score[,grep("NMF", colnames(nmf_score))]
+colnames(nmf_score)<- paste0(c("Cycling_", "NPC2_", "OPC-like_", "OPC-like_Alt_",
+                               "OPClike_"), colnames(nmf_score))
+
+## My LIGER NMF programs
+liger_score<- readRDS(paste0(liger_analysis_folder, "nmf_score_AllFactors", ".Rds"))
+liger_score<- liger_score[,grep("factor", colnames(liger_score))]
+colnames(liger_score)<- paste0(c("NPC2_", "MES/AC_", "AClike_", "MES2_", "S_", "G2M_", "OPC-like_",
+                                 "NPC1/NPC2/OPC_"),
+                               colnames(liger_score))
+```
+
+## Read in previous NMF programs, then score
+```{r}
+## DIPG/GBM- 2019
+hemi_genesets<-readRDS(paste0(nmf_analysis_folder,
+                                 "hemisphericPreviousPrograms_2019_OC.rds"))
+
+## Score, assign each cell to its highest scoring metaprogram
+scores<-lapply(hemi_genesets,function(x){scoreSignature(cm_center, cm_mean, x)})
+scores<-as.data.frame(scores)
+colnames(scores)<- paste0(colnames(scores), "_PreviousPrograms")
+```
+
+
+## Combine all scores, then pearson correlation + HC
+```{r}
+## Merge scores
+sum(rownames(scores) ==rownames(liger_score)); nrow(scores)
+sum(rownames(scores) == rownames(nmf_score))
+
+all_scores<- cbind(scores, liger_score)
+all_scores<- cbind(all_scores, nmf_score)
+
+## Cluster using pearson
+all_pearson = cor(all_scores, method="pearson")
+
+## Cluster using pearson --> HC
+all_hc<-clusterNmfFactors(all_scores)
+all_cor<-all_hc$cor_coef[all_hc$hc_obj$order, all_hc$hc_obj$order]
+
+range<-max(abs(all_cor))
+
+hm_colors = rev((brewer.pal(n=9, name="RdBu")))
+hm_colors = colorRampPalette(colors = hm_colors)
+pheatmap(all_cor, color = hm_colors(100), 
+         breaks = seq(-range, range, length.out = 100),
+         cluster_rows = F, cluster_cols = F, 
+         annotation_names_row = F, annotation_names_col =T,
+         show_rownames = F, show_colnames = T,
+         filename = paste0(nmf_fig_folder, "AllNMFPrograms_Correlation.png"), 
+         width = 6, height = 5)
+
+```
+

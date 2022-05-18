@@ -1,0 +1,228 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+```{r}
+library(liger)
+library(ggplot2)
+
+base_dir = "C:/Users/jenna/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/",
+                     "Annotation/BySubtype/Hemispheric/AllHemi/")
+
+liger_fig_dir<- paste0(working_dir, "figures/Liger/")
+liger_analysis_folder<- paste0(working_dir, "analysis/liger/")
+```
+
+## Read in data, then split by sample
+```{r}
+input_dir<- "../../../SplitBySubtype/analysis"
+load(paste0(input_dir, "hemi_cm_list.Robj"))
+samples = readRDS(paste0(input_dir,"hemi_samples.rds"))
+tumor_stat = readRDS(paste0(input_dir,"hemi_call_tumor.rds"))
+cm_list<-hemi_cm_list
+
+## Keep maligant cells
+cm<- hemi_cm_list$raw_data
+cm = cm_list$raw_data[, tumor_stat=="Malignant"]
+samples_tumor = samples[tumor_stat=="Malignant"]
+
+## Read in subtypes
+subtypes<- read.csv("../Subtypes.csv")
+subtypes<-subtypes[subtypes$shorthand=="hemi",]
+
+## Create vector of subtypes for each cell
+subtype_vector<- samples
+subtype_vector<- gsub("BT1478", "BCOR", 
+                      gsub("BT1516", "BCOR", 
+                           gsub("BT1745", "histoneWT",
+                                gsub("MUV065", "BCOR",
+                                     gsub("MUV066", "BCOR",
+                                          gsub("MUV079", "G34RV",
+                                               gsub("MUV092", "histoneWT",
+                                                    gsub("MUV094", "G34RV",
+                                                         subtype_vector))))))))
+
+## Split cm 1 cm for each subtype
+split_cm<- list()
+for (s in unique(subtype_vector)){
+  cells<- subtype_vector[subtype_vector %in% s]
+  cm_sample<- cm[,colnames(cm) %in% names(cells)]
+  split_cm[[s]]<- cm_sample
+}
+```
+
+## Create liger object
+```{r}
+liger_obj <- createLiger(split_cm)
+```
+
+## Normalize, identify variable expressed genes, scale data
+```{r}
+liger_obj <- liger::normalize(liger_obj)
+liger_obj <- selectGenes(liger_obj)
+liger_obj <- scaleNotCenter(liger_obj)
+```
+
+
+## Use the suggestK function to determine the appropriate number of factors to use.
+## Use the suggestLambda function to find the smallest lambda for which the alignment metric stabilizes.
+```{r}
+suggestK(liger_obj) ## use k=30
+#suggestLambda(liger_obj, k = 30, num.cores = 4)
+```
+
+## Joint Matrix Facotorization
+Important parameters are as follows:
+
+1. k. Integer value specifying the inner dimension of factorization, or number of factors. Higher k is recommended for datasets with more substructure. We find that a value of k in the range 20 - 40 works well for most datasets. Because this is an unsupervised, exploratory analysis, there is no single “right” value for k, and in practice, users choose k from a combination of biological prior knowledge and other information.
+
+2. lambda. This is a regularization parameter. Larger values penalize dataset-specific effects more strongly, causing the datasets to be better aligned, but possibly at the cost of higher reconstruction error. The default value is 5. We recommend using this value for most analyses, but find that it can be lowered to 1 in cases where the dataset differences are expected to be relatively small, such as scRNA-seq data from the same tissue but different individuals.
+
+3. thresh. This sets the convergence threshold. Lower values cause the algorithm to run longer. The default is 1e-6.
+
+4. max.iters. This variable sets the maximum number of iterations to perform. The default value is 30.
+```{r}
+liger_obj <- optimizeALS(liger_obj, k = 30, lambda = 5)
+```
+
+
+## cluster cells and perform quantile normalization by dataset, factor, and cluster
+```{r}
+liger_obj <- quantile_norm(liger_obj)
+
+save(liger_obj, file=paste0(liger_analysis_folder, "liger_obj_NoLouvain_Subtype.Robj"))
+```
+
+## Run UMAP- no louvain first
+```{r}
+load(paste0(liger_analysis_folder, "liger_obj_NoLouvain_Subtype.Robj"))
+
+
+liger_obj <- liger::runUMAP(liger_obj, distance = 'cosine', n_neighbors = 30, min_dist = 0.3)
+```
+
+## Plot on UMAP- factors (merged or unmerged) + sample
+```{r}
+all.plots <- plotByDatasetAndCluster(liger_obj, axis.labels = c('UMAP 1', 'UMAP 2'),
+                                     return.plots = T, pt.size = 1)
+all.plots[[1]]
+
+ggsave(paste0(liger_fig_dir, "UMAP_Sample_Subtype.png"), width=7,height=7)
+
+
+all.plots[[2]]
+ggsave(paste0(liger_fig_dir, "UMAP_AllFactors_Subtype.png"), width=7,height=7)
+
+liger_obj@cell.data$sample<- samples_tumor
+umap_samples<- data.frame(liger_obj@tsne.coords, liger_obj@cell.data$sample)
+
+ggplot(umap_samples, aes(x=X1, y=X2, color=liger_obj.cell.data.sample))+
+  geom_point()
+ggsave(paste0(liger_fig_dir, "UMAP_AllFactors_SubtypeIntegration_SampleColoring.png"))
+
+```
+
+## Export cell assignments for use with seurat clustering
+```{r}
+liger_factorAssignments<- as.factor(as.character(liger_obj@clusters))
+
+save(liger_factorAssignments, file=paste0(liger_analysis_folder, "ligerFactor_Assignment_Subtype.Robj"))
+```
+
+## Plot factor loaded directly onto UMAP
+## Limitation here: can only compare 1 dataset vs 1 other
+```{r}
+gene_loadings <- plotGeneLoadings(liger_obj, dataset1 = "MUV079", dataset2="MUV092",
+                                  do.spec.plot = FALSE, return.plots = TRUE)
+gene_loadings[[1]]
+ggsave(paste0(liger_fig_dir, "geneLoading_Factor1_MUV79_MUV92.png"))
+```
+
+## Identify markers
+```{r}
+cluster.results <- runWilcoxon(liger_obj, compare.method = "clusters")
+cluster.results_filtered<-cluster.results[cluster.results$padj<0.05 &
+                                            cluster.results$logFC>3,]
+
+group1_markers<-cluster.results_filtered[cluster.results_filtered$group=="1",]
+head(group1_markers[order(group1_markers$logFC, decreasing=TRUE),],20)
+```
+
+## Compare integration with previous NMF
+```{r}
+table_annots<-table(liger_obj@cell.data$sample, liger_obj@clusters)
+table_annots<- table_annots[,colSums(table_annots)>0]
+
+liger_annots<- melt(table_annots)
+liger_annots$Var2<- as.character(paste0("Factor", liger_annots$Var2))
+
+liger_distr<-ggplot(liger_annots, aes(x=Var2, y=value, fill=Var1))+ 
+  geom_bar(position="stack", stat="identity")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))+
+  ggtitle("LIGER NMF: \nbreakdown of samples per each factor")
+
+
+liger_distr 
+ggsave(paste0(liger_fig_dir, "LigerSampleDistr_SubtypeIntegration.png"), width=4, height=7)
+```
+
+## For summarizing the output
+```{r}
+AllSepFactor1<- lapply(v_names, function(x){x[,1]})
+AllSepFactor1<- as.data.frame(AllSepFactor1)
+
+AllSepFactor1$Shared<- shared_factor1
+```
+
+
+## Plots of factor loading on the dimensionally reduced graphs and highly loaded genes by dataset for each factor.
+```{r}
+gene_loadings <- plotGeneLoadings(liger_obj, do.spec.plot = FALSE, return.plots = TRUE)
+save(gene_loadings, file=paste0(liger_analysis_folder,))
+gene_loadings[[1]]
+```
+
+
+
+## Visualize expression of top gene in all samples
+```{r}
+PRF1 <- plotGene(liger_obj, "APOD", 
+                 axis.labels = c('UMAP 1', 'UMAP 2'), return.plots = T,
+                 plot.by="dataset", pt.size = 1)
+cowplot::plot_grid(plotlist=PRF1)
+ggsave(paste0(liger_fig_dir, "Factor1Marker_APOD_AllSamples.png"), width=10, height=10)
+```
+
+
+
+## Running above analyses, but with merged clusters
+```{r}
+## Load in liger object- factorization already run, no louvain or UMAP
+load(paste0(liger_analysis_folder, "liger_obj_NoLouvain.Robj"))
+
+## Run quantile norm, louvain, then save
+liger_obj <- quantile_norm(liger_obj)
+liger_obj <- louvainCluster(liger_obj, resolution = 0.25)
+save(liger_obj, file=paste0(liger_analysis_folder, "liger_obj_Louvain.Robj"))
+
+## Run UMAP
+liger_obj <- liger::runUMAP(liger_obj, distance = 'cosine', n_neighbors = 30, min_dist = 0.3)
+
+## Plot by merged factor
+all.plots <- liger::plotByDatasetAndCluster(liger_obj, axis.labels = c('UMAP 1', 'UMAP 2'),
+                                     return.plots = T, pt.size = 1)
+
+all.plots[[2]]
+ggsave(paste0(liger_fig_dir, "UMAP_MergedFactors.png"), width=7,height=7)
+
+## export liger merged factor assignments
+liger_mergedFactorAssignments<- as.factor(as.character(liger_obj@clusters))
+
+save(liger_mergedFactorAssignments, file=paste0(liger_analysis_folder, "ligermergedFactor_Assignment.Robj"))
+
+table(liger_obj@cell.data$dataset, liger_obj@clusters)
+```
+

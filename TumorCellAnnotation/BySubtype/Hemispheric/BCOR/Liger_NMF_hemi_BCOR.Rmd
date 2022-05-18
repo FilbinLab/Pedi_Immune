@@ -1,0 +1,306 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+```{r}
+library(liger)
+library(ggplot2)
+
+base_dir = "C:/Users/jenna/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/Hemispheric/BCOR/")
+
+liger_fig_dir<- paste0(working_dir, "figures/Liger/")
+liger_analysis_folder<- paste0(working_dir, "analysis/liger/")
+
+nmf_folder = "analysis/nmf/"
+nmf_analysis_folder = "analysis/nmf/Merge/"
+
+stat_helper = paste0(base_dir, script_dir, "common_stat_test.R")
+source(stat_helper)
+```
+
+## Read in data, then split by sample
+```{r}
+load("../../analysis/hemiBCOR_cm_list.Robj")
+tumor_stat = readRDS("../../analysis/inferCNV/seurat/hemiBCOR_call_tumor.rds")
+samples = readRDS("../../analysis/hemiBCOR_samples.rds")
+
+cm_list<-hemiBCOR_cm_list
+
+## Keep maligant cells
+cm<- cm_list$raw_data
+cm = cm_list$raw_data[, tumor_stat=="Malignant"]
+samples_tumor = samples[tumor_stat=="Malignant"]
+
+## Split cm 1 cm for each sample
+split_cm<- list()
+for (s in unique(samples)){
+  cells<- samples[samples %in% s]
+  cm_sample<- cm[,colnames(cm) %in% names(cells)]
+  split_cm[[s]]<- cm_sample
+}
+```
+
+## Create liger object
+```{r}
+liger_obj <- createLiger(split_cm)
+```
+
+## Normalize, identify variable expressed genes, scale data
+```{r}
+liger_obj <- liger::normalize(liger_obj)
+liger_obj <- selectGenes(liger_obj)
+liger_obj <- scaleNotCenter(liger_obj)
+```
+
+
+## Use the suggestK function to determine the appropriate number of factors to use.
+## Use the suggestLambda function to find the smallest lambda for which the alignment metric stabilizes.
+```{r}
+suggestK(liger_obj) ## use k=30
+#suggestLambda(liger_obj, k = 30, num.cores = 4)
+```
+
+## Joint Matrix Facotorization
+Important parameters are as follows:
+
+1. k. Integer value specifying the inner dimension of factorization, or number of factors. Higher k is recommended for datasets with more substructure. We find that a value of k in the range 20 - 40 works well for most datasets. Because this is an unsupervised, exploratory analysis, there is no single “right” value for k, and in practice, users choose k from a combination of biological prior knowledge and other information.
+
+2. lambda. This is a regularization parameter. Larger values penalize dataset-specific effects more strongly, causing the datasets to be better aligned, but possibly at the cost of higher reconstruction error. The default value is 5. We recommend using this value for most analyses, but find that it can be lowered to 1 in cases where the dataset differences are expected to be relatively small, such as scRNA-seq data from the same tissue but different individuals.
+
+3. thresh. This sets the convergence threshold. Lower values cause the algorithm to run longer. The default is 1e-6.
+
+4. max.iters. This variable sets the maximum number of iterations to perform. The default value is 30.
+```{r}
+liger_obj <- optimizeALS(liger_obj, k = 20, lambda = 5)
+```
+
+
+## cluster cells and perform quantile normalization by dataset, factor, and cluster
+```{r}
+liger_obj <- quantile_norm(liger_obj)
+
+save(liger_obj, file=paste0(liger_analysis_folder, "liger_obj_NoLouvain.Robj"))
+```
+
+## Run UMAP- no louvain first
+```{r}
+load(paste0(liger_analysis_folder, "liger_obj_NoLouvain.Robj"))
+
+
+liger_obj <- liger::runUMAP(liger_obj, distance = 'cosine', n_neighbors = 30, min_dist = 0.3)
+```
+
+## Plot on UMAP- factors (merged or unmerged) + sample
+```{r}
+all.plots <- plotByDatasetAndCluster(liger_obj, axis.labels = c('UMAP 1', 'UMAP 2'),
+                                     return.plots = T, pt.size = 1)
+all.plots[[1]]
+
+ggsave(paste0(liger_fig_dir, "UMAP_Sample.png"), width=7,height=7)
+
+
+all.plots[[2]]
+ggsave(paste0(liger_fig_dir, "UMAP_AllFactors.png"), width=7,height=7)
+
+```
+
+## Export cell assignments for use with seurat clustering
+```{r}
+liger_factorAssignments<- as.factor(as.character(liger_obj@clusters))
+
+save(liger_factorAssignments, file=paste0(liger_analysis_folder, "ligerFactor_Assignment.Robj"))
+```
+
+
+## Plot factor loaded directly onto UMAP
+## Limitation here: can only compare 1 dataset vs 1 other
+```{r}
+## Set 2 datasets to compare
+dataset1="MUV079"
+dataset2="MUV092"
+
+## saves all gene loadings plots to pdf
+pdf(paste0(liger_fig_folder, "gene_loadings_", dataset1, "vs", dataset2, ".pdf"))
+gene_loadings <- plotGeneLoadings(liger_obj, 
+                                  dataset1 = dataset1, 
+                                  dataset2=dataset2,
+                                  num.genes.show = 12, ## default 12
+                                  do.spec.plot = TRUE, 
+                                  return.plots = FALSE,
+                                  do.title = TRUE,
+                                  pval.thresh = 0.05, ## default 0.05, wilcoxon
+                                  log.fc.thresh = 1) ## default 1
+dev.off()
+```
+
+
+## Identify markers
+```{r}
+cluster.results <- runWilcoxon(liger_obj, compare.method = "clusters")
+cluster.results_filtered<-cluster.results[cluster.results$padj<0.05 &
+                                            cluster.results$logFC>3,]
+
+save(cluster.results_filtered, file=paste0(liger_analysis_folder, "AllFactors_FilteredMarkers.Robj"))
+```
+
+
+## Visualize expression of top gene across samples
+```{r}
+geneToTest<- "APOD"
+
+PRF1 <- plotGene(liger_obj, geneToTest, 
+                 axis.labels = c('UMAP 1', 'UMAP 2'), 
+                 return.plots = T,
+                 plot.by="dataset", 
+                 pt.size = 1)
+
+cowplot::plot_grid(plotlist=PRF1)
+ggsave(paste0(liger_fig_folder, "plotGene_", geneToTest, ".png"), width=10, height=10)
+```
+
+## Alternative approach for annotating cells with factor
+## Score each cell using top marker genes for each factor- using scoreNmfGenes function
+```{r}
+## Remove factor 15
+factor_markers<- cluster.results_filtered[cluster.results_filtered$group!="15",]
+
+## Split by factor, then Get top 32 markers, based on p value
+factor_markers_list<- split(factor_markers, f= factor_markers$group)
+factor_markers_list<- lapply(factor_markers_list, function(x){
+  tmp<- x[order(x$padj),]
+  tmp[1:32,]
+})
+names(factor_markers_list)<- paste0("factor", names(factor_markers_list))
+
+## Get list of top genes for each factor
+gene_list<- lapply(factor_markers_list, function(x){x$feature})
+
+## center counts and get mean gene expression
+cm_center<-cm_list$center_data
+cm_center<- cm_center[,colnames(cm_center) %in% colnames(cm)]
+cm_mean<- log2(rowMeans(cm)+1)
+
+## Score each cell for factor gene set
+nmf_score = scoreNmfGenes(cm_center, cm_mean, gene_list)
+nmf_score = t(nmf_score) 
+
+num_meta_program = length(gene_list)
+nmf_score_final_t = data.frame(nmf_score)
+
+## Get top 3 factors for each cell
+for (i in 1:3){
+  nmf_score_final_t = metagene_score_signature(nmf_score_final_t, num_meta_program, i)
+}
+
+saveRDS(nmf_score_final_t, 
+        file=paste0(liger_analysis_folder, "nmf_score_AllFactors", ".Rds"))
+```
+
+## ORA with hemispheric genesets
+## Compare with factors from previously defined metaprograms from ependymoma
+```{r}
+all_markers_list<-split(cluster.results_filtered, cluster.results_filtered$group )
+all_markers_list<-lapply(all_markers_list, function(x){x$feature})
+names(all_markers_list)<-paste0("Factor", names(all_markers_list))
+
+hemi_genesets<-readRDS(paste0(nmf_analysis_folder,
+                                 "hemisphericPreviousPrograms_2019_OC.rds"))
+
+tmp2 = sapply(all_markers_list, function(x){
+    sapply(hemi_genesets, function(y){
+        fisher_test(x, y, unlist(union(hemi_genesets, all_markers_list)))
+    })
+})
+tmp2 = data.frame(tmp2)
+tmp3<- apply(tmp2, 2, function(x) {p.adjust(x) < 0.1})
+tmp4<-apply(tmp2, 2, function(x) {p.adjust(x)})
+
+write.table(tmp4, paste0(liger_analysis_folder,
+                        "ScoreFactors_UsingPreviousNMF_padj.txt"))
+
+```
+
+## Compare integration with previous NMF
+```{r}
+table_annots<-table(liger_obj@cell.data$dataset, liger_obj@clusters)
+table_annots<- table_annots[,colSums(table_annots)>0]
+
+liger_annots<- melt(table_annots)
+liger_annots$Var2<- as.character(paste0("Factor", liger_annots$Var2))
+
+liger_distr<-ggplot(liger_annots, aes(x=Var2, y=value, fill=Var1))+ 
+  geom_bar(position="stack", stat="identity")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))+
+  ggtitle("LIGER NMF: \nbreakdown of samples per factor")
+
+
+NameOfMetaprogramList<-"Merge1"
+nmf_score = readRDS(paste0("analysis/nmf/Merge/nmf_score", NameOfMetaprogramList, ".rds"))
+nmf_score$sample<- gsub("\\..*", "", rownames(nmf_score) )
+nmf_annots<-table(nmf_score$sample, nmf_score$signature_1)
+nmf_annots<- melt(nmf_annots)
+
+nmf_distr<- ggplot(nmf_annots, aes(x=Var2, y=value, fill=Var1))+ 
+  geom_bar(position="stack", stat="identity")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))+
+  ggtitle("Previous NMF: \nbreakdown of samples per program")
+
+liger_distr + nmf_distr
+ggsave(paste0(liger_fig_dir, "LigerSampleDistr_vs_NMFSampleDistr.png"))
+```
+
+
+## ORA test 
+```{r over-representation-test}
+library(clusterProfiler)
+
+##
+OrgDb = "org.Hs.eg.db"
+dataset = "hsapiens_gene_ensembl"
+
+## Convert using biomart
+allOE_genes <- as.character(gene_symbol_to_ensembl_id(rownames(cm),dataset)$ensembl_gene_id)
+
+
+## Convert marker genes to ensembl IDs too, then run OR analysis (GO)
+go_result = list()
+for (i in unique(factor_markers$group)){
+  sigOE_genes = as.character(gene_symbol_to_ensembl_id(subset(factor_markers, group==i,
+                                                              feature)[,], dataset)$ensembl_gene_id)
+  go_result[[paste0("c", i)]] = go_analysis(sigOE_genes, allOE_genes)
+} 
+
+
+## Plot top pathways for all clusters, display on one plot
+clusters<-names(go_result)
+allDotPlots_20<-list()
+for (c in 1:length(clusters)){
+  cluster=clusters[c]
+  print(cluster)
+  if (nrow(go_result[[cluster]]$cluster_summary)>0){
+    print(cluster)
+    allDotPlots_20[[c]]<-dotplot(go_result[[cluster]]$ego, 
+                                showCategory=20, 
+                                font.size = 15, 
+                                title = cluster, 
+                                label_format=10) +
+      scale_y_discrete(labels=function(x) str_wrap(x, width=60))+
+      theme(plot.title = element_text(hjust = 0.5, face = "bold", 
+                                      color="black", size = 28),
+            axis.title = element_text(face = "bold", color="black"), 
+            axis.text.x = element_text(angle = 45, hjust = 1, color="black"),
+            axis.text.y = element_text( color="black",face = "bold"))
+  }
+  
+}
+
+allDotPlots_20<- allDotPlots_20[!(unlist(lapply(allDotPlots_20, function(x){is.null(x)})))]
+cowplot::plot_grid(plotlist = allDotPlots_20, ncol=2)
+ggsave(paste0("GO_OVA_AllClusters_AllFactorsExcept15.jpg"), path=liger_fig_dir, width=18, height=20)
+save(go_result, file=paste0(liger_analysis_folder,  "go_result_AllFactorsExcept15.Robj"))
+```
+
+

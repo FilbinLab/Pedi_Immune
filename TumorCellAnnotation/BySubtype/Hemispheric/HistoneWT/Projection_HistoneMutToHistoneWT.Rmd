@@ -1,0 +1,68 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/Hemispheric/HistoneWT/")
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+stat_helper = paste0(base_dir, script_dir, "common_stat_test.R")
+source(preprocessing)
+source(stat_helper)
+
+nmf_analysis_folder = "analysis/nmf/Merge/"
+seurat_analysis_folder = "analysis/seurat/"
+seurat_fig_folder = "figures/seurat/"
+for (folder in c(seurat_analysis_folder, seurat_fig_folder)){
+  if (!dir.exists(folder)){
+    dir.create(folder)
+  }
+}
+
+liger_analysis_folder<- paste0(working_dir, "analysis/liger/")
+
+## Set colors for use later- better for discriminating against groups
+library(sparseMatrixStats)
+library(RColorBrewer)
+n <- 50
+qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+
+subtypes<- read.csv("../../../../Subtypes.csv")
+```
+
+```{r}
+seurat_filename = paste0(seurat_analysis_folder, "seurat_obj.Robj")
+if(file.exists(seurat_filename)){
+  load(seurat_filename)
+}
+wt_seurat_obj<- seurat_obj
+
+## alternative: wt seurat object with just BT1745
+load(paste0(seurat_analysis_folder, "BT1745/seurat_obj.Robj" ))
+wt_seurat_obj<- seurat_obj
+
+load("../HistoneMut/analysis/seurat/seurat_obj.Robj")
+mut_seurat_obj<-seurat_obj
+```
+
+```{r}
+seurat_list<-list(wt=wt_seurat_obj, mut=mut_seurat_obj)
+
+transferAnchors<-FindTransferAnchors(reference = seurat_list$mut, query=seurat_list$wt)
+
+predictions <- TransferData(anchorset = transferAnchors, 
+                            refdata = mut_seurat_obj$TopSigPrevious)
+
+predictions_final<- predictions$predicted.id; names(predictions_final)<- rownames(predictions)
+wt_seurat_obj@meta.data$Predictions<- predictions_final
+wt_seurat_obj@meta.data$Scores<- predictions
+
+DimPlot(wt_seurat_obj, group.by="Predictions", pt.size = 2)
+ggsave(paste0(seurat_fig_folder, "Predictions_fromG34RVProjection.png"), width=8, height=7)
+```

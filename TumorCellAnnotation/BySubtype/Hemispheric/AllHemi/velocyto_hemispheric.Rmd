@@ -1,0 +1,355 @@
+---
+title: "velocyto"
+output: html_document
+---
+
+```{r read-data}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(loomR)
+library(velocyto.R)
+library(magrittr)
+library(destiny)
+
+base_dir = "/mnt/c/Users/jenna/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/",
+                     "Annotation/BySubtype/Hemispheric/AllHemi/")
+file_dir<- paste0(working_dir, "analysis/velocyto/loomFiles/")
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+marker_dir = "/Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Marker_genes/"
+
+#color_helper = paste0(base_dir, script_dir, "colors.R")
+#source(color_helper)
+
+velocyto_analysis_folder = "analysis/velocyto/"
+velocyto_fig_folder = "figures/velocyto/"
+for (folder in c(velocyto_analysis_folder, velocyto_fig_folder)){
+  if (!dir.exists(folder)){
+    dir.create(folder)
+  }
+}
+
+```
+
+# Data Loading
+
+## Load loom data
+```{r load_loom_data}
+loom_files = list.files(path = file_dir, pattern="*.loom")
+
+loom_files_list = lapply(loom_files, function(x) read.loom.matrices(paste0(file_dir, x)))
+```
+
+## Simplify cell names 
+```{r }
+loom_files_list = lapply(loom_files_list, 
+                         function(ldat) ldat <- lapply(ldat,function(x) {
+                           colnames(x) <-  gsub(".genome.bam","",gsub(".*:","",colnames(x)))
+                           x}
+                           )
+                         )
+```
+
+## Concatenate each matrix together 
+```{r}
+# exonic read (spliced) expression matrix
+emat = NULL
+# intronic read (unspliced) expression matrix
+nmat = NULL
+# spanning read (intron+exon) expression matrix
+smat = NULL
+for (i in 1:length(loom_files_list)){
+  emat = cbind(emat, loom_files_list[[i]]$spliced)
+  nmat = cbind(nmat, loom_files_list[[i]]$unspliced)
+  smat = cbind(smat, loom_files_list[[i]]$spanning)
+}
+```
+
+## Add preceding 0 to cell names
+```{r}
+colnames(emat) = sapply(colnames(emat), function(x) ifelse(grepl("MUV0.", x), x, gsub("MUV", "MUV0", x)))
+colnames(nmat) = sapply(colnames(nmat), function(x) ifelse(grepl("MUV0.", x), x, gsub("MUV", "MUV0", x)))
+colnames(smat) = sapply(colnames(smat), function(x) ifelse(grepl("MUV0.", x), x, gsub("MUV", "MUV0", x)))
+```
+
+## Replace "-" with "." in cell names 
+```{r}
+colnames(emat) = gsub("-", ".", colnames(emat), fixed=T)
+colnames(nmat) = gsub("-", ".", colnames(nmat), fixed=T)
+colnames(smat) = gsub("-", ".", colnames(smat), fixed=T)
+```
+
+## Generate cell colors and embedding from seurat 
+```{r make_embedding}
+load("analysis/seurat/seurat_obj.Robj")
+
+## Cell names
+cell_names = colnames(seurat_obj)
+
+## UMAP embedding 
+emb = seurat_obj@reductions$umap@cell.embeddings
+
+## Harmony embedding
+emb_harmony = seurat_obj@reductions$harmony@cell.embeddings[,1:2]
+
+## NMF scores
+emb_NMF = as.matrix(seurat_obj@meta.data[,c("NMF1", "NMF2", "NMF3", "NMF4", "NMF5", "NMF6" )])
+```
+
+## Cell colors from nmf df
+```{r}
+nmf_score = readRDS("analysis/nmf/Merge/nmf_scoreMerge1.rds")
+nmf_score = nmf_score[cell_names,]
+
+cluster_numbers = sort(unique(nmf_score$signature_1))
+gg_colors = gg_color_hue(length(cluster_numbers))
+cell.colors = as.character(plyr::mapvalues(x = nmf_score$signature_1, from = cluster_numbers, to = gg_colors))
+names(cell.colors) = cell_names
+```
+
+## Compute diffusion map embedding 
+```{r}
+## Compute diffusion map embedding  
+cm_norm = as.matrix(seurat_obj@assays$RNA@data[seurat_obj@assays$RNA@var.features,])
+rd_dest = DiffusionMap(t(cm_norm))
+dest_embed = NULL
+for (i in 1:2){
+  name=paste0("DC", i)
+  dest_embed = cbind(dest_embed, rd_dest[[name]])
+}
+colnames(dest_embed) = c("DC1", "DC2")
+rownames(dest_embed) = cell_names
+
+save(dest_embed, file=paste0(velocyto_analysis_folder, "dest_embed.Robj"))
+```
+
+## Subset emat/nmat/smat with cells in embedding 
+```{r}
+## Check if any cells in the embedding are not present in the count matrix
+any(!(cell_names %in% colnames(emat)))
+
+emat = emat[,cell_names]
+nmat = nmat[,cell_names]
+smat = smat[,cell_names]
+```
+
+## Colors for velocyto plot 
+```{r}
+## Make colors for metagene programs
+gg_colors = brewer.pal(length(unique(nmf_score$signature_1)), "Accent")
+
+cluster_numbers = sort(unique(nmf_score$signature_1))
+cell.colors = as.character(plyr::mapvalues(x = nmf_score$signature_1, from = cluster_numbers, to = gg_colors))
+names(cell.colors) = cell_names
+
+colors = list()
+for (i in 1:length(cluster_numbers)){
+  colors[[cluster_numbers[i]]] = gg_colors[i] 
+}
+save(colors, file=paste0(velocyto_analysis_folder, "colors.Robj"))
+
+## Make colors for samples
+sample_colors = gg_color_hue(length(unique(seurat_obj@meta.data$sample)))
+sample_numbers = sort(unique(seurat_obj@meta.data$sample))
+cell.colors.samples = as.character(plyr::mapvalues(x = seurat_obj@meta.data$sample, from = sample_numbers, to = sample_colors))
+names(cell.colors.samples) = cell_names
+
+
+```
+
+# Filtering genes to leave those that exceed some pre-defined g to the average expression magnitude
+```{r}
+# filter expression matrices based on some minimum max-cluster averages
+emat <- filter.genes.by.cluster.expression(emat,cell.colors,min.max.cluster.average = 5)
+nmat <- filter.genes.by.cluster.expression(nmat,cell.colors,min.max.cluster.average = 1)
+smat <- filter.genes.by.cluster.expression(smat,cell.colors,min.max.cluster.average = 0.5)
+# look at the resulting gene set
+length(intersect(rownames(emat),rownames(nmat)))
+```
+
+## Save raw data for velocyto analysis 
+```{r}
+velocyto_obj = list()
+velocyto_obj[["emat"]] = emat
+velocyto_obj[["nmat"]] = nmat
+velocyto_obj[["smat"]] = smat
+velocyto_obj[["emb"]] = emb
+velocyto_obj[["nmf_colors"]] = cell.colors
+velocyto_obj[["sample_colors"]] = cell.colors.samples
+velocyto_obj[["cell_names"]] = cell_names
+save(velocyto_obj, file=paste0(velocyto_analysis_folder, "velocyto_obj.Robj"))
+```
+
+## The most robust estimate, that combines cell kNN pooling with the gamma fit based on an extreme quantiles:
+```{r}
+fit.quantile <- 0.05;
+rvel.qf <- gene.relative.velocity.estimates(emat,nmat,deltaT=1,kCells = 5,fit.quantile = fit.quantile)
+
+jpeg(filename=paste0(velocyto_fig_folder, "PCA_velocity_cellKNN.png"), width = 1200, height = 800)
+pca.velocity.plot(rvel.qf,
+                  nPcs=5,
+                  plot.cols=2,
+                  cell.colors=ac(cell.colors,alpha=0.5),
+                  cex=1.2,
+                  pcount=0.1,
+                  arrow.scale=0.2,
+                  pc.multipliers=c(1,-1,-1,-1,-1))
+dev.off()
+
+jpeg(filename=paste0(velocyto_fig_folder, "PCA_velocity_cellKNN_2PCs.png"), width = 1200, height = 800)
+pca.velocity.plot(rvel.qf,
+                  nPcs=2,
+                  plot.cols=1,
+                  cell.colors=ac(cell.colors,alpha=0.5),
+                  cex=1.2,
+                  pcount=0.1,
+                  arrow.scale=0.2,
+                  pc.multipliers=c(1,-1))
+dev.off()
+```
+
+## Fitting of individual genes
+## very unsure how to interpret this
+```{r}
+# define custom pallet for expression magnitude
+neuronal_gene= "STMN2"
+undiff_gene = "MAFF"
+diff_gene = "BCAN"
+ependymal_gene = "DNAAF1"
+##astrocytic_gene = "ALDOC"
+
+jpeg(filename=paste0(velocyto_fig_folder, "FittingOfIndvGenes.png"), width = 1200, height = 800)
+gene.relative.velocity.estimates(emat,nmat, 
+                                 kCells = 5,
+                                 fit.quantile =fit.quantile,
+                                 old.fit=rvel.qf,
+                                 show.gene=undiff_gene,
+                                 cell.emb=emb,
+                                 cell.colors=cell.colors)
+dev.off()
+```
+
+## Using spanning reads to fit the gene offsets
+```{r}
+rvel <- gene.relative.velocity.estimates(emat,nmat,smat=smat, kCells = 5, fit.quantile=fit.quantile, diagonal.quantiles = TRUE)
+
+jpeg(filename=paste0(velocyto_fig_folder, "PCA_SpanningReadsFitGeneOffsets.png"), width = 1200, height = 800)
+pca.velocity.plot(rvel,nPcs=5,plot.cols=2,cell.colors=ac(cell.colors,alpha=0.7),
+                  cex=1.2,pcount=0.1,pc.multipliers=c(1,-1,1,1,1))
+dev.off()
+```
+
+## Most basic version of velocity estimates, using relative gamma fit, without cell kNN smoothing (i.e. actual single-cell velocity)
+```{r}
+rvel1 <- gene.relative.velocity.estimates(emat,nmat,deltaT=1,deltaT2 = 1,
+                                          kCells = 1, fit.quantile=fit.quantile)
+
+jpeg(filename=paste0(velocyto_fig_folder, "PCA_velocity_RelativeGammaFit.png"), width = 1200, height = 800)
+pca.velocity.plot(rvel1,nPcs=5,plot.cols=2,cell.colors=ac(cell.colors,alpha=0.7),
+                  cex=1.2,pcount=0.1,pc.multipliers=c(1,-1,1,1,1))
+dev.off()
+```
+
+## Visulization on other embeddings (e.g. tSNE, diffusion map)
+```{r}
+vel <- rvel.qf
+cell.colors = nmf_colors
+arrow.scale=.02
+cell.alpha=0.4
+cell.cex=1
+width=4.5
+height=4
+
+jpeg(filename=paste0(velocyto_fig_folder, "Diffusion4_velocyto.jpg"), 
+     width = 1600, height = 1200, res = 300)
+show.velocity.on.embedding.cor(emb=dest_embed, 
+                               vel=vel, 
+                               n=100, 
+                               scale='sqrt',
+                               cell.colors=ac(cell.colors,alpha=cell.alpha),
+                               cex=cell.cex,
+                               arrow.scale=arrow.scale,
+                               arrow.lwd=1)
+dev.off()
+
+jpeg(filename=paste0(velocyto_fig_folder, "UMAP_velocyto.jpg"), width = 1600, height = 1200, res = 300)
+show.velocity.on.embedding.cor(emb=emb, 
+                               vel=vel, 
+                               n=100, 
+                               scale='sqrt',
+                               cell.colors=ac(cell.colors,alpha=cell.alpha),
+                               cex=cell.cex,
+                               arrow.scale=arrow.scale,
+                               arrow.lwd=1)
+dev.off()
+```
+
+## Velocity vector field
+```{r}
+vel <- rvel.qf; cell.colors = cell.colors
+arrow.scale=1.5; cell.alpha=0.4; cell.cex=1; width=4.5; height=4
+
+## PC embedding here
+pca_emb_list = pca.velocity.plot(rvel.qf,
+                  nPcs=2,
+                  plot.cols=1,
+                  cex=1.2,
+                  pcount=0.1,
+                  arrow.scale=0.2,
+                  pc.multipliers=c(1,-1))
+pca_emb = pca_emb_list$epc@scores
+saveRDS(pca_emb, paste0(velocyto_analysis_folder, "pca_embedding.rds"))
+
+jpeg(paste0(velocyto_fig_folder, "velocyto_vector_field.jpg"), width=2400, height=1800, res=300)
+show.velocity.on.embedding.cor(pca_emb,vel,n=100,scale='sqrt',cell.colors=ac(cell.colors,alpha=cell.alpha),cex=cell.cex,arrow.scale=arrow.scale,show.grid.flow=TRUE,min.grid.cell.mass=0.5,grid.n=20,arrow.lwd=2)
+dev.off()
+```
+
+## Final plot
+```{r}
+jpeg(paste0(velocyto_fig_folder, "velocyto_metagene.jpg"), width=2400, height=1800, res=300)
+pca.velocity.plot(rvel.qf,
+                  nPcs=2,
+                  plot.cols=1,
+                  cell.colors=ac(cell.colors,alpha=0.75),
+                  cex=0.6,
+                  pcount=0.1,
+                  arrow.scale=0.1,
+                  pc.multipliers=c(1,-1))
+dev.off()
+
+
+```
+
+## Save velocyto results
+```{r}
+velocyto_res_list = list()
+velocyto_res_list[["qf"]] = rvel.qf
+velocyto_res_list[["spanning"]] = rvel
+save(velocyto_res_list, file=paste0(velocyto_analysis_folder, "velocyto_res_list.Robj"))
+```
+
+## Reload all data from save objects
+```{r}
+load("analysis/velocyto_obj.Robj")
+load("analysis/velocyto_res_list.Robj")
+
+cell_names = velocyto_obj$cell_names
+sample_colors = velocyto_obj$sample_colors
+subtype_colors = velocyto_obj$subtype_colors
+cc_colors = velocyto_obj$cc_colors
+nmf_colors = velocyto_obj$nmf_colors
+
+emat = velocyto_obj$emat
+nmat = velocyto_obj$nmat
+smat = velocyto_obj$smat
+
+rvel.qf = velocyto_res_list$qf
+```
