@@ -147,6 +147,12 @@ ggsave(paste0(figure_dir, "TCell_CD4.CD8.Cycling.png"), width=6, height=5.5)
 ## Treg markers: to show that they don't form a distinct cluster
 FeaturePlot(tcell_seurat, features=c("FOXP3", "IL2RA", "CTLA4"), ncol = 1, cols=c("grey", "red"))
 ggsave(paste0(figure_dir, "Tcell_TregMarkers.png"), width=6, height=18)
+
+## CD4/CD8 only, no cycling
+seurat_plot<- subset(tcell_seurat,detailed_annot_byNMFrank8_mergedByunion != "Unclear")
+seurat_plot$plotting<- seurat_plot$detailed_annot_byNMFrank8_mergedByunion
+DimPlot(seurat_plot, group.by = "plotting", label = TRUE, label.size = 8) %>% umap_theme()
+ggsave(paste0(figure_dir, "TCell_CD4.CD8.png"), width=6, height=5.5)
 ```
 
 ## Myeloid cells: by B cells/DC/Other

@@ -208,12 +208,12 @@ merge_cd4<- readRDS(paste0(analysis_dir, "cd4_seurat_nsclc.glioma.Rds"))
 ## Score all cells for glioma and nsclc gene sets, correlate scores
 ```{r}
 ## CD8
-  ## Remove Tregs- cd4 specifc
-  glioma_markers<- glioma_markers[glioma_markers$cluster!= "Treg",]
+  ## Remove Tregs and Inhibitory- cd4 specifc
+  glioma_markers<- glioma_markers[!glioma_markers$cluster %in% c("Treg", "Inhibitory"),]
   
   ## Subset markers to top 100 (may be fewer than this) for each program
   glioma_top_markers<- glioma_markers %>% group_by(cluster) %>% top_n(n=100, wt=avg_log2FC) %>% as.data.frame()
-  nsclc_top_markers<- nsclc_markers %>% group_by(Cluster) %>% top_n(n=100, wt=F) %>% as.data.frame()
+  nsclc_top_markers<- nsclc_cd8_markers %>% group_by(Cluster) %>% top_n(n=100, wt=F) %>% as.data.frame()
   
   ## Split into list
   glioma_marker_list<- split(glioma_top_markers, f=glioma_top_markers$cluster)

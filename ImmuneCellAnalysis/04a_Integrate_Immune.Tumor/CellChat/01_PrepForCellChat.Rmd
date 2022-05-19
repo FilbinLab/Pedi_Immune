@@ -15,7 +15,7 @@ working_dir<- paste0(base_dir,
                      "Dropbox (Partners HealthCare)/FilbinLab/",
                      "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/04a_Integrate_Immune.Tumor/CellChat/")
 
-analysis_dir<- paste0(working_dir, "/analysis/CellChat/")
+analysis_dir<- paste0(working_dir, "/analysis/")
 if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
 ```
 
@@ -31,7 +31,7 @@ myeloid_data_dir<- paste0("../../01_Preprocessing/02_Counts_Preprocess/analysis/
 
 tcell_seurat<- readRDS(paste0(tcell_data_dir, "ped_seurat_tcell_harmony.Rds"))
 myeloid_seurat<- readRDS(paste0(myeloid_data_dir, "myeloid_seurat_noDC.B_harmony.Rds"))
-load("../../../../TumorCellAnnotation/AllSubtypesTogether/analysis/Merge_allSubtypes/AllTumorSeuratObj.Robj")
+load("../../../TumorCellAnnotation/AllSubtypesTogether/analysis/Merge_allSubtypes/AllTumorSeuratObj.Robj")
 tumor_seurat<- tumor_merged; rm(tumor_merged)
 ```
 
@@ -76,6 +76,30 @@ merged_seurat<- AddMetaData(merged_seurat, merged_seurat_meta[,!colnames(merged_
 saveRDS(merged_seurat, file=paste0(analysis_dir, "seurat_tumor.tcell.myeloid.Rds"))
 ```
 
+## Add on myeloid program and tcell program
+```{r}
+all_seurat<- readRDS(paste0(analysis_dir, "seurat_tumor.tcell.myeloid.Rds"))
+
+## Create named vector of all annotations
+annots<- c(paste0(tcell_seurat$detailed_annot_byNMFrank8_mergedByunion, "_", tcell_seurat$NMF_rank8_annot_mergedByunion_reAnnot),
+           as.character(myeloid_seurat$NMF_rank6_annotByAdult10X),
+           tumor_seurat$CellAnnot)
+names(annots)<- c(colnames(tcell_seurat), colnames(myeloid_seurat), colnames(tumor_seurat))
+
+## Order vector of annotations the same way as in seurat object
+sum(!names(annots) %in% colnames(all_seurat))
+annots<- annots[colnames(all_seurat)]
+sum(names(annots) != colnames(all_seurat))
+
+## Add annotations onto seurat object
+all_seurat$immunePrograms_tumorCellTypes<- unname(annots)
+
+## Fix any annotations
+all_seurat$immunePrograms_tumorCellTypes<- gsub("cycling", "Cycling", all_seurat$immunePrograms_tumorCellTypes)
+
+saveRDS(all_seurat, file=paste0(analysis_dir, "seurat_tumor.tcell.myeloid.Rds"))
+```
+
 ## Split into 1 seurat object per sample
 ```{r}
 all_seurat<- readRDS(paste0(analysis_dir, "seurat_tumor.tcell.myeloid.Rds"))
@@ -101,7 +125,9 @@ saveRDS(all_seurat_list, file=paste0(analysis_dir, "seurat_list_bySample.Rds"))
 ## Write out comparison file- sender/receiver text file
 file_with_comparisons should be a text file with 3 columns that follow the structure: comparison_name sender receiver
 Can run all simultaneously, but takes too long to run- over 3 days
-Split into 3 comparison files, just so they can run simultaneously
+Split into multiple comparison files, just so they can run simultaneously
+
+## By detailed cell type (including clonality): tumor cell types, myeloid, cd4 (clonal/nonclonal), cd8 (clonal/nonclonal)
 ```{r}
 all_seurat<- readRDS(paste0(analysis_dir, "seurat_tumor.tcell.myeloid.Rds"))
 
@@ -143,14 +169,83 @@ for(i in names(comparison_list)){
   tmp<- comparison_list[[i]]
   write.table(tmp, file=paste0(analysis_dir, "comparisons_", i, ".txt"), col.names = FALSE, quote = FALSE, row.names = FALSE)
 }
+
 ```
 
+
+## By program: tumor cell types, myeloid programs, cd4 programs, cd8 programs
+```{r}
+all_seurat<- readRDS(paste0(analysis_dir, "seurat_tumor.tcell.myeloid.Rds"))
+
+## Add on CD4/CD8 distinction
+all_seurat$detailed_annot<- ifelse(grepl("CD4", all_seurat$immunePrograms_tumorCellTypes), "CD4",
+                                   ifelse(grepl("CD8", all_seurat$immunePrograms_tumorCellTypes), "CD8",
+                                          ifelse(grepl("Unclear", all_seurat$immunePrograms_tumorCellTypes), "UnclearTcell",
+                                                 all_seurat$highLevel_annot)))
+
+## Remove "unclear" cells, inhibitory CD8
+all_seurat<- subset(all_seurat, detailed_annot != "UnclearTcell")
+all_seurat<- subset(all_seurat, immunePrograms_tumorCellTypes != "CD8_Inhibitory")
+
+## Remove any programs/cell types without at least 10 cells in 1 sample
+nCells<- as.data.frame.matrix(table(all_seurat$immunePrograms_tumorCellTypes, all_seurat$sample))
+nSamples_pf<- apply(nCells, 1, function(x){sum(x>10)})
+cellTypes_keep<- names(nSamples_pf)[nSamples_pf!=0]
+all_seurat<- subset(all_seurat, immunePrograms_tumorCellTypes %in% cellTypes_keep)
+
+## Get list of all programs by high level cell type
+cd4_types<- unique(all_seurat$immunePrograms_tumorCellTypes[grepl("CD4", all_seurat$immunePrograms_tumorCellTypes)])
+cd8_types<- unique(all_seurat$immunePrograms_tumorCellTypes[grepl("CD8", all_seurat$immunePrograms_tumorCellTypes)])
+myeloid_types<- unique(all_seurat$immunePrograms_tumorCellTypes[all_seurat$detailed_annot=="Myeloid"])
+tumor_types<- unique(all_seurat$immunePrograms_tumorCellTypes[all_seurat$highLevel_annot=="Tumor"])
+
+
+## Between high level cell type lists, get all pairwise combinations
+cd4_myeloid<- expand.grid(Sender=as.list(cd4_types), Receiver=as.list(myeloid_types))
+cd8_myeloid<- expand.grid(Sender=as.list(cd8_types), Receiver=as.list(myeloid_types))
+tumor_cd4<- expand.grid(Sender=as.list(tumor_types), Receiver=as.list(cd4_types))
+tumor_cd8<- expand.grid(Sender=as.list(tumor_types), Receiver=as.list(cd8_types))
+tumor_myeloid<- expand.grid(Sender=as.list(tumor_types), Receiver=as.list(myeloid_types))
+all_list<- list(cd4_myeloid=cd4_myeloid, cd8_myeloid=cd8_myeloid, tumor_cd4=tumor_cd4, tumor_cd8=tumor_cd8, tumor_myeloid=tumor_myeloid)
+
+## For each cell type list, cycle through each comparison. Remove any without at least 1 sample with 10 cells in each
+nCells_allTypes<- as.data.frame.matrix(table(all_seurat$immunePrograms_tumorCellTypes, all_seurat$sample))
+all_list_filtered<- lapply(all_list, function(x){
+  ## Cycle through each pair in the comparisons table- check whether at least 1 sample "passes" (has 10 cells in each)
+  pair_pf<- unlist(lapply(1:nrow(x), function(pair){
+    tmp<- nCells_allTypes[unlist(x[pair,]),]
+    pf<- sum(apply(tmp, 2, function(y){sum(y>10)==2})) ## number of samples with > 10 cells in BOTH cell types in pair
+    if(pf!=0){return("pass")}else{return("fail")}
+  }))
+  
+  ## Only return comparisons that "pass"
+  return(x[pair_pf=="pass",])
+})
+
+## Add column with analysis name to each comparison table, then write out
+all_list_filtered<- lapply(names(all_list_filtered), function(x){
+  all_comparisons<- all_list_filtered[[x]]
+  
+  ## Convert columns to character- converted to list during pairwise creation
+  all_comparisons$Sender<- as.character(all_comparisons$Sender)
+  all_comparisons$Receiver<- as.character(all_comparisons$Receiver)
+  
+  ## Add on "comparison name"
+  all_comparisons$name<- paste0(all_comparisons$Sender, "_to_", all_comparisons$Receiver)
+  all_comparisons<- all_comparisons[,c("name", "Sender", "Receiver")]
+  
+  ## Write out to file for input into cellchat
+  write.table(all_comparisons, file=paste0(analysis_dir, "comparisons_byPrograms_",x, ".txt"), col.names = FALSE, quote = FALSE, row.names = FALSE)
+})
+
+
+
+```
+
+```{r}
 ## How many cells are actually input into cellchat for each interaction? 
 ## To simplify analysis, remove an interactions that do not have at least 1 sample with >10 cells in both interactor
 ## These interactions will not be run in cell chat anyways
-```{r}
-comparisons<- read.table(paste0(analysis_dir,"all_comparisons.txt" ))
-
 ## Cycle through each sample, determine whether it has enough cells to run each interaction
 cell_counts<- lapply(all_seurat_list, function(x){
   nCells<- as.data.frame(table(x$detailed_annotForCellChat))
@@ -177,5 +272,6 @@ nSamples_interaction<- apply(cell_counts,1, function(x){sum(x>0)})
 interactions_remove<- names(nSamples_interaction)[nSamples_interaction==0]
 comparisons<- comparisons[!comparisons$V1 %in% interactions_remove,]
 write.table(all_comparisons, file=paste0(analysis_dir, "all_comparisons.txt"), col.names = FALSE, quote = FALSE, row.names = FALSE)
+```
 ```
 

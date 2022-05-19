@@ -199,9 +199,11 @@ DotPlot(cd8_seurat, features=c("ENTPD1", "ITGAE", "TNFRSF9", "CCL4L1", "PDCD1", 
 ## Subset CD8 to just cytotoxic/inhibitory programs, rerun clustering. Any pattern in markers?
 ```{r}
 program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
-subset_to<- c("Cytotoxic", "Predysfunctional", "Inhibitory.Cycling", "IFN.Response")
+subset_to<- c("Cytotoxic", "Predysfunctional", "Inhibitory.Cycling")
 remove_cycling<- FALSE
-analysis_name<- "Cyto.Predys.Inh.IFN"
+analysis_name<- "Cyto.Predys.InhCyc"
+
+cd8_cyto.inh<- readRDS(paste0(analysis_dir, "cd8_seurat_",analysis_name, ".Rds"))
 
 
 ## Subset to programs of interest
@@ -232,8 +234,11 @@ FeaturePlot(cd8_cyto.inh, features=names(all_markers), reduction = "pca")
 ggsave(paste0(figure_dir, "CD8_",analysis_name, "_PCA_Nature2020.dysfunction.cyto.genesets.png"), width=9, height=9)
 
 ## Plot by genes of interest
-FeaturePlot(cd8_cyto.inh, features=c("ENTPD1", "ITGAE", "TNFRSF9", "CCL4L1", "PDCD1", "CTLA4", "LAG3", "GZMK", "GNLY", "KLRB1", "TIGIT",
-                                     "SELPLG", "PRF1", "GZMB", "TBX21", "EOMES", "ANXA1", "PTGER2", "CCL4"),
+FeaturePlot(cd8_cyto.inh, features=c("GNLY","GZMB","PRF1",
+                                     "PDCD1", "CTLA4", "LAG3","GZMK", "TIGIT","ITGAE","TNFRSF9",  "EOMES" ,  "GZMK", 
+                                     "CCL4","CCL4L1", "CCL4L2", 
+                                     "KLRB1", "SELPLG",  "ANXA1", "PTGER2",
+                                     "ENTPD1") ,
             reduction="pca")
 ggsave(paste0(figure_dir, "CD8_",analysis_name, "_PCA_dysfunction.cyto.markers.png"), width=12, height=15)
 
