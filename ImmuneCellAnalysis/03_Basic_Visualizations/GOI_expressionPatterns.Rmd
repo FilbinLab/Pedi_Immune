@@ -76,8 +76,8 @@ ped_immune_seurat<- readRDS(paste0(immune_data_dir, "tcell.myeloid_seurat_harmon
   pedAdult_myeloid_seurat<- readRDS(paste0(ped.adult_myeloid_data_dir, "myeloid_seurat_Ped.AdultGBM.IDHMut_merged.Rds"))
 
 ## Tumor- for ped only
-load(paste0(tumor_dir, "AllTumorSeuratObj.Robj"))
-tumor_seurat<- tumor_merged; rm(tumor_merged)
+#load(paste0(tumor_dir, "AllTumorSeuratObj.Robj"))
+#tumor_seurat<- tumor_merged; rm(tumor_merged)
 
 
 ```
@@ -365,7 +365,7 @@ analysis_name<- "SELPLG"
 figure_dir_use<- paste0(figure_dir, analysis_name, "/"); if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
 
 ## SELPLG in CD8 programs/samples/clonality
-DotPlot(ped_cd_seurat, group.by = tcell_program_name, features="SELPLG", scale=FALSE)
+DotPlot(ped_cd8_seurat, group.by = tcell_program_name, features="SELPLG", scale=FALSE)
 ggsave(paste0(figure_dir_use, "DotPlot_SELPLG_CD8_byProgram.png"), width = 5, height=4)
 
 VlnPlot(ped_cd8_seurat, group.by = "sampleid", features="SELPLG")+NoLegend()
@@ -373,6 +373,12 @@ ggsave(paste0(figure_dir_use, "VlnPlot_SELPLG_CD8_bySample.png"), width = 7, hei
 
 DotPlot(ped_cd8_seurat, group.by = "clonal", features="SELPLG", scale=FALSE)
 ggsave(paste0(figure_dir_use, "DotPlot_SELPLG_CD8_byClonal.png"), width=5, height=3)
+
+tmp<- subset(ped_tcell_seurat, detailed_annot_byNMFrank8_mergedByunion != "Unclear")
+DotPlot(tmp, group.by="detailed_annot_byNMFrank8_mergedByunion", features="SELPLG", scale=FALSE,
+        scale.max = 70, scale.min = 40)+
+  scale_color_gradient(low="white", high="blue", limits=c(3,4))
+ggsave(paste0(figure_dir_use, "DotPlot_byCD4.CD8.png"), width=4, height=4)
 
 
 ## SELPLG in CD4 programs/samples
@@ -383,7 +389,7 @@ VlnPlot(ped_cd4_seurat, group.by = "sampleid", features="SELPLG")+NoLegend()
 ggsave(paste0(figure_dir_use, "VlnPlot_SELPLG_CD4_bySample.png"), width = 7, height=3.5)
 
 
-## By age
+## By age- with clonality, program
 pedAdult_cd8_seurat$clonal<- gsub("not clonal", "nonclonal", pedAdult_cd8_seurat$clonal)
 DotPlot(pedAdult_cd8_seurat, group.by = "Age", features="SELPLG", scale=FALSE)
 
@@ -391,6 +397,11 @@ pedAdult_cd8_seurat$clonal.Age<- paste0( pedAdult_cd8_seurat$Age,"_", pedAdult_c
 DotPlot(pedAdult_cd8_seurat, group.by = "clonal.Age", features="SELPLG", scale=FALSE, scale.max=70, scale.min=40)+
   scale_color_gradient(low="white", high="blue", limits=c(3.75,4.25))
 ggsave(paste0(figure_dir_use, "DotPlot_SELPLG_CD8_byAge.Clonal.png"), width=5, height=3)
+
+pedAdult_cd8_seurat$program.Age<- paste0(pedAdult_cd8_seurat@meta.data[[tcell_program_name]], "_",pedAdult_cd8_seurat$Age )
+DotPlot(pedAdult_cd8_seurat, group.by = "program.Age", features="SELPLG", scale=FALSE)
+  scale_color_gradient(low="white", high="blue", limits=c(3.75,4.25))
+ ggsave(paste0(figure_dir_use, "DotPlot_CD8_byAge.Program.png"), width=5, height=6) 
 
 ## Plot SELPLG expression vs age in CD8, removing any samples without at least 10 CD8 cells + also adding in adult
     ## Remove samples with < 10 cells

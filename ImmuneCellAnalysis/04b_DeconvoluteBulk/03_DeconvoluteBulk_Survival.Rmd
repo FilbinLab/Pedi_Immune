@@ -12,6 +12,8 @@ Cibersort run on bulk data, results imported here. Summary visualizations + surv
 ```{r}
 library(Seurat) 
 library(harmony)
+library(survival)
+library(survminer)
 
 base_dir = "/Users/jlabelle/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
@@ -91,7 +93,7 @@ cbtn_meta<- read.csv(paste0(data_dir,"CBTN/clinical_metadata_withHistoneStatus.c
 
   ## clinical edits- remove derived cell line samples, rename columns, fix censored
   clinical_cbtn<- clinical_cbtn[clinical_cbtn$SAMPLE_TYPE != "Derived Cell Line",]
-  clinical_cbtn<- clinical_cbtn %>% dplyr::rename("submitter_id"="Patient.ID",
+  clinical_cbtn<- clinical_cbtn %>% dplyr::rename("Sample"="Patient.ID",
                                                   "time"="OS_MONTHS",
                                                   "censored"="OS_STATUS") %>% as.data.frame()
   clinical_cbtn$censored<- as.numeric(gsub(":DECEASED", "", gsub(":LIVING", "", clinical_cbtn$censored)))
@@ -110,24 +112,41 @@ load(paste0(data_dir, "HGG_FrankMimi/HGGPed_survival.Robj"))
   ## Clinical edits- merging survival/clinical, fixing censored
   clinical_dfci<- merge(HGGPed_clinical, HGGPed_survival,by="submitter_id")
   clinical_dfci$censored<- as.numeric(clinical_dfci$censored)
+  clinical_dfci<- clinical_dfci%>% dplyr::rename("Sample"="submitter_id") %>% as.data.frame()
+
+cb_dfci<- read.csv("data/CIBERSORTx_Results_DFCI.HGG.csv")
+
+## TCGA: IDHmut, AYA
+load(paste0(data_dir, "TCGA/TCGA_ClinicalMetadata.Robj"))
+clinical_tcga<- clinical_list$idh1_YA; rm(clinical_list)
+
+load(paste0(data_dir, "TCGA/TCGASurvivalMetadata_CountsMatch.Robj"))
+survival_tcga<- meta_read$idh1_YA; rm(meta_read)
+  
+  ## Clinical edits- merging clinical/survival, renaming columns, fixing censored
+  survival_tcga<- survival_tcga %>% dplyr::rename("Sample"="submitter_id") %>% as.data.frame()
+  clinical_tcga<- clinical_tcga %>% dplyr::rename("Sample"="case_submitter_id")
+  clinical_tcga<- merge(clinical_tcga, survival_tcga, by="Sample")
+  
+cb_tcga<- read.csv("data/CIBERSORTx_Results_TCGA.IDHmut.AYA.csv")
+  
 
   
 ## List of cibersort res/clinical
-input_list<- list(cbtn_wt=list(ciber=cb_cbtn_wt, meta=clinical_cbtn_wt),
-                  cbtn_k27m=list(ciber=cb_cbtn_k27m, meta=clinical_cbtn_k27m),
-                  dfci=list(ciber=cb_dfci, meta=clinical_dfci))
+input_list<- list(CBTN_WT=list(ciber=cb_cbtn_wt, meta=clinical_cbtn_wt),
+                  CBTN_K27M=list(ciber=cb_cbtn_k27m, meta=clinical_cbtn_k27m),
+                  DFCI=list(ciber=cb_dfci, meta=clinical_dfci),
+                  TCGA_IDHmutAYA=list(ciber=cb_tcga, meta=clinical_tcga))
 ```
 
 ## Set cohort to use downstream
 ```{r}
-cohort<- "DFCI_FM"
+cohort<- "TCGA_IDHmutAYA"
 figure_dir_use<- paste0(figure_dir, cohort, "/")
 if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
 
-
-
-cb_res<- cb_cbtn[cb_cbtn$Mixture %in% cbtn_meta$Patient.ID[cbtn_meta$HistoneStatus=="WT"],]
-clinical_use<- clinical_cbtn[clinical_cbtn$Patient.ID %in% cb_res$Mixture,]
+cb_res<- input_list[[cohort]]$ciber
+clinical_use<- input_list[[cohort]]$meta
 ```
 
 
@@ -136,7 +155,8 @@ clinical_use<- clinical_cbtn[clinical_cbtn$Patient.ID %in% cb_res$Mixture,]
 ## Set broad cell types- myeloid, CD4, CD8, Tumor
 cd4_cellTypes<- colnames(cb_res)[grepl("CD4", colnames(cb_res))]
 cd8_cellTypes<- colnames(cb_res)[grepl("CD8", colnames(cb_res))]
-myeloid_cellTypes<- colnames(cb_res)[!colnames(cb_res) %in% c(cd4_cellTypes, cd8_cellTypes, "Mixture", "Tumor", "P.value", "Correlation", "RMSE")]
+myeloid_cellTypes<- colnames(cb_res)[!colnames(cb_res) %in% 
+                                       c(cd4_cellTypes, cd8_cellTypes, "Mixture", "Tumor", "P.value", "Correlation", "RMSE")]
 
 ## Reformat
 cb_res_melt<-cb_res[,!colnames(cb_res) %in% c( "P.value", "Correlation", "RMSE")]
@@ -172,10 +192,10 @@ res_myeloid<- res_myeloid %>% group_by(Sample) %>% mutate(perCells=perCells/sum(
 ggplot(cb_res_broad, aes(x=Sample, y=perCells, fill=CellType))+
   geom_bar(stat="identity")+
   theme_classic()+
-  scale_fill_manual(values=celltype_colors)+
+  scale_fill_manual(values=celltype_colors[names(celltype_colors) %in% cb_res_broad$CellType])+
   theme(axis.text.x = element_blank())+
   ggtitle("CBTN Cibersort predicted proportions: broad cell types")
-ggsave(paste0(figure_dir_use, "CBTN_broadCellTypeProp.png"), width=6, height=3)
+ggsave(paste0(figure_dir_use, "broadCellTypeProp.png"), width=6, height=3)
 ```
 
 
@@ -187,8 +207,8 @@ ggplot(res_cd8, aes(x=Sample, y=perCells, fill=Program))+
   theme_classic()+
   scale_fill_manual(values=tcell_program_colors[names(tcell_program_colors) %in% res_cd8$Program])+
   theme(axis.text.x = element_blank())+
-  ggtitle("CBTN Cibersort predicted proportions: CD8 programs")
-ggsave(paste0(figure_dir_use, "CBTN_CD8_programProp.png"), width=6, height=3)
+  ggtitle("Cibersort predicted proportions: CD8 programs")
+ggsave(paste0(figure_dir_use, "CD8_programProp.png"), width=6, height=3)
 
 ## CD4
 ggplot(res_cd4, aes(x=Sample, y=perCells, fill=Program))+
@@ -196,8 +216,8 @@ ggplot(res_cd4, aes(x=Sample, y=perCells, fill=Program))+
   theme_classic()+
   scale_fill_manual(values=tcell_program_colors[names(tcell_program_colors) %in% res_cd4$Program])+
   theme(axis.text.x = element_blank())+
-  ggtitle("CBTN Cibersort predicted proportions: CD4 programs")
-ggsave(paste0(figure_dir_use, "CBTN_CD4_programProp.png"), width=6, height=3)
+  ggtitle("Cibersort predicted proportions: CD4 programs")
+ggsave(paste0(figure_dir_use, "CD4_programProp.png"), width=6, height=3)
 
 ## Myeloid
 ggplot(res_myeloid, aes(x=Sample, y=perCells, fill=Program))+
@@ -205,23 +225,13 @@ ggplot(res_myeloid, aes(x=Sample, y=perCells, fill=Program))+
   theme_classic()+
   scale_fill_manual(values=myeloid_program_colors[names(myeloid_program_colors) %in% res_myeloid$Program])+
   theme(axis.text.x = element_blank())+
-  ggtitle("CBTN Cibersort predicted proportions: Myeloid programs")
-ggsave(paste0(figure_dir_use, "CBTN_Myeloid_programProp.png"), width=6, height=3)
+  ggtitle("Cibersort predicted proportions: Myeloid programs")
+ggsave(paste0(figure_dir_use, "Myeloid_programProp.png"), width=6, height=3)
 
 
 ```
 
 
-## Reformat clinical
-```{r}
-## CBTN
-if(grepl("CBTN", cohort)){
-  clinical<- clinical_use[,c("Patient.ID", "OS_MONTHS", "OS_STATUS")]
-  colnames(clinical)<-c("Sample", "time", "censored")
-  clinical$censored<-as.logical(as.numeric(gsub(":DECEASED", "", gsub(":LIVING", "", clinical$censored))))
-}
-
-```
 
 ## Run survival analysis: CD8
 ```{r}
@@ -243,7 +253,7 @@ cd8_quant_split<- cd8_quant_split[,!grepl("Sample", colnames(cd8_quant_split))]
 cd8_quant_split$Sample<- rownames(cd8_quant_split)
 
 ## Merge clinical and quantile
-clinical_quant<- merge(cd8_quant_split, clinical, by="Sample")
+clinical_quant<- merge(cd8_quant_split, clinical_use, by="Sample")
 
 ## Run survival for each program
 all_surv_res<- lapply(programs, function(x){
@@ -281,7 +291,7 @@ cd4_quant_split<- cd4_quant_split[,!grepl("Sample", colnames(cd4_quant_split))]
 cd4_quant_split$Sample<- rownames(cd4_quant_split)
 
 ## Merge clinical and quantile
-clinical_quant<- merge(cd4_quant_split, clinical, by="Sample")
+clinical_quant<- merge(cd4_quant_split, clinical_use, by="Sample")
 
 ## Run survival for each program
 all_surv_res<- lapply(programs, function(x){
@@ -319,7 +329,7 @@ myeloid_quant_split<- myeloid_quant_split[,!grepl("Sample", colnames(myeloid_qua
 myeloid_quant_split$Sample<- rownames(myeloid_quant_split)
 
 ## Merge clinical and quantile
-clinical_quant<- merge(myeloid_quant_split, clinical, by="Sample")
+clinical_quant<- merge(myeloid_quant_split, clinical_use, by="Sample")
 
 ## Remove any programs where all are "low" (all 0)
 nLow<- apply(clinical_quant[,!colnames(clinical_quant) %in% c("time", "censored", "Sample")], 2, table)
@@ -365,7 +375,7 @@ broad_quant_split<- broad_quant_split[,!grepl("Sample", colnames(broad_quant_spl
 broad_quant_split$Sample<- rownames(broad_quant_split)
 
 ## Merge clinical and quantile
-clinical_quant<- merge(broad_quant_split, clinical, by="Sample")
+clinical_quant<- merge(broad_quant_split, clinical_use, by="Sample")
 
 ## Run survival for each program
 all_surv_res<- lapply(programs, function(x){

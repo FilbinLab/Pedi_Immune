@@ -199,9 +199,9 @@ DotPlot(cd8_seurat, features=c("ENTPD1", "ITGAE", "TNFRSF9", "CCL4L1", "PDCD1", 
 ## Subset CD8 to just cytotoxic/inhibitory programs, rerun clustering. Any pattern in markers?
 ```{r}
 program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
-subset_to<- c("Cytotoxic", "Predysfunctional", "Inhibitory.Cycling", "Inhibitory")
+subset_to<- c("Cytotoxic", "Predysfunctional", "Inhibitory.Cycling", "IFN.Response")
 remove_cycling<- FALSE
-analysis_name<- "Cyto.Predys"
+analysis_name<- "Cyto.Predys.Inh.IFN"
 
 
 ## Subset to programs of interest
@@ -232,9 +232,10 @@ FeaturePlot(cd8_cyto.inh, features=names(all_markers), reduction = "pca")
 ggsave(paste0(figure_dir, "CD8_",analysis_name, "_PCA_Nature2020.dysfunction.cyto.genesets.png"), width=9, height=9)
 
 ## Plot by genes of interest
-FeaturePlot(cd8_cyto.inh, features=c("ENTPD1", "ITGAE", "TNFRSF9", "CCL4L1", "PDCD1", "CTLA4", "LAG3", "GZMK", "GNLY", "KLRB1", "TIGIT"),
+FeaturePlot(cd8_cyto.inh, features=c("ENTPD1", "ITGAE", "TNFRSF9", "CCL4L1", "PDCD1", "CTLA4", "LAG3", "GZMK", "GNLY", "KLRB1", "TIGIT",
+                                     "SELPLG", "PRF1", "GZMB", "TBX21", "EOMES", "ANXA1", "PTGER2", "CCL4"),
             reduction="pca")
-ggsave(paste0(figure_dir, "CD8_",analysis_name, "_PCA_dysfunction.cyto.markers.png"), width=12, height=9)
+ggsave(paste0(figure_dir, "CD8_",analysis_name, "_PCA_dysfunction.cyto.markers.png"), width=12, height=15)
 
 ## Loading genes for PC2? Based on expression pattern, high CCL4L1 expression- others?
 pca_loadings<- as.data.frame(Loadings(cd8_cyto.inh, reduction = "pca")[, 1:2])

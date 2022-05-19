@@ -295,3 +295,18 @@ cowplot::plot_grid(plotlist=all_plots, ncol=3)
 ggsave(paste0(figure_dir, "AllTcells_NumericAge.vs.ProgramProportion.png"), width=10, height=10)
 ```
 
+## Dotplot of GOI
+```{r}
+program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
+tcell_seurat$tmp<- tcell_seurat@meta.data[[program_name]]
+tcell_seurat$tmp<- gsub("Inhibitory.Cycling", "Cycling", tcell_seurat$tmp)
+
+DotPlot(tcell_seurat, group.by = "tmp", features = c("TOP2A","UBE2C", "GNLY", "PRF1","LMNA", "ANXA1","IFIT1", "IFIT3", 
+                                                     "CTSH", "CAPG", "CCR7","SELL", "GZMK","PDCD1", "HSPA6","HSPH1", "FOXP3", "TIGIT"))+
+  theme(axis.text.x = element_text(angle=45, hjust=1))+
+  coord_flip()+
+  ylab("")+xlab("")
+ggsave(paste0(figure_dir, "DotPlot_GOI.png"), width=5.5, height=6)
+
+```
+
