@@ -33,13 +33,13 @@ library(RColorBrewer)
 myPalette <- colorRampPalette(rev(brewer.pal(11, "Spectral")))
 
 ## Load in subtype info
-subtypes<- read.csv("../../../../Subtypes.csv")
+subtypes<- read.csv("../../../notUploaded/Subtypes.csv")
 
 ## read in cell type info
 #cellTypes_bySubtype<- readRDS("../../Preprocessing/analysis/WithNewSamples/cellTypes_bySubtype.rds")
 ```
 
-
+## By CellType (CD4, CD8, tumor cell types, myeloid)
 ## Load in each analysis, extract results, and merge
 ```{r}
 ## Settings for extracting results, converting to simple df
@@ -49,7 +49,8 @@ senderCells<- unique(nCellTypes$CellType)
 receiverCells<- unique(nCellTypes$CellType)
 
 ## List of results
-files<- list.files(data_dir)
+files<- list.files(data_dir) ## adding "byProgram"- other cellChat analyses already processed
+files<- files[!grepl("byProgram", files)]
 
 ## Ran myeloid --> tcell and tcell --> myeloid- this produces same results
 ## Remove 1 here
@@ -64,9 +65,36 @@ all_output<- lapply(files, function(x){
   return(sigLRs)
 })
 all_sigLRs<- do.call("rbind", all_output)
-saveRDS(all_sigLRs, file=paste0(analysis_dir, "all_LRs.Rds"))
-write.csv(all_sigLRs, file=paste0(analysis_dir, "all_LRs.csv"))
+saveRDS(all_sigLRs, file=paste0(analysis_dir, "byCellType/all_LRs.Rds")) ## adding "byProgram" or "byDetailedAnnot"
+write.csv(all_sigLRs, file=paste0(analysis_dir, "byCellType/all_LRsm.csv")) ## adding "byProgram" or "byDetailedAnnot"
 ```
+
+## By Program (CD4, CD8, myeloid programs, tumor celll types)
+## Load in each analysis, extract results, and merge
+```{r}
+## Settings for extracting results, converting to simple df
+PathwaysRemove<-c("HLA", "COL", "LAMININ", "MHC-I")
+sigThreshold<- 1
+senderCells<- unique(nCellTypes$CellType)
+receiverCells<- unique(nCellTypes$CellType)
+
+## List of results
+files<- list.files(data_dir, pattern="byProgram") ## adding "byProgram"- other cellChat analyses already processed
+
+## Cycle through each output,
+all_output<- lapply(files, function(x){
+  print(x)
+  cc_output<- readRDS(paste0(data_dir, x))
+  sigLRs<- Extract_res_allComparisons(cc_output, PathwaysRemove, sigThreshold, senderCells, receiverCells, subtypes)
+  sigLRs$analysis<- gsub("all_cellChat_interact_", "", gsub(".Rds", "", x))
+  return(sigLRs)
+})
+all_sigLRs<- do.call("rbind", all_output)
+saveRDS(all_sigLRs, file=paste0(analysis_dir, "byProgram/all_LRs.Rds")) 
+write.csv(all_sigLRs, file=paste0(analysis_dir, "byProgram/all_LRs.csv"))
+```
+
+
 
 
 

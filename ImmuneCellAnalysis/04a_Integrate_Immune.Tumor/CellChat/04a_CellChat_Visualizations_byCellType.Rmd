@@ -18,8 +18,8 @@ script_dir = paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_anal
 working_dir<- paste0(base_dir, 
                      "Dropbox (Partners HealthCare)/FilbinLab/",
                      "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/04a_Integrate_Immune.Tumor/CellChat/")
-analysis_dir<- paste0(working_dir, "/analysis/")
-figure_dir<- paste0(working_dir, "/figures/")
+analysis_dir<- paste0(working_dir, "/analysis/byCellType/")
+figure_dir<- paste0(working_dir, "/figures/byCellType/")
 
 cellchatHelper<- paste0(script_dir, "CellChat_HelperFunctions.R")
 source(cellchatHelper)
@@ -27,16 +27,17 @@ source(cellchatHelper)
 setwd(working_dir)
 
 ## Load in list of all cell types across all subtypes
-nCellTypes<- readRDS(paste0(analysis_dir, "nCellTypes_bySample.Rds"))
+nCellTypes<- readRDS("analysis/nCellTypes_bySample.Rds")
 
 
 library(RColorBrewer)
 myPalette <- colorRampPalette(rev(brewer.pal(11, "Spectral")))
 ```
 
+
 ## Load in LR results for all analyses (already merged)
 ```{r}
-allLRs<- readRDS(paste0(analysis_dir, "all_LRs.Rds"))
+allLRs<- readRDS(paste0(analysis_dir, "all_LRs.Rds")) 
 
 ## Subset to just sig- by pvalue and prob
 sigLRs<- allLRs[allLRs$pvalue<=0.1 & allLRs$Prob>0,]
@@ -47,10 +48,13 @@ sigLRs$Subtype<- gsub("Histone", "\nHistone\n", gsub("Ependymoma", "EPN", sigLRs
 
 ```
 
-## 3 layers of cell type classification
+
+
+## 3 layers of cell type classification:
 "major" cell type = Tcell, Myeloid, or Tumor
 "minor" cell type = CD4, CD8, AC-like, etc
 "clonality" = only for CD8 T cells
+  
 
 ## Set minor cell types within major cell type, add onto sigLRs
 ```{r}
@@ -297,5 +301,4 @@ width<- 5+length(unique(sigLRs_unique$Sample)) * .25
 ## save
 ggsave(paste0(figure_dir, "LR.summary_Sender.", majorSender, "_Receiver.", majorReceiver, ".png"), width=width, height=height)
 ```
-
 

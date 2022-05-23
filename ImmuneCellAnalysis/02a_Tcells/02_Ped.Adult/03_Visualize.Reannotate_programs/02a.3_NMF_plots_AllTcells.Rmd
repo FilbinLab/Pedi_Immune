@@ -310,3 +310,37 @@ ggsave(paste0(figure_dir, "DotPlot_GOI.png"), width=5.5, height=6)
 
 ```
 
+## GO terms
+```{r}
+## GO term ORA
+OrgDb = "org.Hs.eg.db"
+dataset = "hsapiens_gene_ensembl"
+
+## Convert using biomart
+ensembl = useMart("ensembl",dataset="hsapiens_gene_ensembl")
+allOE_genes<-getBM(attributes='ensembl_gene_id', 
+                   filters = 'hgnc_symbol', 
+                   values = rownames(tcell_seurat@assays$RNA@counts), 
+                  mart = ensembl)
+  
+## Run GO: Convert marker genes to ensembl IDs too, then run OR analysis (GO)
+go_result = list()
+for (i in unique(program_markers$cluster)){
+  print(i)
+  genes<- program_markers[program_markers$cluster==i, "gene"]
+  if(length(genes)!=1){
+    sigOE_genes = getBM(attributes='ensembl_gene_id', 
+                        filters = 'hgnc_symbol', 
+                        values = genes,
+                        mart = ensembl)$ensembl_gene_id
+    go_result[[i]] = go_analysis(sigOE_genes, allOE_genes)
+    }
+} 
+
+## Plot and save
+go_plots<- plotGO(go_result = go_result, n_terms = 15)
+cowplot::plot_grid(plotlist=go_plots, ncol=2)
+ggsave(paste0(figure_dir, "GO_NMF.png"), width=18, height=35)
+saveRDS(go_result, file=paste0(analysis_dir, "go_result.Rds"))
+```
+

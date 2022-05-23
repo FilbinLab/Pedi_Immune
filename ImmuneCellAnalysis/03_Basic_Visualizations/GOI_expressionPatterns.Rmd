@@ -38,7 +38,7 @@ adult_myeloid_data_dir<-"../01_Preprocessing/03_PreprocessAdultDatasets/analysis
 ped.adult_myeloid_data_dir<-paste0("../02b_Myeloid/03_CompareToAdult/analysis/Merge_AssessIntegration/",
                                    cohort, "/adult_withMUV.FALSE/")
 immune_data_dir<- paste0("../01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/", cohort, "/")
-tumor_dir<- "../../../TumorCellAnnotation/AllSubtypesTogether/analysis/Merge_allSubtypes/" ## for tumor data
+tumor_dir<- "../../TumorCellAnnotation/AllSubtypesTogether/analysis/Merge_allSubtypes/" ## for tumor data
 ```
 
 
@@ -76,8 +76,8 @@ ped_immune_seurat<- readRDS(paste0(immune_data_dir, "tcell.myeloid_seurat_harmon
   pedAdult_myeloid_seurat<- readRDS(paste0(ped.adult_myeloid_data_dir, "myeloid_seurat_Ped.AdultGBM.IDHMut_merged.Rds"))
 
 ## Tumor- for ped only
-#load(paste0(tumor_dir, "AllTumorSeuratObj.Robj"))
-#tumor_seurat<- tumor_merged; rm(tumor_merged)
+load(paste0(tumor_dir, "AllTumorSeuratObj.Robj"))
+tumor_seurat<- tumor_merged; rm(tumor_merged)
 
 
 ```

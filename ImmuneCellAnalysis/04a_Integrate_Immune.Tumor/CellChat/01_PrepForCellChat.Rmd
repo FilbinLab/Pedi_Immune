@@ -104,10 +104,19 @@ saveRDS(all_seurat, file=paste0(analysis_dir, "seurat_tumor.tcell.myeloid.Rds"))
 ```{r}
 all_seurat<- readRDS(paste0(analysis_dir, "seurat_tumor.tcell.myeloid.Rds"))
 
-## Number of cells per sample, save
+## Number of cells in each cell type per sample, save
+## This includes detailed annot (CD4, CD8, etc) as well as Tcell/myeloid programs
 meta<- all_seurat@meta.data
-nCells_bySample<- as.data.frame(table(meta$detailed_annotForCellChat, meta$sample))
-colnames(nCells_bySample)<-c("CellType", "Sample", "NCells")
+
+  ## detailed annot
+  nCells_bySample<- as.data.frame(table(meta$detailed_annotForCellChat, meta$sample))
+  colnames(nCells_bySample)<-c("CellType", "Sample", "NCells")
+  
+  ## By program
+  nProgramCells_bySample<- as.data.frame(table(meta$immunePrograms_tumorCellTypes, meta$sample))
+  colnames(nProgramCells_bySample)<-c("CellType", "Sample", "NCells")
+
+nCells_bySample<- rbind(nCells_bySample, nProgramCells_bySample[!nProgramCells_bySample$CellType %in% nCells_bySample$CellType,])  
 saveRDS(nCells_bySample, file=paste0(analysis_dir, "nCellTypes_bySample.Rds"))
 
 ## Cycle through each sample, split seurat object
@@ -167,7 +176,7 @@ comparison_list<- lapply(comparison_list, function(x){
 })
 for(i in names(comparison_list)){
   tmp<- comparison_list[[i]]
-  write.table(tmp, file=paste0(analysis_dir, "comparisons_", i, ".txt"), col.names = FALSE, quote = FALSE, row.names = FALSE)
+  write.table(tmp, file=paste0(analysis_dir, "/byCellType/comparisons_", i, ".txt"), col.names = FALSE, quote = FALSE, row.names = FALSE)
 }
 
 ```
@@ -235,7 +244,7 @@ all_list_filtered<- lapply(names(all_list_filtered), function(x){
   all_comparisons<- all_comparisons[,c("name", "Sender", "Receiver")]
   
   ## Write out to file for input into cellchat
-  write.table(all_comparisons, file=paste0(analysis_dir, "comparisons_byPrograms_",x, ".txt"), col.names = FALSE, quote = FALSE, row.names = FALSE)
+  write.table(all_comparisons, file=paste0(analysis_dir, "byProgram/comparisons_byPrograms_",x, ".txt"), col.names = FALSE, quote = FALSE, row.names = FALSE)
 })
 
 
@@ -273,5 +282,21 @@ interactions_remove<- names(nSamples_interaction)[nSamples_interaction==0]
 comparisons<- comparisons[!comparisons$V1 %in% interactions_remove,]
 write.table(all_comparisons, file=paste0(analysis_dir, "all_comparisons.txt"), col.names = FALSE, quote = FALSE, row.names = FALSE)
 ```
+
+## For testing purposes: subsample from program to determine what effect cell count has on results
+Specifically: IFN_TAM shows high LR --> CD4, but if you divide by total cell count, this effect disappears
+Is the normalization removing technical bias or hiding real biological difference?
+To test: run cellchat on IFN_TAM + CD4 programs, subsampling # of IFN cells
+If no big difference in # LRs across subsampling: no need to normalize (i.e., was hiding biological difference)
+If clearly decreasing # LRs: cell count affects # LR detected, need to normalize (i.e., was removing technical bias)
+```{r}
+## Read in seurat object
+all_seurat<- readRDS(paste0(analysis_dir, "seurat_tumor.tcell.myeloid.Rds"))
+
+## Subset to IFN_TAM + CD4 programs
+cd4_programs<- unique(all_seurat$immunePrograms_tumorCellTypes[grepl("CD4", all_seurat$immunePrograms_tumorCellTypes)])
+seurat_use<- subset(all_seurat, immunePrograms_tumorCellTypes %in% c(cd4_programs, "IFN_TAM"))
+
+## 
 ```
 

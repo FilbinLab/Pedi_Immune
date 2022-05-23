@@ -225,8 +225,10 @@ DimPlot(cd8_cyto.inh, group.by = program_name, reduction="umap")+
   scale_color_manual(values=program_colors[names(program_colors) %in% unique(cd8_cyto.inh@meta.data[[program_name]])])
 ggsave(paste0(figure_dir, "CD8_",analysis_name, "_UMAP_programs.png"), width=6, height=4.5)
 
+colors_use<- program_colors[names(program_colors) %in% unique(cd8_cyto.inh@meta.data[[program_name]])]
+colors_use<- c(Inhibitory.Cycling="navy", Predysfunctional="lightsalmon3", Cytotoxic="greenyellow")
 DimPlot(cd8_cyto.inh, group.by = program_name, reduction="pca")+
-  scale_color_manual(values=program_colors[names(program_colors) %in% unique(cd8_cyto.inh@meta.data[[program_name]])])
+  scale_color_manual(values=colors_use)
 ggsave(paste0(figure_dir, "CD8_",analysis_name, "_PCA_programs.png"), width=6, height=4.5)
 
 ## Plot by scores for Nature2020 genesets
