@@ -37,8 +37,8 @@ source(nmf_helper)
 
 ## Read in cell anntotations and sample metadata
 ```{r}
-cell_annot<- read.csv("data/cell_annot_from_lung.cancer-pku.cn.csv")
-sample_meta<- read.csv("data/nsclc_patient_metadata.csv")
+cell_annot<- read.csv("data/NSCLC/cell_annot_from_lung.cancer-pku.cn.csv")
+sample_meta<- read.csv("data/NSCLC/nsclc_patient_metadata.csv")
 
 ## Reformat to match count matrix
 cell_annot$Cell.ID<- gsub("-", ".", cell_annot$Cell.ID)

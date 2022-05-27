@@ -65,6 +65,9 @@ program_markers<- readRDS(paste0("../01_compare_NMF/analysis/newMarkers_deNovoPe
 ## Read in colors to use
 program_colors<- readRDS(paste0("../../../plot_colors/Tcell.programs_rank", rank_use, "sharedBy", sharedBy, ".Rds"))
 celltype_colors<- readRDS(paste0("../../../plot_colors/Tcell.celltypes.Rds"))
+
+program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy)
+annot_name<- paste0("detailed_annot_byNMFrank", rank_use, "_mergedBy", sharedBy)
 ```
 
 
@@ -79,8 +82,7 @@ ggsave(paste0(figure_dir, "CD8_byProgram.png"), width=7, height=5)
 
 ## Breakdown of programs within cd4/cd8
 ```{r}
-program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy)
-annot_name<- paste0("detailed_annot_byNMFrank", rank_use, "_mergedBy", sharedBy)
+
 
 
 ## Proportion of program by CD4/CD8

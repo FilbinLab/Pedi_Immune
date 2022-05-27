@@ -1,0 +1,180 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+
+```{r}
+library(dplyr)
+library(harmony)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/", 
+                     "02a_Tcells/02_Ped.Adult/04b_ComparisonToOtherTumor/")
+
+## Set output directories
+data_dir<- "data/melanoma/"
+analysis_dir<- "analysis/melanoma/"
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+```
+
+
+
+
+## Process count matrix: remove unneeded rows, normalize counts
+```{r}
+## Read in data
+cm<- read.table(paste0(data_dir, "GSE72056_melanoma_single_cell_revised_v2.txt"), header=TRUE)
+
+## Row 1 contains sample info- remove and reformat
+samples<- as.character(cm[1,])
+samples<- paste0("Sample", samples)
+names(samples)<-colnames(cm)
+samples<- samples[names(samples) != "Cell"]
+
+## Rows 2 and 3 contain cell annotations- remove and reformat these
+cell_annot<- as.data.frame(t(cm[2:3,]))
+colnames(cell_annot)<- cell_annot[1,]
+cell_annot<- cell_annot[-1,]
+cell_annot$cellType<- cell_annot$`non-malignant cell type (1=T,2=B,3=Macro.4=Endo.,5=CAF;6=NK)`
+cell_annot$`non-malignant cell type (1=T,2=B,3=Macro.4=Endo.,5=CAF;6=NK)`<-NULL
+cell_annot$cellType<- gsub(1, "T-cells", gsub(2, "B-cells",gsub(3, "Macrophages",gsub(4, "Endothelialcells",
+                      gsub(5, "CAFs",gsub(6, "NK",gsub(0, "melanoma",cell_annot$cellType)))))))
+
+## Remove sample info + cell annotations (rows 1-3) from count matrix
+cm<- cm[4:nrow(cm),]
+cm<- cm %>% dplyr::rename(gene=Cell) %>% as.data.frame()
+
+## Convert counts to numeric (set to character by default here)
+cm<- cm[!duplicated(cm$gene),]
+rownames(cm)<- cm$gene; cm<- cm[,-1]
+genes<- rownames(cm)
+cm<- as.data.frame(apply(cm, 2, function(x){as.numeric(x)}))
+rownames(cm)<- genes
+
+## Convert to counts per million to normalize for differences in sequencing depth
+cm_norm<- as.data.frame(apply(cm, 2, function(x){x/sum(x)*1000000}))
+
+## Save normalized count matrix +samples
+saveRDS(cm_norm, file=paste0(analysis_dir, "cm_norm.Rds"))
+saveRDS(samples, file=paste0(analysis_dir, "samples.Rds"))
+saveRDS(cell_annot, file=paste0(analysis_dir, "cell_annot.Rds"))
+```
+
+
+## Generate seurat object
+```{r}
+cm<- readRDS(paste0(analysis_dir, "cm_norm.Rds"))
+samples<- readRDS(paste0(analysis_dir, "samples.Rds"))
+cell_annot<- readRDS(paste0(analysis_dir, "cell_annot.Rds"))
+
+## Check that cell ids match
+sum(colnames(cm) != names(samples))
+sum(colnames(cm) != rownames(cell_annot))
+
+## Create seurat object
+seurat_obj<-RunFullSeurat(cm=cm, RunHarmony = TRUE, samples=samples)
+
+## Add metadata
+seurat_obj$cell_annot<- cell_annot$cellType
+seurat_obj$broad_cell_annot<- gsub(1, "normal", gsub(2, "malignant", gsub(0, "unclear", cell_annot$`malignant(1=no,2=yes,0=unresolved)`)))
+
+saveRDS(seurat_obj, file=paste0(analysis_dir, "seurat_obj_allCells.Rds"))
+
+```
+
+
+## Subset to just tcells and rerun processing
+```{r}
+seurat_obj<- readRDS(paste0(analysis_dir, "seurat_obj_allCells.Rds"))
+
+tcell_seurat<- subset(seurat_obj, cell_annot=="T-cells")
+tcell_meta<- tcell_seurat@meta.data
+tcell_seurat<- RunFullSeurat(tcell_seurat@assays$RNA@counts, RunHarmony = TRUE, samples=tcell_seurat$sample)
+tcell_seurat<- AddMetaData(tcell_seurat, tcell_meta[,!colnames(tcell_meta) %in% colnames(tcell_seurat@meta.data)])
+
+saveRDS(tcell_seurat, file=paste0(analysis_dir, "tcell_seurat_melanoma.Rds"))
+```
+
+## Split tcells into cd4/cd8
+```{r}
+tcell_seurat<- readRDS(paste0(analysis_dir, "tcell_seurat_melanoma.Rds"))
+
+## Plot cd4/cd8
+p1<-VlnPlot(tcell_seurat, features=c("CD4", "CD8A"), ncol=1)
+p2<- DimPlot(tcell_seurat)
+cowplot::plot_grid(plotlist=list(p1, p2))
+ggsave(paste0(figure_dir, "Tcell_CD4.CD8.png"), width=8, height=6)
+
+## Annotate all on cell-wise basis- this is how annotation was performed in paper
+## In total, the annotated 1564 of 2068 T cells- seems to be a cutoff for cd4/cd8 expression of around 3 log TPM?
+cd4.cd8_expr<- as.data.frame(t(tcell_seurat@assays$RNA@data[c("CD4", "CD8A", "CD8B"),]))
+cd4.cd8_expr$CD8<- apply(cd4.cd8_expr, 1, function(x){max(x["CD8A"], x["CD8B"])})
+cd4.cd8_expr$annot<- ifelse(cd4.cd8_expr$CD4<3 & cd4.cd8_expr$CD8<3, "Unclear",
+                     ifelse(cd4.cd8_expr$CD4>cd4.cd8_expr$CD8, "CD4", "CD8"))
+  
+## Add annotations back to seurat
+tcell_seurat$detailed_annot<- cd4.cd8_expr$annot
+
+## Remove unclear and recluster
+tcell_seurat<- subset(tcell_seurat, detailed_annot != "Unclear")
+tcell_meta<- tcell_seurat@meta.data
+tcell_seurat<- RunFullSeurat(tcell_seurat@assays$RNA@counts, RunHarmony = TRUE, samples=tcell_seurat$sample)
+tcell_seurat<- AddMetaData(tcell_seurat, 
+                           tcell_meta[,!colnames(tcell_meta) %in% colnames(tcell_seurat@meta.data)])  
+
+  
+
+## Split into cd4/cd8, recluster
+cd4_seurat<- subset(tcell_seurat, detailed_annot=="CD4")
+cd4_meta<- cd4_seurat@meta.data
+cd4_seurat<- RunFullSeurat(cd4_seurat@assays$RNA@counts, RunHarmony = TRUE, samples=cd4_seurat$sample)
+cd4_seurat<- AddMetaData(cd4_seurat, 
+                           cd4_meta[,!colnames(cd4_meta) %in% colnames(cd4_seurat@meta.data)])
+
+cd8_seurat<- subset(tcell_seurat, detailed_annot=="CD8")
+cd8_meta<- cd8_seurat@meta.data
+cd8_seurat<- RunFullSeurat(cd8_seurat@assays$RNA@counts, RunHarmony = TRUE, samples=cd8_seurat$sample)
+cd8_seurat<- AddMetaData(cd8_seurat, 
+                           cd8_meta[,!colnames(cd8_meta) %in% colnames(cd8_seurat@meta.data)])
+
+saveRDS(tcell_seurat, file=paste0(analysis_dir, "tcell_seurat_melanoma.Rds"))
+saveRDS(cd4_seurat, file=paste0(analysis_dir, "cd4_seurat_melanoma.Rds"))
+saveRDS(cd8_seurat, file=paste0(analysis_dir, "cd8_seurat_melanoma.Rds"))
+```
+
+## Exploratory plots
+```{r}
+seurat_obj<- readRDS(paste0(analysis_dir, "seurat_obj_allCells.Rds"))
+tcell_seurat<- readRDS(paste0(analysis_dir, "tcell_seurat_melanoma.Rds"))
+cd4_seurat<- readRDS(paste0(analysis_dir, "cd4_seurat_melanoma.Rds"))
+cd8_seurat<- readRDS(paste0(analysis_dir, "cd8_seurat_melanoma.Rds"))
+
+## All cells by cell type annotation
+DimPlot(seurat_obj, group.by = "cell_annot")
+ggsave(paste0(figure_dir, "UMAP_allCells_byAnnot.png"), width=6,height=5.5)
+
+## All cells by sample
+DimPlot(seurat_obj, group.by = "sample")
+ggsave(paste0(figure_dir, "UMAP_allCells_bySample.png"), width=6,height=5.5)
+
+## T cells seurat by marker genes
+FeaturePlot(tcell_seurat, features=c("CD8A", "CD4", "CD3G",
+                                     "GNLY", "PRF1", "PDCD1", "TIGIT", "CTLA4",
+                                     "GZMK", "FOXP3", "TOP2A", 
+                                     "PTGER2", "SELPLG", "KLRB1"))
+ggsave(paste0(figure_dir, "UMAP_tcells_markerGenes.png"), width=12, height=12)
+
+## T cells by CD4/CD8
+DimPlot(tcell_seurat, group.by = "detailed_annot")
+ggsave(paste0(figure_dir, "UMAP_tcells_CD4.CD8annot.png"), width=6, height=5.5)
+
+```

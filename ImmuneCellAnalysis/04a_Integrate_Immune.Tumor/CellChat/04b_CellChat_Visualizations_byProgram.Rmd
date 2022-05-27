@@ -209,11 +209,11 @@ ggsave(paste0(figure_dir_use, "HeatmapBySampleProportion_Sender.", majorSender, 
 ## 4. Number of interactions between all pairwise combinations of 2 sets of minor cell types
 ```{r}
 ## Set major sender/receiver cell types
-majorCellType1<- "CD8"
-majorCellType2<- "Myeloid" 
+majorCellType1<- c("CD4", "CD8")
+majorCellType2<- "Tumor" 
 
 ## Set normalization method-"noNorm", "bySample", "byCell"
-norm_method<- "byCell"
+norm_method<- "noNorm"
 
 ## Subset to sender/receiver major cell type
 sigLRs_plot<- sigLRs
@@ -226,7 +226,7 @@ sigLRs_plot$receiver<- gsub("\n", "_", sigLRs_plot$receiver)
 
 ## For each unique sender/receiver combination, determine the total number of sig LRs
 sigLRs_plot$interaction_id<- paste0(sigLRs_plot$sender, "__", sigLRs_plot$receiver)
-sigLRs_nLR<- sigLRs_plot %>% group_by(interaction_id) %>% summarise(nLRs=n()) %>% as.data.frame()
+sigLRs_nLR<- sigLRs_plot %>% group_by(interaction_id) %>% summarise(nLRs=length(unique(LR))) %>% as.data.frame()
 
 
 ## Split sender/receiver back up
@@ -270,11 +270,12 @@ sigLRs_nLR$receiver<- sapply(sigLRs_nLR$interaction_id, function(x){unlist(strsp
   }
 
 ## Get vector of both cell types used
-majorCells1<- unique(sigLRs_plot$sender[sigLRs_plot$sender_major==majorCellType1])
-majorCells2<- unique(sigLRs_plot$sender[sigLRs_plot$sender_major==majorCellType2])
+majorCells1<- unique(sigLRs_plot$sender[sigLRs_plot$sender_major %in% majorCellType1])
+majorCells2<- unique(sigLRs_plot$sender[sigLRs_plot$sender_major %in% majorCellType2])
+  
   
 ## Add on major cell type
-sigLRs_nLR$major_sender<- ifelse(sigLRs_nLR$sender %in%majorCells1, majorCellType1, majorCellType2 )
+sigLRs_nLR$major_sender<- ifelse(sigLRs_nLR$sender %in% majorCells1, majorCellType1, majorCellType2 )
 sigLRs_nLR$major_receiver<- ifelse(sigLRs_nLR$receiver %in%majorCells1, majorCellType1, majorCellType2 )
 sigLRs_nLR$major_sr<- paste0(sigLRs_nLR$major_sender, "\nto\n", sigLRs_nLR$major_receiver)
 
@@ -300,10 +301,11 @@ ggplot(sigLRs_nLR, aes(x=sender.plot, y=receiver.plot, fill=nLRs_norm))+
   ylab("") + xlab("")+
   facet_grid(cols=vars(major_sr))
 
-ggsave(paste0(figure_dir_use, "HeatmapByTotalLR_Norm", norm_method,"_",majorCellType1,".", majorCellType2, ".png"),
+ggsave(paste0(figure_dir, "HeatmapByTotalLR_Norm", norm_method,"_",majorCellType1,".", majorCellType2, ".png"),
        width=6, height=4)
 
 ```
+
 
 ## Alternative to above: chord diagram
 ```{r}
@@ -382,5 +384,40 @@ width<- 5+length(unique(sigLRs_unique$Sample)) * .25
 
 ## save
 ggsave(paste0(figure_dir, "LR.summary_Sender.", majorSender, "_Receiver.", majorReceiver, ".png"), width=width, height=height)
+```
+
+## Exploratory- can delete
+```{r}
+## Interaction pairs with at least 2 samples
+sigLRs$pair<- paste0(sigLRs$sender, "__", sigLRs$receiver)
+nSamples_perPair<- sigLRs %>% group_by(pair) %>% summarise(nSamples=length(unique(Sample))) %>% as.data.frame()
+sigLRs_multiple<- sigLRs[sigLRs$pair %in% nSamples_perPair$pair[nSamples_perPair$nSamples > 1],]
+
+## Get # of LRs for each pair by sample
+nLR_bySample<- sigLRs_multiple %>% group_by(pair, Sample) %>% summarise(nLR=n()) %>% as.data.frame()
+
+## Add on number of total cells in that pair
+nLR_bySample$sender<- sapply(nLR_bySample$pair, function(x){unlist(strsplit(x, "__"))[[1]]})
+nLR_bySample$receiver<- sapply(nLR_bySample$pair, function(x){unlist(strsplit(x, "__"))[[2]]})
+nCells_inPair<- sapply(1:nrow(nLR_bySample), function(x){
+  tmp<- nLR_bySample[x,]
+  cells<- sum(nCellTypes$NCells[nCellTypes$Sample==tmp$Sample & nCellTypes$CellType==tmp$sender],
+              nCellTypes$NCells[nCellTypes$Sample==tmp$Sample & nCellTypes$CellType==tmp$receiver])
+  return(cells)
+})
+nLR_bySample$nCellsInput<- nCells_inPair
+
+## Plot for a few pairs
+nLR_plot<- nLR_bySample[nLR_bySample$pair %in% nSamples_perPair$pair[nSamples_perPair$nSamples>4],]
+all_plots<- lapply(unique(nLR_plot$pair), function(x){
+  tmp<- nLR_plot[nLR_plot$pair==x,]
+  ggplot(tmp, aes(x=nLR, y=nCellsInput))+
+    geom_point()+
+    geom_smooth(method="lm", se=FALSE)+
+    ggtitle(gsub("__", " to ", x))
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=4)
+ggsave(paste0(figure_dir, "testing_nLRs.vs.cellInput.png"), width=12, height=12)
+
 ```
 
