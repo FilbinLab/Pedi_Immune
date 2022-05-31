@@ -9,7 +9,7 @@ knitr::opts_chunk$set(echo = TRUE)
 base_dir = "/Users/jlabelle/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
 working_dir<- paste0(base_dir, 
-                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/", 
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/",
                      "TumorCellAnnotation/BySubtype/Ependymoma/")
 
 preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
@@ -34,7 +34,7 @@ n <- 50
 qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
 col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
 
-subtypes<- read.csv("../../../Subtypes.csv")
+subtypes<- read.csv("../../../NotUploaded/Subtypes.csv")
 ```
 
 ## read in ependymoma seurat object- just immune samples
@@ -429,3 +429,21 @@ for(subtype in names(epn_seurat_split)){
 
 ```
 
+## Split adult sample(s) into separate seurat object, remove from other samples
+```{r}
+## Read in seurat object with all samples
+seurat_filename = paste0(analysis_dir, "/seurat_obj_ProjectedAnnots.Robj")
+load(seurat_filename)
+
+## Set adult sample(s)
+adult_samples<-"MUV063"
+ped_samples<- unique(seurat_obj$sample[!seurat_obj$sample %in% adult_samples])
+
+## Create adult/ped seurat object
+adult_seurat<- subset(seurat_obj, sample %in%adult_samples)
+seurat_obj<- subset(seurat_obj, sample %in% ped_samples)
+
+## Save- ped will be used for downstream, adult only for minimal comparison purposes
+save(seurat_obj, file=paste0(analysis_dir, "/seurat_obj_ProjectedAnnots.Robj"))
+save(adult_seurat, file=paste0(analysis_dir, "/seurat_obj_adultSamples.Robj"))
+```

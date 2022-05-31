@@ -15,7 +15,7 @@ library(stringr)
 base_dir = "/Users/jlabelle/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
 working_dir<- paste0(base_dir, 
-                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/", 
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/",
                      "TumorCellAnnotation/BySubtype/Ependymoma/")
 
 preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")

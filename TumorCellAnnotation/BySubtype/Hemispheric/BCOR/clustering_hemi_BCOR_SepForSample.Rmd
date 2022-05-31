@@ -6,9 +6,11 @@ output: html_document
 ```{r read-data}
 knitr::opts_chunk$set(echo = TRUE)
 
-base_dir = "C:/Users/jenna/"
+base_dir = "/Users/jlabelle/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
-working_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/Hemispheric/BCOR/")
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/",
+                     "TumorCellAnnotation/BySubtype/Hemispheric/BCOR/")
 
 preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
 source(preprocessing)
@@ -43,11 +45,12 @@ seurat_obj<-seurat_obj
 
 ## Load counts and metadata for initiating seurat object
 ```{r load-data}
-load("../../analysis/hemiBCOR_cm_list.Robj")
-samples = readRDS("../../analysis/hemiBCOR_samples.rds")
-tumor_stat = readRDS("../../analysis/inferCNV/seurat/hemiBCOR_call_tumor.rds")
-
+input_dir<- "../../../Preprocessing/SplitBySubtype/analysis/"
+load(paste0(input_dir, "hemiBCOR_cm_list.Robj"))
+samples = readRDS(paste0(input_dir,"hemiBCOR_samples.rds"))
+tumor_stat = readRDS(paste0(input_dir,"hemiBCOR_call_tumor.rds"))
 cm_list<-hemiBCOR_cm_list
+
 sum(colnames(cm_list$raw_data)==names(samples)); length(samples)
 sum(names(samples)==names(tumor_stat))
 

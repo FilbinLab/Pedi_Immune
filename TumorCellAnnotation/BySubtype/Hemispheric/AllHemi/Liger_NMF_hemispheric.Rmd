@@ -9,10 +9,11 @@ knitr::opts_chunk$set(echo = TRUE)
 library(liger)
 library(ggplot2)
 
-base_dir = "C:/Users/jenna/"
+base_dir = "/Users/jlabelle/"
 working_dir<- paste0(base_dir, 
-                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/",
-                     "Annotation/BySubtype/Hemispheric/AllHemi/")
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/",
+                     "TumorCellAnnotation/BySubtype/Hemispheric/AllHemi/")
+
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
 
 liger_analysis_folder = "analysis/liger/"
@@ -38,7 +39,7 @@ source(stat_helper)
 ## Read in data, then split by sample
 ```{r}
 ## Read in cm list, sample list, and tumor/normal annotation
-input_dir<- "../../../SplitBySubtype/analysis"
+input_dir<- "../../../Preprocessing/SplitBySubtype/analysis/"
 load(paste0(input_dir, "hemi_cm_list.Robj"))
 samples = readRDS(paste0(input_dir,"hemi_samples.rds"))
 tumor_stat = readRDS(paste0(input_dir,"hemi_call_tumor.rds"))

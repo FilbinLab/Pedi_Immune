@@ -27,7 +27,7 @@ cluster6CallNormal<-readRDS(paste0(working_dir,
 ## Read in subtype df, get cell IDs for each subtype
 ```{r}
 subtypes<- readRDS("../QC/analysis/qc_align.rds")
-additionalSubtypes<-read.csv("../../../Subtypes.csv")
+additionalSubtypes<-read.csv("../../../NotUploaded/Subtypes.csv")
 
 ## ependymoma
 epn<- subtypes[subtypes$subtype=="ependymoma",]
@@ -38,7 +38,7 @@ hemi_BCOR<- subtypes[subtypes$sample %in%
                        additionalSubtypes[additionalSubtypes$Diagnosis=="BCOR", "samples"],]
 hemi_histoneWT<-subtypes[subtypes$sample %in%
                        additionalSubtypes[additionalSubtypes$Diagnosis=="histoneWT" &
-                                            additionalSubtypes$shorthand=="hemi", "samples"],]
+                                            additionalSubtypes$shorthand=="hemi", "sample"],]
 hemi_histonemut<-subtypes[subtypes$sample %in%
                        additionalSubtypes[additionalSubtypes$Diagnosis=="G34RV", "samples"],]
 hemi_nonBCOR<- subtypes[subtypes$sample %in%

@@ -8,7 +8,9 @@ knitr::opts_chunk$set(echo = TRUE)
 
 base_dir = "C:/Users/jenna/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
-working_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/Midline_All")
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/",
+                     "TumorCellAnnotation/BySubtype/Midline/Midline_All/")
 
 preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
 source(preprocessing)
@@ -29,7 +31,7 @@ n <- 50
 qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
 col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
 
-subtypes<-read.csv("../Subtypes.csv")
+subtypes<-read.csv("../../NotUploaded/Subtypes.csv")
 ```
 
 ## Load pre-computed seurat object 
@@ -42,10 +44,10 @@ if(file.exists(seurat_filename)){
 
 ## Load counts and metadata for initiating seurat object
 ```{r load-data}
-load("../analysis/midline_cm_list.Robj")
-samples = readRDS("../analysis/midline_samples.rds")
-tumor_stat = readRDS("../analysis/inferCNV/seurat/midline_call_tumor.rds")
-
+input_dir<- "../../../Preprocessing/SplitBySubtype/analysis/"
+load(paste0(input_dir, "midline_cm_list.Robj"))
+samples = readRDS(paste0(input_dir,"midline_samples.rds"))
+tumor_stat = readRDS(paste0(input_dir,"midline_call_tumor.rds"))
 cm_list<-midline_cm_list
 
 sum(colnames(cm_list$raw_data) == names(tumor_stat)); length(tumor_stat)

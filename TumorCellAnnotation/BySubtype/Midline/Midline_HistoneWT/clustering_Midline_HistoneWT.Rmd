@@ -8,7 +8,9 @@ knitr::opts_chunk$set(echo = TRUE)
 
 base_dir = "/Users/jlabelle/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
-working_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/Midline_All/Midline_HistoneWT")
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/",
+                     "TumorCellAnnotation/BySubtype/Midline/Midline_HistoneWT/")
 
 preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
 nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
@@ -30,7 +32,7 @@ n <- 50
 qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
 col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
 
-subtypes<-read.csv("../../../../Subtypes.csv")
+subtypes<-read.csv("../../../../NotUploaded/Subtypes.csv")
 ```
 
 ## Load pre-computed seurat object 
@@ -43,11 +45,11 @@ if(file.exists(seurat_filename)){
 
 ## Load counts and metadata for initiating seurat object
 ```{r load-data}
-load("../../../../SplitBySubtype/analysis/midlineHistoneWT_cm_list.Robj")
-samples = readRDS("../../../../SplitBySubtype/analysis/midlineHistoneWT_samples.rds")
-tumor_stat = readRDS(".../../../../SplitBySubtype/analysis/midlineHistoneWT_call_tumor.rds")
-
-cm_list<-midlineHistoneWT_cm_list
+input_dir<- "../../../Preprocessing/SplitBySubtype/analysis/"
+load(paste0(input_dir, "midlineWT_cm_list.Robj"))
+samples = readRDS(paste0(input_dir,"midlineWT_samples.rds"))
+tumor_stat = readRDS(paste0(input_dir,"midlineWTt_cluster6CellsNormal_call_tumor.rds"))
+cm_list<-midlineWT_cm_list
 
 sum(colnames(cm_list$raw_data) == names(tumor_stat)); length(tumor_stat)
 sum(names(samples)==names(tumor_stat))
@@ -455,4 +457,23 @@ for(i in unique(annotBreakdown$Sample)){
 }
 cowplot::plot_grid(plotlist=plot_list, ncol=2)
 ggsave(paste0(seurat_fig_folder, "CellBreakdown.png"), width=12, height=3)
+```
+
+## Split adult sample(s) into separate seurat object, remove from other samples
+```{r}
+## Read in seurat object with all samples
+seurat_filename = paste0(seurat_analysis_folder, "seurat_obj.Robj")
+load(seurat_filename)
+
+## Set adult sample(s)
+adult_samples<-"MUV090"
+ped_samples<- unique(seurat_obj$sample[!seurat_obj$sample %in% adult_samples])
+
+## Create adult/ped seurat object
+adult_seurat<- subset(seurat_obj, sample %in%adult_samples)
+seurat_obj<- subset(seurat_obj, sample %in% ped_samples)
+
+## Save- ped will be used for downstream, adult only for minimal comparison purposes
+save(seurat_obj, file=paste0(seurat_analysis_folder, "seurat_obj.Robj"))
+save(adult_seurat, file=paste0(seurat_analysis_folder, "seurat_obj_adultSamples.Robj"))
 ```

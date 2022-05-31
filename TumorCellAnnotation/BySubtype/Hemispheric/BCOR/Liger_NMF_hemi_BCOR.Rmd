@@ -7,9 +7,10 @@ output: html_document
 library(liger)
 library(ggplot2)
 
-base_dir = "C:/Users/jenna/"
+base_dir = "/Users/jlabelle/"
 working_dir<- paste0(base_dir, 
-                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/Hemispheric/BCOR/")
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/",
+                     "TumorCellAnnotation/BySubtype/Hemispheric/BCOR/")
 
 liger_fig_dir<- paste0(working_dir, "figures/Liger/")
 liger_analysis_folder<- paste0(working_dir, "analysis/liger/")
@@ -23,10 +24,10 @@ source(stat_helper)
 
 ## Read in data, then split by sample
 ```{r}
-load("../../analysis/hemiBCOR_cm_list.Robj")
-tumor_stat = readRDS("../../analysis/inferCNV/seurat/hemiBCOR_call_tumor.rds")
-samples = readRDS("../../analysis/hemiBCOR_samples.rds")
-
+input_dir<- "../../../Preprocessing/SplitBySubtype/analysis/"
+load(paste0(input_dir, "hemiBCOR_cm_list.Robj"))
+samples = readRDS(paste0(input_dir,"hemiBCOR_samples.rds"))
+tumor_stat = readRDS(paste0(input_dir,"hemiBCOR_call_tumor.rds"))
 cm_list<-hemiBCOR_cm_list
 
 ## Keep maligant cells

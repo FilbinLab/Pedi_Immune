@@ -12,7 +12,9 @@ library(NMF)
 
 base_dir = "C:/Users/jenna/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
-working_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/")
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/",
+                     "TumorCellAnnotation/BySubtype/Midline/Midline_All/")
 
 
 preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
@@ -66,9 +68,12 @@ nmf_gene_list = list()
 ## Just use filtered count matrix 
 ## Both cells and genes need to be filtered (implemented in the next block)
 ## Feel free to use other ways to subset genes/cells 
-load("analysis/cm_list.Robj")
-tumor_stat = readRDS("analysis/inferCNV/seurat/call_tumor.rds")
-samples = readRDS("analysis/samples.rds")
+input_dir<- "../../../Preprocessing/SplitBySubtype/analysis/"
+load(paste0(input_dir, "midline_cm_list.Robj"))
+samples = readRDS(paste0(input_dir,"midline_samples.rds"))
+tumor_stat = readRDS(paste0(input_dir,"midline_call_tumor.rds"))
+cm_list<-midline_cm_list
+
 ## Compute highly variable genes for tumor cells only 
 genes_to_keep<-hvgSeurat(cm_list$raw_data, variableFeatures=10000)
 

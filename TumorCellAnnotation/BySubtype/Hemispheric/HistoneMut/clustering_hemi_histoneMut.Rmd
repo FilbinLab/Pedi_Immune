@@ -8,7 +8,9 @@ knitr::opts_chunk$set(echo = TRUE)
 
 base_dir = "/Users/jlabelle/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
-working_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/Annotation/BySubtype/Hemispheric/HistoneMut/")
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/",
+                     "TumorCellAnnotation/BySubtype/Hemispheric/HistoneMut/")
 
 preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
 source(preprocessing)
@@ -46,9 +48,11 @@ if(file.exists(seurat_filename)){
 
 ## Load counts and metadata for initiating seurat object
 ```{r load-data}
-load("../../analysis/hemiHistonemut_cm_list.Robj")
-samples = readRDS("../../analysis/hemiHistonemut_samples.rds")
-tumor_stat = readRDS("../../analysis/inferCNV/seurat/hemiHistonemut_call_tumor.rds")
+input_dir<- "../../../Preprocessing/SplitBySubtype/analysis/"
+load(paste0(input_dir, "hemiHistonemut_cm_list.Robj"))
+samples = readRDS(paste0(input_dir,"hemiHistonemut_samples.rds"))
+tumor_stat = readRDS(paste0(input_dir,"hemiHistonemut_call_tumor.rds"))
+cm_list<-hemiHistonemut_cm_list
 
 cm_list<-hemiHistonemut_cm_list
 sum(colnames(cm_list$raw_data)==names(samples)); length(samples)

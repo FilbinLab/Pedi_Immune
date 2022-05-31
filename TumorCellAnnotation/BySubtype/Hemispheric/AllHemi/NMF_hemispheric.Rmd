@@ -13,8 +13,8 @@ library(NMF)
 base_dir = "C:/Users/jenna/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
 working_dir<- paste0(base_dir, 
-                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/",
-                     "Annotation/BySubtype/Hemispheric/AllHemi/")
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/",
+                     "TumorCellAnnotation/BySubtype/Hemispheric/AllHemi/")
 
 
 preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
@@ -68,7 +68,7 @@ nmf_gene_list = list()
 ## Just use filtered count matrix 
 ## Both cells and genes need to be filtered (implemented in the next block)
 ## Feel free to use other ways to subset genes/cells 
-input_dir<- "../../../SplitBySubtype/analysis"
+input_dir<- "../../../Preprocessing/SplitBySubtype/analysis/"
 load(paste0(input_dir, "hemi_cm_list.Robj"))
 samples = readRDS(paste0(input_dir,"hemi_samples.rds"))
 tumor_stat = readRDS(paste0(input_dir,"hemi_call_tumor.rds"))

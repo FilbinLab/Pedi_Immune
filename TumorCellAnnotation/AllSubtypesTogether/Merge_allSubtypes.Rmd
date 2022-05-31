@@ -39,7 +39,7 @@ source(nmf_helper)
   ## Read in seurat object
   load(paste0(tumor_dir,
               "Midline/Midline_histoneMutant/WithNewSample/analysis/seurat/seurat_obj_Cluster6Removed.Robj"))
-  seurat_tumor_midlineHistoneMut<- seurat_obj_annot
+  seurat_tumor_midlineHistoneMut<- seurat_obj
   
   ## make cell annotation column for each- name needs to match
   seurat_tumor_midlineHistoneMut$CellAnnot<- seurat_tumor_midlineHistoneMut$ManualAnnot
@@ -92,9 +92,11 @@ source(nmf_helper)
 
 ## Hemi histone WT
   ## Read in seurat object
-  load(paste0(tumor_dir,
-              "/Hemispheric/HistoneWT/SingleSample_Annot/BT1857/analysis/seurat/seurat_obj.Robj"))
-  seurat_tumor_hemiHistoneWT<- seurat_obj
+  #load(paste0(tumor_dir,
+              #"/Hemispheric/HistoneWT/SingleSample_Annot/BT1857/analysis/seurat/seurat_obj.Robj"))
+  #seurat_tumor_hemiHistoneWT<- seurat_obj
+  load(paste0(tumor_dir, "/Hemispheric/HistoneWT/BT1745_BT1857/analysis/seurat/seurat_obj_AnnotatedSeparately.Robj"))
+  seurat_tumor_hemiHistoneWT<- seurat_obj; rm(seurat_obj)
   
   ## make cell annotation column for each- name needs to match
   seurat_tumor_hemiHistoneWT$CellAnnot<- seurat_tumor_hemiHistoneWT$ManualAnnot

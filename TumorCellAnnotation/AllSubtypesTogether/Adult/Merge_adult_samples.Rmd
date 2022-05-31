@@ -1,0 +1,55 @@
+---
+title: "_clustering"
+output: html_document
+---
+
+```{r read-data}
+knitr::opts_chunk$set(echo = TRUE)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/",
+                     "TumorCellAnnotation/AllSubtypesTogether/Adult/")
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+stat_helper = paste0(base_dir, script_dir, "common_stat_test.R")
+source(preprocessing)
+source(stat_helper)
+
+analysis_dir= "analysis/"
+figure_dir = "figures/"
+for (folder in c(analysis_dir, figure_dir)){
+  if (!dir.exists(folder)){
+    dir.create(folder)
+  }
+}
+
+
+```
+
+## Load in seurat objects containing adult samples (removed from downstream ped analysis)
+```{r}
+load("../../BySubtype/Ependymoma/analysis/seurat/seurat_obj_adultSamples.Robj")
+epn_seurat<- adult_seurat;rm(adult_seurat)
+
+load("../../BySubtype/Hemispheric/HistoneWT/WithNewSample/analysis/seurat/seurat_obj_adultSamples.Robj")
+gbm_seurat<-adult_seurat;rm(adult_seurat)
+
+load("../../BySubtype/Midline/Midline_HistoneMutant/WithNewSample/analysis/seurat/seurat_obj_adultSamples.Robj")
+k27m_seurat<-adult_seurat;rm(adult_seurat)
+
+
+load("../../BySubtype/Midline/Midline_HistoneWT/analysis/seurat/seurat_obj_adultSamples.Robj")
+midlineWT_seurat<-adult_seurat;rm(adult_seurat)
+```
+
+## Merge together
+```{r}
+adult_seurat<- merge(epn_seurat, c(gbm_seurat, k27m_seurat, midlineWT_seurat))
+adult_meta<- adult_seurat@meta.data
+adult_seurat<- RunFullSeurat(adult_seurat@assays$RNA@counts, RunHarmony = TRUE, samples=adult_seurat$sample)
+adult_seurat<- AddMetaData(adult_seurat, adult_meta[,!colnames(adult_meta) %in% colnames(adult_seurat@meta.data)])
+saveRDS(adult_seurat, file=paste0(analysis_dir, "seurat_obj_adult.Rds"))
+```
+

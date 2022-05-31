@@ -11,7 +11,7 @@ library(ggplot2)
 
 base_dir = "/Users/jlabelle/"
 working_dir<- paste0(base_dir, 
-                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/", 
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/",
                      "TumorCellAnnotation/BySubtype/Ependymoma/")
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
 

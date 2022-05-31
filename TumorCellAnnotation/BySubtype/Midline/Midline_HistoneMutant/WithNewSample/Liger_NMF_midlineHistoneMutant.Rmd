@@ -9,11 +9,11 @@ knitr::opts_chunk$set(echo = TRUE)
 library(liger)
 library(ggplot2)
 
-base_dir = "C:/Users/jenna/"
-project_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/")
-working_dir<- paste0(project_dir, 
-                     "Annotation/BySubtype/Midline/Midline_HistoneMutant/WithNewSample/")
+base_dir = "/Users/jlabelle/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/",
+                     "TumorCellAnnotation/BySubtype/Midline/Midline_HistoneMutant/WithNewSample/")
 
 liger_analysis_folder = "analysis/liger/"
 liger_fig_folder = "figures/liger/"
@@ -36,13 +36,10 @@ source(preprocessing)
 ## Read in data, then split by sample
 ```{r}
 ## Read in cm list, sample list, and tumor/normal annotation
-load(paste0(project_dir, 
-            "SplitBySubtype/WithNewSamples/analysis/midlineHistoneMut_cm_list.Robj"))
-samples = readRDS(paste0(project_dir,
-                         "SplitBySubtype/WithNewSamples/analysis/midlineHistoneMut_samples.rds"))
-tumor_stat = readRDS(paste0(project_dir,
-                            "SplitBySubtype/WithNewSamples/analysis/midlineHistoneMut_cluster6CellsNormal_call_tumor.rds"))
-
+input_dir<- "../../../../Preprocessing/SplitBySubtype/analysis/"
+load(paste0(input_dir, "midlineHistoneMut_cm_list.Robj"))
+samples = readRDS(paste0(input_dir,"midlineHistoneMut_samples.rds"))
+tumor_stat = readRDS(paste0(input_dir,"midlineHistoneMut_cluster6CellsNormal_call_tumor.rds"))
 cm_list<-midlineHistoneMut_cm_list
 
 sum(colnames(cm_list$raw_data)==names(samples)); length(samples)

@@ -11,9 +11,11 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r setup, include=FALSE}
 library(NMF)
 
-base_dir = "C:/Users/jenna/"
+base_dir = "/Users/jlabelle/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
-working_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/Hemispheric/BCOR")
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/",
+                     "TumorCellAnnotation/BySubtype/Hemispheric/BCOR/")
 
 preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
 nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
@@ -41,12 +43,14 @@ if (!dir.exists(nmf_fig_folder)){
 
 ## Load cm, tumor_id, samples and genes_to_keep
 ```{r load-precomputed-data}
-load("../../analysis/hemiBCOR_cm_list.Robj")
-tumor_stat = readRDS("../../analysis/inferCNV/seurat/hemiBCOR_call_tumor.rds")
-samples = readRDS("../../analysis/hemiBCOR_samples.rds")
+input_dir<- "../../../Preprocessing/SplitBySubtype/analysis/"
+load(paste0(input_dir, "hemiBCOR_cm_list.Robj"))
+samples = readRDS(paste0(input_dir,"hemiBCOR_samples.rds"))
+tumor_stat = readRDS(paste0(input_dir,"hemiBCOR_call_tumor.rds"))
+cm_list<-hemiBCOR_cm_list
+
 genes_to_keep = readRDS(paste0(nmf_folder, "top_10000_ode.rds"))
 
-cm_list<-hemiBCOR_cm_list
 ```
 
 ## Load precomputed cm_mean, cm_center, basis and samples in the list 

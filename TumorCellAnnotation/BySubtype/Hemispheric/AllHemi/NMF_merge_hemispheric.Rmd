@@ -11,11 +11,11 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r setup, include=FALSE}
 library(NMF)
 
-base_dir = "C:/Users/jenna/"
+base_dir = "/Users/jlabelle/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
 working_dir<- paste0(base_dir, 
-                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/",
-                     "Annotation/BySubtype/Hemispheric/AllHemi/")
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/",
+                     "TumorCellAnnotation/BySubtype/Hemispheric/AllHemi/")
 
 preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
 nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
@@ -43,7 +43,7 @@ if (!dir.exists(nmf_fig_folder)){
 
 ## Load cm, tumor_id, samples and genes_to_keep
 ```{r load-precomputed-data}
-input_dir<- "../../../SplitBySubtype/analysis"
+input_dir<- "../../../Preprocessing/SplitBySubtype/analysis/"
 load(paste0(input_dir, "hemi_cm_list.Robj"))
 samples = readRDS(paste0(input_dir,"hemi_samples.rds"))
 tumor_stat = readRDS(paste0(input_dir,"hemi_call_tumor.rds"))

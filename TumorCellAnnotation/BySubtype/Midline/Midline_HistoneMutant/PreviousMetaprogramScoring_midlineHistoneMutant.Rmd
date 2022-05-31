@@ -1,14 +1,16 @@
 ---
 title: "ImmuneRegev_PreviousMetaprogram scoring"
-output: html_notebook
+output: html_document
 ---
 
 ```{r read-data}
 knitr::opts_chunk$set(echo = TRUE)
 
-base_dir = "C:/Users/jenna/"
+base_dir = "/Users/jlabelle/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
-working_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/Midline_HistoneMutant")
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/",
+                     "TumorCellAnnotation/BySubtype/Midline/Midline_HistoneMutant/")
 
 preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
 source(preprocessing)
@@ -96,7 +98,6 @@ saveRDS(midline_programs, file=paste0(nmf_analysis_folder, "midlinePreviousProgr
 seurat_obj<- ScoreSig_Seurat(seurat_obj, midline_programs)
 
 ## Plot UMAP, coloring by highest scoring program
-```{r}
 DimPlot(object = seurat_obj, reduction = "umap", pt.size = 1, 
         group.by = "PreviousMetaprogram", cols = col_vector[10:28])
 ggsave(paste0(seurat_fig_folder, "MidlineHistoneMutant_PreviousMetaprograms_AC.OC.OPC.MES1.png"))

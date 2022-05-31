@@ -14,8 +14,8 @@ library(destiny)
 base_dir = "/mnt/c/Users/jenna/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
 working_dir<- paste0(base_dir, 
-                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/",
-                     "Annotation/BySubtype/Hemispheric/AllHemi/")
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/",
+                     "TumorCellAnnotation/BySubtype/Hemispheric/AllHemi/")
 file_dir<- paste0(working_dir, "analysis/velocyto/loomFiles/")
 
 preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")

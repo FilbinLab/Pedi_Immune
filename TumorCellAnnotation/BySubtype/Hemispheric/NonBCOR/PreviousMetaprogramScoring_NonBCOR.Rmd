@@ -1,14 +1,16 @@
 ---
 title: "ImmuneRegev_PreviousMetaprogram scoring"
-output: html_notebook
+output: html_document
 ---
 
 ```{r read-data}
 knitr::opts_chunk$set(echo = TRUE)
 
-base_dir = "C:/Users/jenna/"
+base_dir = "/Users/jlabelle/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
-working_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/Hemispheric/NonBCOR/")
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/",
+                     "TumorCellAnnotation/BySubtype/Hemispheric/NonBCOR/")
 
 preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
 source(preprocessing)

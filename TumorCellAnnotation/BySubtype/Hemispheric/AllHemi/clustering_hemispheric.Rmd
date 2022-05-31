@@ -9,8 +9,8 @@ knitr::opts_chunk$set(echo = TRUE)
 base_dir = "C:/Users/jenna/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
 working_dir<- paste0(base_dir, 
-                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/",
-                     "Annotation/BySubtype/Hemispheric/AllHemi/")
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/",
+                     "TumorCellAnnotation/BySubtype/Hemispheric/AllHemi/")
 
 preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
 source(preprocessing)
@@ -44,18 +44,18 @@ if(file.exists(seurat_filename)){
 }
 ```
 
-
 ## Load counts and metadata for initiating seurat object
 ```{r load-data}
-input_dir<- "../../../SplitBySubtype/analysis"
+input_dir<- "../../../Preprocessing/SplitBySubtype/analysis/"
 load(paste0(input_dir, "hemi_cm_list.Robj"))
 samples = readRDS(paste0(input_dir,"hemi_samples.rds"))
 tumor_stat = readRDS(paste0(input_dir,"hemi_call_tumor.rds"))
-
 cm_list<-hemi_cm_list
+
 sum(colnames(cm_list$raw_data)==names(samples)); length(samples)
 sum(names(samples)==names(tumor_stat))
 ```
+
 
 ## Subset cm to remove noise/normal samples
 ```{r subset-tumor-cells}
@@ -474,3 +474,21 @@ saveRDS(signature_genes, paste0(seurat_analysis_folder, "signature_genes.rds"))
 
 
 
+## Split adult sample(s) into separate seurat object, remove from other samples
+```{r}
+## Read in seurat object with all samples
+seurat_filename = paste0(seurat_analysis_folder, "seurat_obj.Robj")
+load(seurat_filename)
+
+## Set adult sample(s)
+adult_samples<-"MUV092"
+ped_samples<- unique(seurat_obj$sample[!seurat_obj$sample %in% adult_samples])
+
+## Create adult/ped seurat object
+adult_seurat<- subset(seurat_obj, sample %in%adult_samples)
+seurat_obj<- subset(seurat_obj, sample %in% ped_samples)
+
+## Save- ped will be used for downstream, adult only for minimal comparison purposes
+save(seurat_obj, file=paste0(seurat_analysis_folder, "seurat_obj.Robj"))
+save(adult_seurat, file=paste0(seurat_analysis_folder, "seurat_obj_adultSamples.Robj"))
+```

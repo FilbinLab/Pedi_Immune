@@ -6,9 +6,11 @@ output: html_document
 ```{r read-data}
 knitr::opts_chunk$set(echo = TRUE)
 
-base_dir = "C:/Users/jenna/"
+base_dir = "/Users/jlabelle/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
-working_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/Midline_All/Midline_HistoneWT")
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/",
+                     "TumorCellAnnotation/BySubtype/Midline/Midline_HistoneWT/")
 
 preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
 nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
@@ -43,11 +45,12 @@ if(file.exists(seurat_filename)){
 
 ## Load counts and metadata for initiating seurat object
 ```{r load-data}
-load("../../analysis/midlineHistoneWT_cm_list.Robj")
-samples = readRDS("../../analysis/midlineHistoneWT_samples.rds")
-tumor_stat = readRDS("../../analysis/inferCNV/seurat/midlineHistoneWT_call_tumor.rds")
+input_dir<- "../../../Preprocessing/SplitBySubtype/analysis/"
+load(paste0(input_dir, "midlineWT_cm_list.Robj"))
+samples = readRDS(paste0(input_dir,"midlineWT_samples.rds"))
+tumor_stat = readRDS(paste0(input_dir,"midlineWTt_cluster6CellsNormal_call_tumor.rds"))
+cm_list<-midlineWT_cm_list
 
-cm_list<-midlineHistoneWT_cm_list
 
 samples<- samples[grep("MUV090", samples)]
 cm_list<- lapply(cm_list, function(x){x[,grep("MUV090", colnames(x))]})

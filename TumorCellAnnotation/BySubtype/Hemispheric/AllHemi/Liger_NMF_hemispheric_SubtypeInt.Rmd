@@ -7,10 +7,10 @@ output: html_document
 library(liger)
 library(ggplot2)
 
-base_dir = "C:/Users/jenna/"
+base_dir = "/Users/jlabelle/"
 working_dir<- paste0(base_dir, 
-                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/",
-                     "Annotation/BySubtype/Hemispheric/AllHemi/")
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/",
+                     "TumorCellAnnotation/BySubtype/Hemispheric/AllHemi/")
 
 liger_fig_dir<- paste0(working_dir, "figures/Liger/")
 liger_analysis_folder<- paste0(working_dir, "analysis/liger/")
@@ -18,7 +18,7 @@ liger_analysis_folder<- paste0(working_dir, "analysis/liger/")
 
 ## Read in data, then split by sample
 ```{r}
-input_dir<- "../../../SplitBySubtype/analysis"
+input_dir<- "../../../Preprocessing/SplitBySubtype/analysis/"
 load(paste0(input_dir, "hemi_cm_list.Robj"))
 samples = readRDS(paste0(input_dir,"hemi_samples.rds"))
 tumor_stat = readRDS(paste0(input_dir,"hemi_call_tumor.rds"))

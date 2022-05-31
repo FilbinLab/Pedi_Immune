@@ -9,7 +9,8 @@ knitr::opts_chunk$set(echo = TRUE)
 base_dir = "/Users/jlabelle/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
 working_dir<- paste0(base_dir, 
-                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/TumorCellAnnotation/BySubtype/Midline/Midline_HistoneMutant/")
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/",
+                     "TumorCellAnnotation/BySubtype/Midline/Midline_HistoneMutant/")
 
 library(Seurat) 
 
@@ -35,7 +36,7 @@ n <- 50
 qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
 col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
 
-subtypes<- read.csv("../../../../Subtypes.csv")
+subtypes<- read.csv("../../../../NotUploaded/Subtypes.csv")
 ```
 
 ## Load pre-computed seurat object 
@@ -49,10 +50,10 @@ seurat_obj<- seurat_obj_annot
 
 ## Load counts and metadata for initiating seurat object
 ```{r load-data}
-load("../../../../SplitBySubtype/analysis/midlineHistoneMut_cm_list.Robj")
-samples = readRDS("../../../../SplitBySubtype/analysis/midlineHistoneMut_samples.rds")
-tumor_stat = readRDS("../../../../SplitBySubtype/analysis/inferCNV/seurat/midlineHistoneMut_cluster6CellsNormal_call_tumor.rds")
-
+input_dir<- "../../../Preprocessing/SplitBySubtype/analysis/"
+load(paste0(input_dir, "midlineHistoneMut_cm_list.Robj"))
+samples = readRDS(paste0(input_dir,"midlineHistoneMut_samples.rds"))
+tumor_stat = readRDS(paste0(input_dir,"midlineHistoneMut_cluster6CellsNormal_call_tumor.rds"))
 cm_list<-midlineHistoneMut_cm_list
 
 sum(colnames(cm_list$raw_data)==names(samples)); length(samples)

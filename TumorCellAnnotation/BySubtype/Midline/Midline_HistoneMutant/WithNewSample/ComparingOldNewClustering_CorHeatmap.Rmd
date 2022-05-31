@@ -6,11 +6,11 @@ output: html_document
 ```{r}
 library(Seurat, lib.loc = "C:/Users/jenna/OneDrive/Documents/R/win-library/4.0/Seurat/V4") 
 
-base_dir = "C:/Users/jenna/"
-project_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune/")
+base_dir = "/Users/jlabelle/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
-working_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/TumorCellAnnotation/",
-                     "BySubtype/Midline/Midline_HistoneMutant/WithNewSample/")
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/",
+                     "TumorCellAnnotation/BySubtype/Midline/Midline_HistoneMutant/WithNewSample/")
 
 seurat_fig_folder = "figures/seurat/"
 
@@ -24,10 +24,10 @@ source(nmf_helper)
 ## Load in count matrix
 ```{r}
 ## Read in cm list, sample list, and tumor/normal annotation
-load(paste0(project_dir, "SplitBySubtype/WithNewSamples/analysis/midlineHistoneMut_cm_list.Robj"))
-samples = readRDS(paste0(project_dir, "SplitBySubtype/WithNewSamples/analysis/midlineHistoneMut_samples.rds"))
-tumor_stat = readRDS(paste0(project_dir, "SplitBySubtype/WithNewSamples/analysis/midlineHistoneMut_cluster6CellsNormal_call_tumor.rds"))
-
+input_dir<- "../../../../Preprocessing/SplitBySubtype/analysis/"
+load(paste0(input_dir, "midlineHistoneMut_cm_list.Robj"))
+samples = readRDS(paste0(input_dir,"midlineHistoneMut_samples.rds"))
+tumor_stat = readRDS(paste0(input_dir,"midlineHistoneMut_cluster6CellsNormal_call_tumor.rds"))
 cm_list<-midlineHistoneMut_cm_list
 
 sum(colnames(cm_list$raw_data)==names(samples)); length(samples)
