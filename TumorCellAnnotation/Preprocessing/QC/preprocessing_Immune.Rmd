@@ -1,0 +1,264 @@
+---
+title: "Immune_Regev"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/",
+                     "TumorCellAnnotation/Preprocessing/QC/")
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+ 
+```
+
+
+```{r load-house-keeping-genes}
+marker_dir = "/Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Marker_genes/"
+hk_genes_dir = paste0(base_dir, marker_dir, "tirosh_house_keeping.txt")
+hk_genes = readLines(hk_genes_dir)
+hk_genes = hk_genes[3:length(hk_genes)]
+```
+
+```{r merge_datasets}
+data_dir<- "../../../data/"
+
+## Load and merge all count matrix
+cm_files = list.files(path = data_dir, pattern="cm_tpm*")
+  
+  ## Remove new samples- BT1873 and BT1857
+  cm_files<- cm_files[grep(paste(c("BT1873", "BT1857"), collapse="|"), cm_files, invert = TRUE)]
+
+cm = read.csv(paste0(data_dir, cm_files[1]), row.names = 1, stringsAsFactors = F)
+for (f in cm_files[2:length(cm_files)]){
+  tmp = read.csv(paste0(data_dir, f), row.names = 1, stringsAsFactors = F)
+  cm = cbind.data.frame(cm, tmp)
+}
+
+## load and merge all alignment qc- optional for fresh samples
+qc_files = list.files(path = data_dir, pattern="qc_*")
+
+  ## Remove new samples- BT1873 and BT1857
+  qc_files<- qc_files[grep(paste(c("BT1873", "BT1857"), collapse="|"), qc_files, invert = TRUE)]
+  
+qc_align=data.frame()
+for (f in qc_files[1:length(qc_files)]){
+  tmp = read.csv(paste0(data_dir, f), row.names = 1, stringsAsFactors = F)
+  qc_align = rbind.data.frame(qc_align, tmp)
+}
+
+## Check if cm and qc matrix have the same # of cells 
+any(colnames(cm) != rownames(qc_align))
+
+## Remove the 3 cells in qc that do not have count data (none aligned)
+extraCells<- rownames(qc_align[!(rownames(qc_align) %in% colnames(cm)),])
+qc_align<-qc_align[!(rownames(qc_align) %in% extraCells),] #Remove any low quality cell identified from QC matrix
+
+
+
+## Double check that cm and qc matrix now have the same # of cells 
+any(colnames(cm) != rownames(qc_align))
+
+rm(tmp);gc()
+
+## Add a preceding 0 to cb and samples
+colnames(cm) = sapply(colnames(cm), function(x) ifelse(grepl("MUV0.", x), x, gsub("MUV", "MUV0", x)))
+rownames(qc_align) = sapply(rownames(qc_align), function(x) ifelse(grepl("MUV0.", x), x, gsub("MUV", "MUV0", x)))
+qc_align$sample = sapply(qc_align$sample, function(x) ifelse(grepl("MUV0.", x), x, gsub("MUV", "MUV0", x)))
+
+## Remove "tumor" from the 5 samples that have this appended. Just used to distinguish between immune/tumor samples, not needed now
+colnames(cm)<- gsub("tumor", "", colnames(cm))
+rownames(qc_align)<- gsub("tumor", "", rownames(qc_align))
+qc_align$sample<- gsub("tumor", "", qc_align$sample)
+
+any(colnames(cm) != rownames(qc_align))
+
+## add extra column to qc- denoting hemispheric/midline adult/midline ped/ependymoma
+subtypes<-read.csv("../../Subtypes.csv")
+sum(subtypes$sample %in% qc_align$sample)
+qc_align_subtypes<- merge(qc_align, subtypes, by="sample")
+rownames(qc_align_subtypes)<- rownames(qc_align)
+qc_align<-qc_align_subtypes
+
+## Save merged datasets as rds files
+saveRDS(cm, file="analysis/cm.rds")
+saveRDS(qc_align, file="analysis/qc_align.rds")
+rm(cm);rm(qc_align);gc()
+```
+
+```{r load-raw-data}
+## Load counts and alignment-qc
+cm <- readRDS("analysis/cm.rds")
+qc_align <- readRDS("analysis/qc_align.rds")
+
+## Check if cb matches
+any(colnames(cm) != rownames(qc_align))
+
+## Make a vector of sample names
+samples = qc_align[,"sample"]; names(samples) = rownames(qc_align)
+```
+
+## Compute QC metrics on all cells 
+```{r qc_on_raw_data}
+qc_raw_data = calculateQcMetrics(cm, hk_genes)
+qc_raw_data$align_rate = qc_align$nAligned/qc_align$nTotal
+```
+
+## Scatter plot of # of genes and mean expr of house keeping genes- optional, use chunk below to color by PF 
+```{r}
+#Create qc figure directory. figures directory should already be created
+qc_fig_dir = "figures/"
+if (!dir.exists(qc_fig_dir)){
+  dir.create(qc_fig_dir)
+}
+
+pairs(qc_raw_data[,4:6])
+
+ggplot(qc_raw_data, aes(x=gene, y=hk))+
+  geom_point()+
+  xlab("Total number of genes per cell")+
+  ylab("Mean expression of house keeping genes")+
+  geom_vline(xintercept=2000, color="red", linetype="dashed", size=1)+
+  geom_hline(yintercept = 2.5, color="red", linetype="dashed", size=1)+
+  theme_classic()+
+  theme(axis.title = element_text(face="bold", size=24),
+        axis.text = element_text(face="bold", size=20))
+
+    
+  
+                          
+
+ggsave(filename=paste0(qc_fig_dir, "genes_vs_hk.jpg"), width=12, height=8)
+```
+
+## Scatter plot of # of genes and mean expr of house keeping genes, colored by QC
+```{r}
+#Set cutoff values
+num_gene_cutoff = 2000
+hk_mean_expr_cutoff = 2.5
+
+#Add column delineating pass/fail of cell
+qc_raw_data$pass_qc = ifelse(qc_raw_data$gene >= num_gene_cutoff & qc_raw_data$hk >= hk_mean_expr_cutoff, T, F)
+sum(rownames(qc_raw_data) == rownames(qc_align))
+qc_raw_data$subtype<-qc_align$subtype
+
+ggplot(data=qc_raw_data, aes(x=gene, y=hk, color=pass_qc)) + geom_point() + 
+  geom_hline(yintercept = hk_mean_expr_cutoff, color="red", linetype="dashed", size=1) +
+  geom_vline(xintercept = num_gene_cutoff, color="red", linetype="dashed", size=1) +
+  xlab("Total number of genes\n") + ylab("Mean expression of \n house-keeping genes") +
+  theme_classic() + theme(plot.title = element_text(hjust = 0.5, face="bold", size=24),
+                          axis.title = element_text(face="bold", size=24, color="black"),
+                          axis.text = element_text(face="bold", size=18, color="black"),
+                          legend.title = element_text(face="bold", size=24, color="black"),
+                          legend.text = element_text(size=20))
+ggsave(filename=paste0(qc_fig_dir, "genes_vs_hk.jpg"), width=8, height=8)
+```
+
+## Histogram of # of genes and mean expr of house keeping genes 
+```{r}
+## Histogram of total number of genes 
+ggplot(data=qc_raw_data, aes(x=sample, y=gene, fill=sample)) + 
+  geom_violin() + geom_hline(yintercept = num_gene_cutoff, color="red", linetype="dashed", size=1) +
+  ggtitle("Total number of detected genes\n") + xlab("") + ylab("Number of genes") + theme_classic() + 
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", color="black", size = 28),
+        axis.title = element_text(face = "bold", color="black", size = 24), 
+        axis.text.x = element_text(angle = 45, hjust = 1, size=18, color="black", face="bold"),
+        axis.text.y = element_text(size = 18, color="black",face = "bold"),
+        legend.title = element_text(face = "bold",  color="black",size = 24),
+        strip.text = element_text(size=24, face="bold"),
+        legend.position = "none")
+  #facet_wrap(.~ subtype, scales = "free_x") 
+ggsave("total_genes.jpg", path=qc_fig_dir, width = 15, height = 6, units = "in")
+
+## Histogram of average expr of house keeping genes
+ggplot(data=qc_raw_data, aes(x=sample, y=hk, fill=sample)) + 
+  geom_violin() + geom_hline(yintercept = hk_mean_expr_cutoff, color="red", linetype="dashed", size=1) +
+  ggtitle("House keeping gene expression\n") + xlab("") + ylab("Log2 average expression of house keeping genes\n") + 
+  theme_classic() + 
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", color="black", size = 28),
+        axis.title = element_text(face = "bold", color="black", size = 24), 
+        axis.text.x = element_text(angle = 45, hjust = 1, size=18, color="black"),
+        axis.text.y = element_text(size = 24, color="black",face = "bold"),
+        legend.title = element_text(face = "bold",  color="black",size = 24),
+        strip.text = element_text(size=24, face="bold"),
+        legend.position = "none")+
+  facet_wrap(.~ subtype, scales = "free_x") 
+ggsave("hk_Subtype.jpg", path=qc_fig_dir, width = 8, height = 10, units = "in")
+```
+
+## Preprocessing: filtering on cells and genes 
+```{r preprocessing}
+## Filter and normalize cm
+cm_list = normalizeTPM(cm, 
+                       min_genes=num_gene_cutoff, 
+                       min_mean_hg = hk_mean_expr_cutoff,
+                       hg_list=hk_genes, 
+                       filter_gene_relaxed = T, 
+                       gene_cutoff=log2(10), 
+                       gene_cell_cutoff = 10)
+## Subset sample
+samples = samples[colnames(cm_list$raw_data)]
+
+## Calculate and store qc metrics for filtered and unfiltered data 
+qc_filtered_data = calculateQcMetrics(cm_list$raw_data, hk_genes)
+```
+
+
+## Save preprocessed results
+```{r save-preprocessed-results}
+save(cm_list, file="analysis/cm_list.Robj")
+saveRDS(qc_align, file="analysis/qc_align.rds")
+saveRDS(qc_raw_data, file="analysis/qc_raw_data.rds")
+saveRDS(qc_filtered_data, file="analysis/qc_filtered_data.rds")
+saveRDS(samples, file="analysis/samples.rds")
+
+```
+
+## Barplot of good/poor quality cells for each sample 
+```{r barplot_of_qc}
+## # of cells that pass QC in each sample 
+crosstab = table(qc_raw_data$sample, qc_raw_data$pass_qc)
+crosstab = data.frame(crosstab)
+colnames(crosstab) = c("sample", "Good_quality", "Frequency")
+crosstab<-merge(crosstab, subtypes, by="sample")
+ggplot(crosstab, aes_string(x="sample", y="Frequency", fill="Good_quality")) + 
+  geom_bar(stat="identity", color="black") + ggtitle("QC of each sample\n") + 
+  xlab("") + ylab("N cells") +
+  theme_classic() + 
+   theme(plot.title = element_text(hjust = 0.5, face = "bold", color="black", size = 28),
+        axis.title = element_text(face = "bold", color="black", size = 24), 
+        axis.text.x = element_text(angle = 45, hjust = 1, size=18, color="black", face="bold"),
+        axis.text.y = element_text(size = 24, color="black",face = "bold"),
+        legend.title = element_text(face = "bold",  color="black",size = 24),
+        strip.text = element_text(size=24, face="bold"))
+  #facet_wrap(.~ subtype, scales = "free_x") 
+ggsave("num_cells_pass_qc.jpeg", path=qc_fig_dir, width=15, height=6)
+
+## % of cells that pass QC in each sample 
+crosstab = table(qc_raw_data$sample, qc_raw_data$pass_qc)
+crosstab = crosstab/rowSums(crosstab)
+crosstab = data.frame(crosstab)
+colnames(crosstab) = c("sample", "Good_quality", "Percentage")
+crosstab<-merge(crosstab, subtypes, by="sample")
+ggplot(crosstab, aes_string(x="sample", y="Percentage", fill="Good_quality")) + 
+  geom_bar(stat="identity") + 
+  geom_hline(yintercept = 0.5, color="red", linetype="dashed", size=1) +
+  ggtitle("Percentage of good quality cells in each sample") + 
+  #coord_flip() + 
+  theme_classic() + 
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", color="black", size = 28),
+        axis.title = element_text(face = "bold", color="black", size = 24), 
+        axis.text.x = element_text(angle = 45, hjust = 1, size=18, color="black"),
+        axis.text.y = element_text(size = 24, color="black",face = "bold"),
+        legend.title = element_text(face = "bold",  color="black",size = 24),
+        strip.text = element_text(size=20, face="bold"))+
+  facet_wrap(.~ subtype, scales = "free_x")
+ggsave("percentage_cells_pass_qc_Subtype.jpeg", path=qc_fig_dir, width=10,height=8)
+```
+
+

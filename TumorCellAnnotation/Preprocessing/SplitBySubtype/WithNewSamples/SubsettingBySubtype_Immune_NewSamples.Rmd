@@ -1,0 +1,90 @@
+---
+title: "R Notebook"
+output: html_document
+---
+```{r}
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/",
+                     "TumorCellAnnotation/Preprocessing/SplitBySubtype/WithNewSamples/")
+
+
+```
+
+
+## Load cm, tumor_id, samples and genes_to_keep
+```{r load-precomputed-data}
+load("../../QC/WithNewSamples/analysis/cm_list.Robj")
+tumor_stat = readRDS("../../inferCNV/WithNewSamples/analysis/inferCNV/seurat/call_tumor.rds")
+samples = readRDS("../../QC/WithNewSamples/analysis/samples.rds")
+
+## Midline histone mutant: Read in cluster6 cells to call as normal 
+cluster6CallNormal<-readRDS("../../Annotation/BySubtype/Midline/Midline_HistoneMutant/WithNewSample/analysis/SeuratCluster6_PossiblyNormal.rds")
+```
+
+
+## Read in subtype df, get cell IDs for each subtype
+## Only doing for hemiHistone WT and midline histone mutant- these are subtypes with a new sample
+```{r}
+subtypes<- readRDS("../../QC/WithNewSamples/analysis/qc_align.rds")
+additionalSubtypes<-read.csv("../../../../Subtypes.csv")
+
+## hemispheric
+hemi_histoneWT<-subtypes[subtypes$sample %in%
+                       additionalSubtypes[additionalSubtypes$Diagnosis=="histoneWT" &
+                                            additionalSubtypes$shorthand=="hemi", "sample"],]
+
+## midline
+midline<- subtypes[subtypes$subtype=="midline_adult" | subtypes$subtype=="midline_pedi",]
+midline_histoneMut<- midline[!(midline$sample =="MUV090" | midline$sample == "BT1416"),]
+```
+
+
+## Subset cm list for each subtype and export
+```{r}
+hemiHistoneWT_cm_list<- lapply(cm_list, function(x){
+  x[,colnames(x) %in% rownames(hemi_histoneWT)]})
+
+midlineHistoneMut_cm_list<- lapply(cm_list, function(x){
+  x[,colnames(x) %in% rownames(midline_histoneMut)]})
+
+
+## save subsetted objects
+save(hemiHistoneWT_cm_list, file= "analysis/hemiHistoneWT_cm_list.Robj")
+save(midlineHistoneMut_cm_list, file= "analysis/midlineHistoneMut_cm_list.Robj")
+```
+
+## Subset sample list for each subtype and export
+```{r}
+hemiHistoneWT_samples<-samples[names(samples) %in% rownames(hemi_histoneWT)]
+midlineHistoneMut_samples<-samples[names(samples) %in% rownames(midline_histoneMut)]
+
+
+saveRDS(hemiHistoneWT_samples, file="analysis/hemiHistoneWT_samples.rds")
+saveRDS(midlineHistoneMut_samples, file="analysis/midlineHistoneMut_samples.rds")
+
+```
+
+## Subset tumor stat for each subtype and export
+```{r}
+hemiHistoneWT_tumor_stat<- tumor_stat[names(tumor_stat) %in% rownames(hemi_histoneWT)]
+midlineHistoneMut_tumor_stat<- tumor_stat[names(tumor_stat) %in% rownames(midline_histoneMut)]
+
+
+## alternative for midline histone mutant- some cluster6 cells reclassified to normal
+## Confirmed that even with new sample, cluster 6 still appears to be normal OC cells
+cluster6CallNormal_vector<-rep("Normal", nrow(cluster6CallNormal))
+names(cluster6CallNormal_vector)<-rownames(cluster6CallNormal)
+midlineHistoneMut_tumor_stat_cluster6CellsNormal<- replace(midlineHistoneMut_tumor_stat,
+                                                           names(cluster6CallNormal_vector),
+                                                           cluster6CallNormal_vector)
+
+
+saveRDS(hemiHistoneWT_tumor_stat, file="analysis/hemiHistoneWT_call_tumor.rds")
+saveRDS(midlineHistoneMut_tumor_stat,file="analysis/midlineHistoneMut_call_tumor.rds")
+
+saveRDS(midlineHistoneMut_tumor_stat_cluster6CellsNormal,file="analysis/midlineHistoneMut_cluster6CellsNormal_call_tumor.rds")
+
+```
+

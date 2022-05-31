@@ -1,0 +1,109 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+```{r}
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/",
+                     "TumorCellAnnotation/Preprocessing/inferCNV/")
+```
+
+## Load in tumor calling info from original and new (with 2 new samples)
+## Includes CNV calling + whether cell clustered with a normal cell
+```{r}
+originalClass<- readRDS(paste0("analysis/inferCNV/seurat/", "FullCNVCallingInfo.Rds"))
+newClass<- readRDS(paste0("WithNewSamples/analysis/inferCNV/seurat/", 
+                          "FullCNVCallingInfo.Rds"))
+
+## Remove new samples
+newClass<- newClass[!newClass$sample %in% c("BT1857", "BT1873vent"),]
+sum(rownames(newClass)==rownames(originalClass)); nrow(newClass);nrow(originalClass)
+```
+
+## Merge into 1 df
+```{r}
+originalClass<- originalClass[,c("cnv", "sample", "ClusteredWithNormal", "Classification")]
+newClass<- newClass[,c("cnv", "ClusteredWithNormal", "Classification")]
+
+colnames(originalClass)<- c("Original_CNV", "sample", "Original_ClusteredWithNormal",
+                            "Original_Classification")
+colnames(newClass)<- c("New_CNV", "New_ClusteredWithNormal",
+                            "New_Classification")
+
+all_class<- cbind(originalClass, newClass)
+
+## How many cells mismatch in terms of final classification?
+mismatchCells<- all_class[all_class$Original_Classification!=all_class$New_Classification,]
+## 77 cells
+
+## How many cells mismatch in terms of clustering with normal cells?
+sum(all_class$Original_ClusteredWithNormal != all_class$New_ClusteredWithNormal)
+## only 1 cell: MUV086.P3.D04 
+## Noise->Malig, both called as having CNV, but clustered with normal cells in original, not in new
+## However- it's in cluster 16 and belongs to MUV86, so it was later removed as "normal" anyways
+## in the end then, it agrees for both
+
+## How many cells mismatch in terms of CNV calling?
+sum(all_class$Original_CNV != all_class$New_CNV)
+## 76 cells
+```
+
+## Plotting change in final annotation
+```{r}
+## All Cells
+all_class$Change<- paste0(all_class$Original_Classification, "->",
+                          all_class$New_Classification)
+df<- as.data.frame(table(all_class$Change, all_class$sample))
+colnames(df)<- c("ChangeInClassification", "sample", "NCells")
+
+ggplot(df, aes(x=reorder(ChangeInClassification,NCells, mean), 
+               y=NCells, 
+               fill=sample))+
+  geom_bar(position="stack", stat="identity")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))+
+  xlab("")
+
+## Only mismatch cells
+mismatchCells<- all_class[all_class$Original_Classification!=all_class$New_Classification,]
+
+df<- as.data.frame(table(mismatchCells$Change, mismatchCells$sample))
+colnames(df)<- c("ChangeInClassification", "sample", "NCells")
+
+ggplot(df, aes(x=reorder(ChangeInClassification,NCells, mean), 
+               y=NCells, 
+               fill=sample))+
+  geom_bar(position="stack", stat="identity")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))+
+  xlab("")
+```
+
+## Of the Noise--> malignant and malignant --> noise: are any cells in the midline histone mutant cells that were removed downstream?
+These cells are in cluster 6 of the midline histone mutant clustering analysis (in both original and current)
+They were removed downstream since they seemed to be clearly normal
+Can any discrepancy here be removed due to this? 
+i.e., a cell was called "Noisy" in original and "malig" in current, but was removed as "normal" anyways downstream?
+```{r}
+current_cluster6<- readRDS("../../Annotation/BySubtype/Midline/Midline_HistoneMutant/WithNewSample/analysis/SeuratCluster6_PossiblyNormal.Rds")
+
+original_cluster6<-readRDS("../../Annotation/BySubtype/Midline/Midline_HistoneMutant/analysis/SeuratCluster6_PossiblyNormal.Rds")
+
+sum(rownames(current_cluster6) %in% rownames(original_cluster6))
+## All but 2 cells matches: 
+## "MUV086.P3.D04" in current only, "MUV086.P3.A07" in original only
+
+## How many "mismatch" cells are in either cluster 6?
+sum(rownames(mismatchCells) %in% rownames(current_cluster6))
+## just 1: "MUV086.P3.D04"
+
+sum(rownames(mismatchCells) %in% rownames(original_cluster6))
+## None
+
+## so: the whole "odd midline histone mutant normal cluster" removes discrepancy for 1 cell:
+## MUV086.P3.A07
+## Was called noisy in original, malig in current, but removed as normal in current anyways
+## NOTE: MUV086.P3.A07 was called malig in both, BUT removed in normal cluster 6 downstream for original ONLY. That means that this cell really goes Normal --> malig
+```
+

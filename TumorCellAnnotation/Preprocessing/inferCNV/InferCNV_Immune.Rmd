@@ -1,0 +1,164 @@
+---
+title: "ImmuneRegev_inferCNV"
+output: html_document
+---
+
+```{r load_packages}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load packages and functions 
+```{r}
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/",
+                     "TumorCellAnnotation/Preprocessing/inferCNV/")
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+inferCNV = paste0(base_dir, script_dir, "inferCNV_helper_functions.R")
+source(preprocessing)
+source(inferCNV)
+
+gene_order_file = paste0(base_dir, "/Dropbox (Partners HealthCare)/FilbinLab/data_analysis/genome/gencode_v19_gene_pos.txt")
+ext_ctrl = paste0(base_dir, "/Dropbox (Partners HealthCare)/FilbinLab/data_analysis/ctrl_data/")
+```
+
+## Generate output folders 
+```{r}
+## Write tab deliminated cell-gene matrix
+inferCNV_analysis_folder = "analysis/inferCNV/" ## "inferCNV_Replicate" or "inferCNV"
+folders = c(inferCNV_analysis_folder)
+for (folder in folders){
+  if (!dir.exists(folder)){
+    dir.create(folder)
+  }
+}
+```
+
+
+
+## Load count matrix, sample name and gene order file
+```{r read-data}
+input_dir<- "../QC/analysis/"
+
+## Load sample names and count matrix
+load(paste0(input_dir, "cm_list.Robj"))
+samples = readRDS(paste0(input_dir,"samples.rds"))
+samples<- samples
+any(colnames(cm_list$raw_data) != names(samples))
+
+## Name original samples vector for use later
+orig_samples = samples
+
+## Load chromosome orders of genes 
+gene_order = read.table(gene_order_file, header = F, sep = "\t", row.names = 1)
+```
+
+## Generate new cm and sample with external reference 
+```{r add_ext_ctrl}
+## Load and name normal control data, merge them with all samples and save the complete df
+cm_raw = cm_list$raw_data
+addNormalControl(ext_ctrl, inferCNV_analysis_folder, cm_raw, orig_samples)
+rm(cm_raw); gc()
+
+## Load complete df for cm and samples
+cm = readRDS(paste0(inferCNV_analysis_folder, "cm_exp_ctrl.rds"))
+samples = readRDS(paste0(inferCNV_analysis_folder, "samples_exp_ctrl.rds"))
+any(colnames(cm) != rownames(samples))
+```
+
+## Prepare input data (cm and annotations) for inferCNV
+```{r prepare_input_data_for_inferCNV}
+## Construct a vector of initial characterization of malignancy for each cell
+## All normal controls are normal (either mg or od)
+## All cells from patient samples are treated as malignant at this moment 
+malig_status = ifelse(samples == "mg", "mg", 
+                      ifelse(samples == "od", "od", paste("malignant", samples, sep="_")))
+
+## Write out cm and malignancy_status as inputs for inferCNV
+write.table(cm, file = paste0(inferCNV_analysis_folder, "counts.matrix"), sep = "\t", quote = FALSE, row.names = TRUE, col.names = TRUE)
+
+## Write tab deliminated cell annotations
+write.table(malig_status, file = paste0(inferCNV_analysis_folder, "cellAnnotations.txt"), sep = "\t", quote = FALSE, row.names = TRUE, col.names = FALSE)
+```
+
+
+
+## Run inferCNV
+```{r run_inferCNV}
+infercnv_obj = CreateInfercnvObject(raw_counts_matrix=paste0(inferCNV_analysis_folder,
+                                                             "counts.matrix"),
+                                    annotations_file=paste0(inferCNV_analysis_folder,
+                                                            "cellAnnotations.txt"),
+                                    delim="\t",
+                                    gene_order_file=gene_order_file,
+                                    ref_group_names=c("mg", "od"))
+
+
+# perform infercnv operations to reveal cnv signal
+infercnv_obj = infercnv::run(infercnv_obj,
+                             cutoff=1,  # use 1 for smart-seq, 0.1 for 10x-genomics
+                             out_dir=paste0(inferCNV_analysis_folder, 
+                                            "out_dir"),# dir is auto-created 
+                             cluster_by_groups=T,   # cluster
+                             hclust_method="ward.D2",
+                             denoise = T,
+                             HMM=F,
+                             plot_steps = F
+                             )
+
+# OPTIONAL
+# Generate final plot where we scale maximum and minimum relative to expression = 1.
+infercnv::plot_cnv(infercnv_obj,
+         out_dir=paste0(inferCNV_analysis_folder, "out_dir_denoiseTRUE_hmmFALSE"),
+         cluster_by_groups=T,
+         color_safe_pal=FALSE,
+         x.center=1,
+         x.range=c(.1,1.9),
+         title="inferCNV",
+         obs_title="Observations (Cells)",
+         ref_title="References (Cells)",
+         output_filename="heatmap_0to2",
+         hclust_method = "ward.D2",
+         write_expr_matrix = TRUE
+         )
+```
+
+
+```{r combine_obs_ref_cnv_values}
+## Normalized gene expressions of predicted tumor cells
+observations = read.table(paste0(inferCNV_analysis_folder, 
+                                 "out_dir/infercnv.observations.txt"), 
+                          header = TRUE, sep = " ")
+
+## Normalized gene expressions of predicted normal cells
+references = read.table(paste0(inferCNV_analysis_folder, 
+                               "out_dir/infercnv.references.txt"), 
+                        header = TRUE, sep = " ")
+
+## Concatenate
+all_cnv_values = cbind(observations, references)
+
+## Labels for obs vs ref
+obs_ref = c(rep("obs", ncol(observations)), rep("ref", ncol(references)))
+names(obs_ref) = c(colnames(observations), colnames(references))
+
+## CRITICAL: sort the order of cells in cnv_values and obs_ref to the same as cm
+all_cnv_values = all_cnv_values[colnames(cm)]
+obs_ref = obs_ref[colnames(cm)]
+all_cnv_values = all_cnv_values - 1
+saveRDS(all_cnv_values, paste0(inferCNV_analysis_folder, "all_cnv_values.rds"))
+saveRDS(obs_ref, paste0(inferCNV_analysis_folder, "obs_ref.rds"))
+
+## Compute CNV values and scores 
+##cnv_score = computeCnvScore(all_cnv_values)
+##tmp = data.frame(cnv_score, obs_ref)
+##ggplot(data=tmp, aes(x=cnv_score, color=obs_ref)) + geom_histogram(fill="white", alpha = 0.5, position = "identity", binwidth = 0.005) + xlim(0, 0.15)
+##saveRDS(cnv_score, paste0(inferCNV_analysis_folder, "cnv_score.rds"))
+
+## Compute CNV correlations 
+##mean_cnv_values = calculateAverageCnvValue(all_cnv_values, samples, malig_status)
+##cor_coef = calculateCnvCor(all_cnv_values, mean_cnv_values, samples)
+```
+

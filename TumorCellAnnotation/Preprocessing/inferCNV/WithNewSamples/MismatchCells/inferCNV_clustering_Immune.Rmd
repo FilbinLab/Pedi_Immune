@@ -1,0 +1,491 @@
+---
+title: "inferCNV_clustering"
+output: html_document
+---
+
+```{r read-data}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load libraries and functions
+```{r}
+base_dir = "C:/Users/jenna/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/Immune",
+                     "/Preprocessing/inferCNV/WithNewSamples/MismatchCells")
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+
+inferCNV_input_folder<- "analysis/inferCNV/"
+
+inferCNV_analysis_folder = "analysis/inferCNV/seurat/"
+inferCNV_fig_folder = "figures/inferCNV/seurat/"
+for (folder in c(inferCNV_analysis_folder, inferCNV_fig_folder)){
+  if (!dir.exists(folder)){
+    dir.create(folder)
+  }
+}
+
+## Set colors for use later- better for discriminating against groups
+library(sparseMatrixStats)
+library(RColorBrewer)
+n <- 50
+qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+```
+
+## Load data
+```{r load-data}
+## Load cm, samples, and qc data
+cm = readRDS(paste0(inferCNV_input_folder, "cm_exp_ctrl.rds"))
+samples = readRDS(paste0(inferCNV_input_folder, "samples_exp_ctrl.rds"))
+any(colnames(cm) != rownames(samples))
+qc_filtered_data<- readRDS("../../../QC/WithNewSamples/analysis/qc_filtered_data.rds")
+
+## If seurat_obj already generated 
+seurat_filename = paste0(inferCNV_analysis_folder,
+                         "seurat_obj.Robj")
+if(file.exists(seurat_filename)){
+  load(seurat_filename)
+}
+
+## Load cnv status inferred by inferCNV
+#cnv_stat = readRDS(paste0(inferCNV_input_folder, "HC/", "call_cnv_w_ctrl.rds"))
+obs_ref = readRDS(paste0(inferCNV_input_folder, "obs_ref.rds"))
+
+```
+
+## Preprocessing with Seurat
+```{r seurat_clustering}
+## Create seurat project
+seurat_obj = preprocessSeuratObject(cm, 
+                                    project="", 
+                                    min.cells=0, 
+                                    min.genes=0,
+                                    scale.factor=1E5, 
+                                    do.scale=F, 
+                                    do.center=T)
+
+## Add samples and subtype as meta.data 
+seurat_obj@meta.data$sample = samples
+seurat_obj@meta.data$type = obs_ref
+seurat_obj@meta.data$cnv = cnv_stat
+
+## PCA
+seurat_obj <- RunPCA(
+  object = seurat_obj, 
+  features = seurat_obj@assays$RNA@var.features, 
+  npcs = 50,
+  verbose = TRUE, 
+  ndims.print  = 1:5, 
+  nfeatures.print = 5
+)
+
+
+## Clustering
+numPC = 28
+resolution = 1.2
+seurat_obj <- FindNeighbors(object=seurat_obj,
+                            dims=1:numPC,
+                            reduction="pca")
+seurat_obj<- FindClusters(object=seurat_obj, 
+                          resolution=resolution)
+
+
+## UMAP
+table(seurat_obj@active.ident)
+seurat_obj <- RunUMAP(
+  object = seurat_obj, 
+  dims= 1:numPC, 
+  do.fast = TRUE
+)
+
+save(seurat_obj, file = paste0(inferCNV_analysis_folder, "seurat_obj.Robj"))
+```
+
+## UMAP plots
+```{r tsne_plots}
+## Colored by clustering
+DimPlot(object = seurat_obj, label = T, pt.size = 2, label.size = 8) + NoLegend()
+ggsave("UMAP_clustering_Res1.2.jpg", path=inferCNV_fig_folder, width = 8, height = 6, dpi = 300)
+
+## Colored by samples
+DimPlot(object = seurat_obj, label = T, pt.size = 2, label.size = 4, group.by = "sample") + NoLegend()
+ggsave("UMAP_sample.jpg", path=inferCNV_fig_folder, width = 8, height = 6, dpi = 300)
+
+## Colored by obs vs ref
+DimPlot(object = seurat_obj, label = T, pt.size = 2, label.size = 8, group.by = "type") + NoLegend()
+ggsave("UMAP_type.jpg", path=inferCNV_fig_folder, width = 8, height = 5, dpi = 300)
+
+## Colored by CNV status
+DimPlot(object = seurat_obj, label = T, pt.size = 2, label.size = 8, group.by = "cnv") + NoLegend()
+ggsave("UMAP_cnv.jpg", path=inferCNV_fig_folder, width = 8, height = 8, dpi = 300)
+```
+
+## With resolution of 1.2: cluster 2 has a couple of mg cells
+## May be normal?
+## Save just these cells + cluster 4 cells
+## Samples will be named as cluster 2/cluster 4 instead of by sample
+## Check by inferCNV
+```{r}
+seurat_tmp<- subset(seurat_obj,seurat_clusters %in% c("2","4") )
+newSamples_tmp<- seurat_tmp$seurat_clusters
+newSamples<- paste0("cluster", as.character(newSamples_tmp))
+names(newSamples)<- names(newSamples_tmp)
+newSamples<-newSamples[names(newSamples) %in% names(obs_ref[obs_ref=="obs"])]
+saveRDS(newSamples, file=paste0(inferCNV_analysis_folder, "Cluster2Cluster4_samples.Rds"))
+
+```
+## Compare change in CNV status original --> current
+## Which cluster do they fall into
+```{r}
+load("../analysis/cnv_match_withWithoutNewSamples.Robj")
+
+seurat_tmp<- subset(seurat_obj, type=="obs")
+seurat_tmp$originalCNVRes<- plyr::mapvalues(colnames(seurat_tmp),
+                                            from=rownames(cnv_match_WithWithoutNewSamples),
+                                            to=cnv_match_WithWithoutNewSamples$original_cnv_res)
+seurat_tmp$currentCNVRes<- plyr::mapvalues(colnames(seurat_tmp),
+                                            from=rownames(cnv_match_WithWithoutNewSamples),
+                                            to=cnv_match_WithWithoutNewSamples$new_cnv_res)
+
+seurat_tmp$Change<-paste0(gsub("TRUE", "CNV", 
+                               gsub("FALSE", "NoCNV",seurat_tmp$originalCNVRes)),
+                          "->",
+                          gsub("TRUE", "CNV", 
+                               gsub("FALSE", "NoCNV",seurat_tmp$currentCNVRes)))
+seurat_tmp<- subset(seurat_tmp, Change!="CNV->CNV")
+
+DimPlot(seurat_tmp, group.by="Change")
+ggsave(paste0(inferCNV_fig_folder, "ChangeInOriginalToCurrent.png"), width=5, height=4)
+
+## Plot spread of changes based on cluster
+df<- table( seurat_tmp$seurat_clusters,seurat_tmp$Change)
+df<- df[rowSums(df)!=0,]
+df<- apply(df, 1, function(x){x/sum(x)})
+df<- as.data.frame(df)
+df<-melt(t(df))
+
+colnames(df)<- c( "Cluster", "ChangeInClassification","PercentageCells")
+df$Cluster<- paste0("Cluster", df$Cluster)
+
+ggplot(df, aes(x=Cluster, y=PercentageCells, fill=ChangeInClassification))+
+  geom_bar(position="stack", stat="identity")
+```
+
+
+## DEGs
+```{r differential_gene_expressions}
+#seurat_obj <- SetIdent(seurat_obj, ident.use = seurat_obj@meta.data$seurat_clustering)
+all_markers = FindAllMarkers(seurat_obj, only.pos = TRUE, logfc.threshold = 1, min.pct = 0.5)
+all_markers_filtered = all_markers[all_markers$p_val_adj < 0.05, ]
+num_marker_genes = 30
+top_marker_genes<- all_markers_filtered %>% 
+                   group_by(cluster) %>% 
+                   top_n(num_marker_genes, avg_logFC)%>%
+                   as.data.frame()
+save(all_markers_filtered, file=paste0(inferCNV_analysis_folder, "all_markers.Robj"))
+
+## Heatmap
+DoHeatmap(seurat_obj, 
+          features=all_markers_filtered$gene) + NoLegend() + NoAxes()
+ggsave("Heatmap_all_degs.jpg", path=inferCNV_fig_folder)
+```
+
+## Expresssions of common normal cell marker
+```{r deg_for_normal_cells}
+FeaturePlot(seurat_obj, 
+            features = c("MBP", "PLP1", "TF", ## Oligodendrocyte
+                         "OLIG1", "PDGFRA", "APOD", ## OPC
+                         "CTGF", "IFITM1", "MGP", ## Endothelial cells,
+                         "CD14", "CD3E", "CD4" ## Immune cells
+                         ), #CD45 marker for all immune cells-distinguish neural from immune
+            cols = c("lightgrey", "red"), ncol=3,
+            slot="data")
+ggsave("normal_marker_genes_umap_data.jpg", path=inferCNV_fig_folder, width=9, height=12)
+```
+
+## Map gene counts to UMAP
+```{r}
+FeaturePlot(seurat_obj, "nFeature_RNA", cols = c("lightgrey", "purple"))
+ggsave("nFeature_RNA_UMAP.jpg", path=inferCNV_fig_folder, width=9, height=12)
+```
+
+## Map mito counts to UMAp
+```{r}
+mito.genes <- grep(pattern = "^MT-", x = rownames(seurat_obj@assays$RNA@data), 
+                   value = TRUE)
+percent.mito <- Matrix::colSums(seurat_obj@assays$RNA@counts[mito.genes,])/
+  Matrix::colSums(seurat_obj@assays$RNA@counts)
+seurat_obj <- AddMetaData(seurat_obj, 
+                          metadata = percent.mito, 
+                          col.name = "percent_mito")
+FeaturePlot(seurat_obj, "percent_mito", cols = c("lightgrey", "red"))
+ggsave("mito_genes.jpg", path=inferCNV_fig_folder, width=6, height=6)
+```
+
+## Map alignment rate onto tSNE
+```{r}
+qc_raw_data = readRDS("../../QC/WithNewSamples/analysis/qc_raw_data.rds")
+seurat_obj@meta.data$alignment_rate = qc_raw_data[colnames(seurat_obj), 
+                                                  "align_rate"]
+tmp = is.na(seurat_obj@meta.data$alignment_rate)
+seurat_obj@meta.data$alignment_rate[tmp] = 0.5
+FeaturePlot(seurat_obj, "alignment_rate", cols = c("lightgrey", "red"))
+ggsave("align_rate.jpg", path=inferCNV_fig_folder, width=6, height=6)
+```
+
+## OPTIONAL: Additional QC on CNV
+```{r}
+## cluster vs cnv: which cluster has the highest % of cells without CNV 
+tmp = table(seurat_obj@meta.data$seurat_clusters, seurat_obj@meta.data$cnv)
+tmp2 = round(tmp/rowSums(tmp),2)
+tmp2[order(tmp2[,1], decreasing = T),]
+
+## sample vs clustering: which sample belongs to normal clusters
+## 16 set as malig here- a few cells removed downstream in annotation from histone mut midline samples since they cluster clearly away and are normal. 
+## These cells are virtually entirely from the "upper half" of cluster 16- the lower half appears to really be malignant
+## For simplicity's sake: cluster 16 considered "malignant" here, and the effectively the upper half removed as "normal" downstream
+normal_clust = c( "6", "23") 
+tmp3 = table(seurat_obj@meta.data$sample, seurat_obj@meta.data$seurat_cluster)
+tmp4 = round(tmp3/rowSums(tmp3),2)
+tmp4[,normal_clust]
+rowSums(tmp4[,normal_clust])
+
+## sample vs cnv: which sample has the highest % fo CNV negative cells 
+tmp5 = table(seurat_obj@meta.data$sample, seurat_obj@meta.data$cnv)
+tmp6 = round(tmp5/rowSums(tmp5),2)
+
+## Compare % of cells for each sample in normal clusters vs CNV negative cells
+rowSums(tmp4[,normal_clust])
+tmp6[,1]
+```
+
+## Check intrapatient batch effect
+```{r}
+## subset seurat object to just obs samples, then add plate metadata
+seurat_onlyObs<-subset(seurat_obj, type=="obs" )
+plate<-qc_filtered_data$plate; names(plate)<- rownames(qc_filtered_data)
+seurat_onlyObs@meta.data$plate<- plate
+
+
+## Iteratively plot the spread of cells across all plates for each sample individually
+plots<-list()
+for (sample in unique(samples)){
+  plots[[sample]]<-DimPlot(seurat_onlyObs, group.by="plate", reduction="umap",
+         cells = colnames(seurat_onlyObs)[seurat_onlyObs@meta.data$sample == sample], 
+         label.size = 8, pt.size = 2, label = T)
+}
+
+## Save each plot
+for (i in 1:length(plots)){
+  filename=paste0(inferCNV_fig_folder, "IntrpatientBatchEffect_", unique(samples)[i], ".jpg")
+  jpeg(filename,width=600,height=600)
+  print(plots[[i]])
+  dev.off()
+}
+```
+
+## Malignant vs non-malignant cell calling 
+```{r call_tumor}
+#############Strategy###############
+## All cells in normal clusters and without CNV = Normal
+## All cells in samples without cnv are Malignant
+## All cells NOT in normal clusters and with CNV = Malignant 
+## The rest = Low-quality 
+####################################
+normal_clusters = normal_clust
+samples_without_cnv = c()
+call_tumor <- function(x){
+  ## cells in normal cluster are normal cells 
+  if (seurat_obj@meta.data$seurat_cluster[x] %in% normal_clusters &
+      !seurat_obj@meta.data$cnv[x]){
+    return("Normal")
+  }else if (seurat_obj@meta.data$sample[x] %in% samples_without_cnv){
+    return("Malignant")
+  ## All others classified based on having CNV or not 
+  }else if (!(seurat_obj@meta.data$seurat_cluster[x] %in% normal_clusters) &
+            seurat_obj@meta.data$cnv[x]){
+     return("Malignant") 
+  }else{
+    return("Noise")
+  }
+}
+tumor_stat_w_ctrl = sapply(seq(length(colnames(seurat_obj))), call_tumor)
+names(tumor_stat_w_ctrl) = colnames(seurat_obj)
+any(names(cnv_stat) != names(tumor_stat_w_ctrl))
+
+
+## Remove normal controls 
+normalSamples<- seurat_obj@meta.data[seurat_obj$sample %in% c("mg", "od"),]
+tumor_stat = tumor_stat_w_ctrl[!names(tumor_stat_w_ctrl) %in% rownames(normalSamples)]
+saveRDS(tumor_stat, file = paste0(inferCNV_analysis_folder, "call_tumor.rds"))
+
+## UMAP colored by malignancy
+seurat_obj@meta.data$tumor = tumor_stat_w_ctrl
+DimPlot(object = seurat_obj, label = F, pt.size = 1, 
+        label.size = 8, group.by = "tumor", reduction="umap",
+        cols = c("lightgrey", gg_color_hue(2))) + NoAxes()
+
+ggsave("UMAP_tumor.jpg", path=inferCNV_fig_folder, width = 8, height = 8, dpi = 300)
+save(seurat_obj, file = paste0(inferCNV_analysis_folder, "seurat_obj.Robj"))
+```
+
+
+## Annotation 
+## Adapt this code based on normal cells identified in your dataset
+```{r}
+annotation = seurat_obj@meta.data$tumor
+cluster = seurat_obj@meta.data$seurat_cluster
+
+
+## Cells in normal cluster and labeled Normal are assigned corresponding cell type
+## Update corresponding cluster number for each normal cell type 
+annot_fun <- function(x){
+    if (cluster[x] == 6 & annotation[x] == "Normal"){
+        return("Oligodendrocyte")
+    } else if ((cluster[x] == 21) & annotation[x] == "Normal"){
+        return("ImmuneCell")
+    } else{
+        return(annotation[x])
+    }
+}
+annotation = sapply(1:length(annotation), annot_fun)
+
+## Added to seurat_obj and plot UMAP (removing normal controls and low-quality ones)
+seurat_obj@meta.data$annotation = annotation 
+
+## Remove normal controls 
+annot_stat = annotation[(seurat_obj@meta.data$sample != "mg" & 
+                         seurat_obj@meta.data$sample != "od")]
+saveRDS(annot_stat, file = paste0(inferCNV_analysis_folder, "annotation.rds"))
+```
+
+## UMAP with only tumor samples and high quality cells
+```{r}
+## Generate df for only tumor samples
+df = cbind.data.frame(seurat_obj@reductions$umap@cell.embeddings,
+                      sample=as.character(seurat_obj@meta.data$sample),
+                      annotation=as.character(seurat_obj@meta.data$annotation))
+
+df = df[seurat_obj@meta.data$type == "obs", ]
+
+## Remove low quality cells
+df = df[df$annotation != "Noise",]
+df$annotation = ifelse(df$annotation == "Malignant", df$sample, df$annotation)
+
+mapped_colors = col_vector[1:(length(unique(samples))+2)]
+names(mapped_colors)<- c(unique(samples), "Oligodendrocyte", "ImmuneCell")
+
+ggplot(df, aes(x=UMAP_1, y=UMAP_2, color=annotation)) + 
+    geom_point(size=2, alpha=0.5) +
+    ggtitle("") + xlab("UMAP-1") + ylab("UMAP-2") + labs(color="") +
+    scale_color_manual(values=mapped_colors) +
+    theme(axis.title = element_text(face="bold", size=24),
+          axis.text.x = element_text(size=24),
+          axis.text.y = element_text(size=24),
+          legend.text = element_text(size=16))
+
+
+ggsave("UMAP_annotation_final.png", path = inferCNV_fig_folder, width = 10, height = 8)
+```
+
+
+## Compare results between origianl analysis and analysis with new samples
+```{r}
+original_call_tumor<- readRDS("../analysis/inferCNV/seurat/call_tumor.rds")
+original_call_tumor<- original_call_tumor[order(names(original_call_tumor))]
+
+## remove new samples from this analysis
+new_call_tumor<- tumor_stat[grep(paste(c("BT1873", "BT1857"), collapse="|"), 
+                                 names(tumor_stat), invert=TRUE)]
+new_call_tumor<- new_call_tumor[order(names(new_call_tumor))]
+
+sum(names(original_call_tumor) == names(new_call_tumor)); length(new_call_tumor);length(original_call_tumor)
+
+
+## Make df with annotations from original/new
+merge_call_tumor<- as.data.frame(original_call_tumor)
+merge_call_tumor$new_call_tumor<- plyr::mapvalues(rownames(merge_call_tumor),
+                                                  from=names(new_call_tumor),
+                                                  to=new_call_tumor)
+merge_call_tumor$sample<- plyr::mapvalues(rownames(merge_call_tumor),
+                                          from=names(samples),
+                                          to=samples, warn_missing = FALSE)
+
+CellsThatDiffer<- merge_call_tumor[merge_call_tumor$original_call_tumor!=merge_call_tumor$new_call_tumor,] 
+
+
+## Are the cells that differ here the result of different inferCNV clustering or seurat?
+## Read in comparison of old/new inferCNV HC results
+load("analysis/cnv_match_withWithoutNewSamples.Robj")
+
+sum(rownames(CellsThatDiffer) %in% rownames(cnv_match_WithWithoutNewSamples))
+nrow(CellsThatDiffer)
+
+## all differences due to inferCNV HC differences, not to seurat clustering
+## Majority (80%) were called malignant in original, noise or normal in the new analysis
+```
+
+
+
+
+
+## Compare tumor_stat results with all samples vs all samples except for BT1857/BT1873
+## These samples were added later
+## CHecking that results are highly similar- if so, can just keep "old" tumor_stat for all samples except for BT1857/BT1873
+```{r}
+newTumor_stat<- readRDS(paste0(inferCNV_analysis_folder, "call_tumor.rds"))
+oldTumor_stat<- readRDS("../analysis/inferCNV/seurat/call_tumor.rds")
+samples = readRDS(paste0(inferCNV_input_folder, "samples_exp_ctrl.rds"))
+
+## Remove new samples (any cells in new not in old)
+newTumor_stat<- newTumor_stat[names(newTumor_stat) %in% names(oldTumor_stat)]
+
+## COmbine into 1 df
+all_tumorStat<- as.data.frame(newTumor_stat)
+all_tumorStat<- merge(all_tumorStat, as.data.frame(oldTumor_stat), by=0, all.x=TRUE)
+all_tumorStat$sample<- plyr::mapvalues(all_tumorStat$Row.names,
+                                       from=names(samples), to=samples,
+                                       warn_missing = FALSE)
+all_tumorStat$Match<- ifelse(all_tumorStat$newTumor_stat==all_tumorStat$oldTumor_stat,
+                             yes="Match", no="NoMatch")
+
+## Add column denoting how sample ID changed. Use for plotting
+all_tumorStat$Change<- paste0(all_tumorStat$oldTumor_stat,
+                              " --> ", all_tumorStat$newTumor_stat)
+df<- as.data.frame(table(all_tumorStat$Change, all_tumorStat$sample))
+colnames(df)<- c("ChangeInTumorCall","Sample", "NumberCells")
+ggplot(df, aes(x=reorder(ChangeInTumorCall,NumberCells, mean), 
+               y=NumberCells, 
+               fill=Sample))+
+  geom_bar(position="stack", stat="identity")+
+  theme(axis.text.x = element_text(angle=45, hjust=1, color="black", face="bold"))+
+  xlab("")
+ggsave(paste0(inferCNV_fig_folder, "Original_vs_WithNewSamples_MaligCellCalling.png"),
+       width=7, height=5)
+
+## Remove cells whose annotations matched, plot
+tmp<- all_tumorStat[all_tumorStat$Match=="NoMatch",]
+df2<- as.data.frame(table(tmp$Change, tmp$sample))
+colnames(df2)<- c("ChangeInTumorCall","Sample", "NumberCells")
+df2<- df2[df2$NumberCells>0,]
+ggplot(df2, aes(x=reorder(ChangeInTumorCall,NumberCells, mean), 
+               y=NumberCells, 
+               fill=Sample))+
+  geom_bar(position="stack", stat="identity")+
+  theme(axis.text.x = element_text(angle=45, hjust=1, color="black", face="bold"))+
+  xlab("")
+ggsave(paste0(inferCNV_fig_folder, "Original_vs_WithNewSamples_MaligCellCalling_MismatchCells.png"),
+       width=7, height=5)
+
+## Export cells that mismatch (noise-> malig or malig-> noise) for inferCNV
+## Will run inferCNV on just these to determine if they have CNVs
+mismatchCells<- all_tumorStat[all_tumorStat$Change %in% c("Malignant --> Noise",
+                                                          "Noise --> Malignant"),]
+save(mismatchCells, file=paste0(inferCNV_analysis_folder,
+                                "CellsThatMismatchBetweenOriginalNewAnalysis.Robj"))
+```
+

@@ -1,0 +1,217 @@
+---
+title: "_inferCNV"
+output: html_document
+---
+
+```{r load_packages}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load libraries and functions
+```{r}
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/",
+                     "TumorCellAnnotation/Preprocessing/inferCNV/")
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+inferCNV = paste0(base_dir, script_dir, "inferCNV_helper_functions.R")
+source(preprocessing)
+source(inferCNV)
+
+gene_order_file = paste0(base_dir, "/Dropbox (Partners HealthCare)/FilbinLab/data_analysis/genome/gencode_v19_gene_pos.txt")
+ext_ctrl = paste0(base_dir, "/Dropbox (Partners HealthCare)/FilbinLab/data_analysis/ctrl_data/")
+
+
+## Create output files
+inferCNV_analysis_folder = "analysis/inferCNV/"
+inferCNV_fig_folder = "figures/inferCNV/"
+for (folder in c(inferCNV_analysis_folder, inferCNV_fig_folder)){
+  if (!dir.exists(folder)){
+    dir.create(folder, recursive = TRUE)
+  }
+}
+
+inferCNV_input_folder<- "analysis/inferCNV/"
+```
+
+## Load input data (observations + control) and gene order file
+## Including: cm, samples, CNV values, 
+## and labels for obsevations (obs) and references (ref)
+```{r load_data}
+cm = readRDS(paste0(inferCNV_input_folder, 
+                    "cm_exp_ctrl.rds"))
+samples = readRDS(paste0(inferCNV_input_folder, 
+                         "samples_exp_ctrl.rds"))
+all_cnv_values = readRDS(paste0(inferCNV_input_folder,
+                                "all_cnv_values_All.rds"))
+obs_ref = readRDS(paste0(inferCNV_input_folder,
+                         "obs_ref_All.rds"))
+
+gene_order_file = paste0(base_dir, 
+                         "/Dropbox (Partners HealthCare)/FilbinLab/data_analysis/genome/gencode_v19_gene_pos.txt")
+gene_order = read.table(gene_order_file, header = F, sep = "\t", row.names = 1)
+```
+
+## In each sample, weighted pairwise correlation of cells + references 
+## Hierarchical clustering using correlatiton coefficient 
+## Cutree 
+```{r hierarchical_clustering}
+library(cluster)    # clustering algorithms
+library(factoextra) # clustering visualization
+library(dendextend)
+library(weights)
+
+cnv_hc_each_sample = list()
+cnv_cutree_each_sample = list()
+weights_list = list()
+nTree = 4
+samples<-samples
+
+## For all samples
+for (sample in sort(unique(samples))){
+  ## Subset each sample + (mg and od)
+  to_subset = (samples == sample | samples == "mg" | samples == 'od')
+  message("======================================")
+  message("Processing sample: ", sample)
+  message("Start time: ", Sys.time())
+  ## Compute weights
+  weights = apply(all_cnv_values[,to_subset], 1, var)
+  weights_list[[sample]] = weights
+  ## Compute pairwise correlations and distances
+  pairwise_cor = wtd.cors(all_cnv_values[,to_subset], weight = weights) 
+  pairwise_dist = 1 - pairwise_cor
+  ## Hierarchical clustering and cutree 
+  hc = hclust(as.dist(pairwise_dist), method="ward.D2")
+  cnv_hc_each_sample[[sample]] = hc
+  cnv_cutree_each_sample[[sample]] = cutree(hc, nTree)
+  message("End time: ", Sys.time())
+}
+
+saveRDS(cnv_cutree_each_sample, paste0(inferCNV_analysis_folder,
+                                       "cnv_cutree_each_sample.rds"))
+saveRDS(cnv_hc_each_sample, paste0(inferCNV_analysis_folder,
+                                   "cnv_hc_each_sample.rds"))
+
+```
+
+
+## Print out cutree results for each sample 
+```{r examine_clustering_results}
+cnv_cutree_table = list()
+for (sample in sort(unique(samples))){
+  print("======================")
+  print(sample)
+  print(table(samples[names(cnv_cutree_each_sample[[sample]])], cnv_cutree_each_sample[[sample]]))
+  cnv_cutree_table[[sample]] = table(samples[names(cnv_cutree_each_sample[[sample]])],
+                                     cnv_cutree_each_sample[[sample]])
+}
+names(cnv_cutree_table) = sort(unique(samples))
+
+cnv_cutree_table_cut = list()
+for (sample in sort(unique(samples))){
+  cnv_cutree_table_cut[[sample]] = table(samples[names(cnv_cutree_each_sample[[sample]])],
+                                     cnv_cutree_each_sample[[sample]])
+}
+names(cnv_cutree_table_cut) = sort(unique(samples))
+
+## write out table- renaming rows so that it's obvious what sample each row corresponds to
+newRownames<-mapply(function(x,y) paste(rownames(x), y, sep="_Sample:"), cnv_cutree_table, names(cnv_hc_each_sample))
+all_cnv_cutree_table<- as.data.frame(do.call(rbind, cnv_cutree_table))
+rownames(all_cnv_cutree_table)<-unname(unlist(newRownames))
+write.table(all_cnv_cutree_table, paste0(inferCNV_analysis_folder, "AllCNVcutreeResults.txt"))
+
+```
+
+## Repeat inferCNV for target sample with references 
+## Cells in the sample grouped based on previously computed hierarchical clustering
+## and cutree results 
+## May inspect resulting heatmaps to see if cutree results successfully separate 
+## cells +/- CNV and subclones
+```{r heatmap_for_normal_tumor_cells}
+## For double-check samples
+  normal_type = c("mg", "od")
+  cutree_res = cnv_cutree_each_sample
+  
+  for (i in unique(samples)){
+    sample = i
+    folder = paste0("analysis/inferCNV/", sample, "/")
+    plot_subcluster_10X(folder, sample, cm, samples, 
+                        normal_type, cutree_res, gene_order_file, cutoff=1)
+  }
+
+```
+
+
+## Assign CNV status to each based on the number of normal cells in its cluster 
+```{r call-cnv}
+normal_cutoff = 5
+## Store normal clusters in a list
+normal_clusters = lapply(cnv_cutree_table, 
+                         function(x) which((x["mg",] + x["od",])>=normal_cutoff))
+try (if(any(names(cnv_cutree_each_sample) != names(normal_clusters))) stop("cutree results list and normal clusters list should have identical names for elements"))
+
+## Reassign normal clusters for BT1478- no  major CNVs present across the entire sample
+normal_clusters$BT1478<- c(nTree+1); names(normal_clusters$BT1478)<- normal_clusters$BT1478
+
+
+## Classify each cell as Normal (F) vs Tumor (T) based on normal_clusters list 
+call_cnv_res = NULL
+for (i in seq(length(normal_clusters))){
+  sample = names(normal_clusters)[i]
+  print(sample)
+  normal_clust = normal_clusters[[i]]
+  print(normal_clust)
+  hc_clust_res = cnv_cutree_each_sample[[i]]
+  print(head(hc_clust_res))
+  sample_names = sapply(names(hc_clust_res), function(x) unlist(strsplit(x, split = ".", fixed = T))[1])
+  print(head(sample_names))
+  hc_clust_res = hc_clust_res[sample_names == sample]
+  tmp = ifelse(hc_clust_res %in% normal_clust, F, T)
+  names(tmp) = names(hc_clust_res)[sample_names == sample]
+  call_cnv_res = c(call_cnv_res, tmp)
+}
+
+## Generate a named vector for mg and od, and label them as normal 
+mg_names = names(samples)[samples == "mg"]
+mg_res = rep(F, length(mg_names))
+names(mg_res) = mg_names
+od_names = names(samples)[samples == "od"]
+od_res = rep(F, length(od_names))
+names(od_res) = od_names
+
+## Concatenate CNV calling for all samples and normal control 
+call_cnv_res_complete = c(call_cnv_res, mg_res, od_res)
+call_cnv_res_complete = call_cnv_res_complete[names(samples)]
+call_cnv_res = call_cnv_res_complete[names(samples)[obs_ref == "obs"]]
+
+## Store CNV calling for all samples alone and all samples + normal control 
+saveRDS(call_cnv_res, paste0(inferCNV_analysis_folder, "call_cnv.rds"))
+saveRDS(call_cnv_res_complete, paste0(inferCNV_analysis_folder, "call_cnv_w_ctrl.rds"))
+
+  ## Compare cnv_res to other analysis
+  ## replicating results vs original
+  ## Both do not have 2 new samples (BT1873/BT1857)
+  original_cnv_res<- readRDS("analysis/inferCNV/HC/call_cnv.rds")
+  identical(original_cnv_res, call_cnv_res)
+  
+  ## analyses match exactly
+```
+
+## OPTIONAL: Save cutree results
+```{r}
+hc_res = sapply(unique(samples[obs_ref == "obs"]), function(x){
+  tmp = cnv_cutree_each_sample[[x]]
+  tmp = tmp[names(tmp) %in% names(obs_ref)[obs_ref == "obs"]]
+})
+
+hc_res = unlist(hc_res)
+tmp = lapply(names(hc_res), 
+                           function(x) unlist(strsplit(x, split = ".", fixed = T))[2:4])
+tmp2 = sapply(tmp, function(x) paste(x[1], x[2], x[3], sep = "."))
+names(hc_res) = tmp2
+
+
+saveRDS(hc_res, paste0(inferCNV_analysis_folder, "cnv_hc_res.rds"))
+```

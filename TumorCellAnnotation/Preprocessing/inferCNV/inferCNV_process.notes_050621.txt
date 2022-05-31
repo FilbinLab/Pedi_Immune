@@ -1,0 +1,40 @@
+InferCNV notes
+
+As of 5/6/21, the process for calling malig cells (WITHOUT new samples) is as follows:
+
+1. inferCNV run for all samples (without 2 new samples) simultaneously
+2. Number of cells to consider HC cluster as "normal" set at 5
+3. Sample BT1478 manually set as having CNVs- basically entire sample lacks CNVs, would all be called normal otherwise.
+4. Seurat clustering performed (28 PCs, 0.6 resolution)
+5. Clusters 6 and 21 are clearly normal- based on markers, ref cell presence. Cluster 17 is very close to 6, and has normal OC markers, but unclear if normal or malig
+6. inferCNV run separately for cluster 17, which contains samples: MUV78/79/91/86/87. Clear CNVs for 78/79, likely for 91, hard to tell for 86/87. Most cells are MUV79/86
+7. UMAP saved zooming in on cluster 17/6, showing where samples are. Cluster 17 is split into a "top" (mostly muv86) and "bottom" (mostly Muv79)
+8. Cluster 17 considered "malignant" for now (for inferCNV seurat clustering). Likely that top half is normal, bottom half is malignant
+9. MUV86 is midline histone mut. While annotating separately for this subtype downstream, see clear cluseter (cluster6) VERY far from others, OC-like
+10. This cluster appears to be normal- it consists mostly (entirely?) of cells from the top half of inferCNV cluster 17
+11. Cells in cluster 6 for midline histone mut samples removed as "normal" manually
+
+All of this was confirmed by re-running inferCNV process to replicate original analysis, which had become a little unclear over time
+inferCNV_replicate folders contain these figures/analyses. Not used downstream, as it was confirmed that original analysis/replicate analysis (following above steps) matched exactly
+
+
+As of 5/6/21, the process for calling malig cells (WITH new samples) is as follows:
+
+1. inferCNV run for all samples (including 2 new samples) simultaneously
+2. Number of cells to consider HC cluster as "normal" set at 9. This gave results most comparable to original analysis (98% match)
+3. Sample BT1478 manually set as having CNVs
+4. Seurat clustering performed (28 PCs, 0.6 resolution)
+5. Clusters 6 and 23 are clearly normal- based on markers, ref cell presence. Cluster 16 is very close to 6, and has normal OC markers, but unclear if normal or malig
+6. Did not run inferCNV on cluster 16 alone as was done for cluster 17 in the previous analysis- assumed same situation
+7. UMAP saved zooming in on cluster 16/6, shwoing where samples are. Again cluster 16 is split into a top/bottom half
+8. Cluster 16 considered "malignant" for now (for inferCNV seurat clustering). Likely that top half is normal, bottom half is malignant
+
+Overall, there is a 98% match in annotations between the 2 analyses (with and without the new samples). 
+This discrepancy is spread over 11 samples, with the max # of cells differing being 19 cells in BT1733
+All of this discrepancy is due to differences in HC, not seurat clustering
+1 cell went from noise --> normal, majority (80%) went from malig --> noise/normal
+
+Moving forward: original annotations used for original samples, new annotation used for 2 new samples
+The discrepancy is minor, especially at the sample level (all less than 20 cells different, most less than 10).
+The new annotations for the 2 new samples will be integrated into the old annotations for their respective cell types in the SubtypesSplit folder
+i.e.- new annotation for BT1873 will be added to midline histone mut tumor_stat annotations

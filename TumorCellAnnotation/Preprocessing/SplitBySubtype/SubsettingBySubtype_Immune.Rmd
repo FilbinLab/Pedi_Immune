@@ -1,0 +1,178 @@
+---
+title: "R Notebook"
+output: html_document
+---
+```{r}
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/",
+                     "TumorCellAnnotation/Preprocessing/SplitBySubtype/")
+
+```
+
+
+## Load cm, tumor_id, samples and genes_to_keep
+```{r load-precomputed-data}
+load("../QC/analysis/cm_list.Robj")
+tumor_stat = readRDS("../inferCNV/analysis/inferCNV/seurat/call_tumor.rds")
+samples = readRDS("../QC/analysis/samples.rds")
+
+## Midline histone mutant: Read in cluster6 cells to call as normal 
+cluster6CallNormal<-readRDS(paste0(working_dir,
+                                   "../../BySubtype/Midline/Midline_HistoneMutant/analysis/SeuratCluster6_PossiblyNormal.rds"))
+```
+
+
+## Read in subtype df, get cell IDs for each subtype
+```{r}
+subtypes<- readRDS("../QC/analysis/qc_align.rds")
+additionalSubtypes<-read.csv("../../../Subtypes.csv")
+
+## ependymoma
+epn<- subtypes[subtypes$subtype=="ependymoma",]
+
+## hemispheric
+hemi<- subtypes[subtypes$subtype=="hemispheric",]
+hemi_BCOR<- subtypes[subtypes$sample %in%
+                       additionalSubtypes[additionalSubtypes$Diagnosis=="BCOR", "samples"],]
+hemi_histoneWT<-subtypes[subtypes$sample %in%
+                       additionalSubtypes[additionalSubtypes$Diagnosis=="histoneWT" &
+                                            additionalSubtypes$shorthand=="hemi", "samples"],]
+hemi_histonemut<-subtypes[subtypes$sample %in%
+                       additionalSubtypes[additionalSubtypes$Diagnosis=="G34RV", "samples"],]
+hemi_nonBCOR<- subtypes[subtypes$sample %in%
+                          additionalSubtypes[additionalSubtypes$shorthand=="hemi" &
+                                               additionalSubtypes$Diagnosis!="BCOR", "samples"],]
+## midline
+midline_adult<- subtypes[subtypes$subtype=="midline_adult",]
+midline_ped<- subtypes[subtypes$subtype=="midline_pedi",]
+midline<- subtypes[subtypes$subtype=="midline_adult" | subtypes$subtype=="midline_pedi",]
+midline_histoneMut<- midline[!(midline$sample =="MUV090" | midline$sample == "BT1416"),]
+midline_histoneWT<- subtypes[subtypes$sample %in%
+                          additionalSubtypes[additionalSubtypes$shorthand=="midline" &
+                                               additionalSubtypes$Diagnosis=="histoneWT", "samples"],]
+```
+
+
+## Subset cm list for each subtype and export
+```{r}
+epn_cm_list<- lapply(cm_list, function(x){
+  x[,colnames(x) %in% rownames(epn)]})
+
+hemi_cm_list<- lapply(cm_list, function(x){
+  x[,colnames(x) %in% rownames(hemi)]})
+
+hemiBCOR_cm_list<- lapply(cm_list, function(x){
+  x[,colnames(x) %in% rownames(hemi_BCOR)]})
+
+hemiHistoneWT_cm_list<- lapply(cm_list, function(x){
+  x[,colnames(x) %in% rownames(hemi_histoneWT)]})
+
+hemiHistonemut_cm_list<- lapply(cm_list, function(x){
+  x[,colnames(x) %in% rownames(hemi_histonemut)]})
+
+hemiNonBCOR_cm_list<- lapply(cm_list, function(x){
+  x[,colnames(x) %in% rownames(hemi_nonBCOR)]})
+
+midlineAdult_cm_list<- lapply(cm_list, function(x){
+  x[,colnames(x) %in% rownames(midline_adult)]})
+
+midlinePed_cm_list<- lapply(cm_list, function(x){
+  x[,colnames(x) %in% rownames(midline_ped)]})
+
+midline_cm_list<- lapply(cm_list, function(x){
+  x[,colnames(x) %in% rownames(midline)]})
+
+midlineHistoneMut_cm_list<- lapply(cm_list, function(x){
+  x[,colnames(x) %in% rownames(midline_histoneMut)]})
+
+midlineHistoneWT_cm_list<- lapply(cm_list, function(x){
+  x[,colnames(x) %in% rownames(midline_histoneWT)]})
+
+
+## save subsetted objects
+save(epn_cm_list, file="analysis/epn_cm_list.Robj")
+save(hemi_cm_list, file= "analysis/hemi_cm_list.Robj")
+save(hemiBCOR_cm_list, file= "analysis/hemiBCOR_cm_list.Robj")
+save(hemiHistoneWT_cm_list, file= "analysis/hemiHistoneWT_cm_list.Robj")
+save(hemiHistonemut_cm_list, file= "analysis/hemiHistonemut_cm_list.Robj")
+save(hemiNonBCOR_cm_list, file= "analysis/hemiNonBCOR_cm_list.Robj")
+save(midlineAdult_cm_list, file= "analysis/midlineAdult_cm_list.Robj")
+save(midlinePed_cm_list, file= "analysis/midlinePed_cm_list.Robj")
+save(midline_cm_list, file= "analysis/midline_cm_list.Robj")
+save(midlineHistoneMut_cm_list, file= "analysis/midlineHistoneMut_cm_list.Robj")
+save(midlineHistoneWT_cm_list, file= "analysis/midlineHistoneWT_cm_list.Robj")
+```
+
+## Subset sample list for each subtype and export
+```{r}
+epn_samples<-samples[names(samples) %in% rownames(epn)]
+
+hemi_samples<-samples[names(samples) %in% rownames(hemi)]
+hemiBCOR_samples<-samples[names(samples) %in% rownames(hemi_BCOR)]
+hemiHistoneWT_samples<-samples[names(samples) %in% rownames(hemi_histoneWT)]
+hemiHistonemut_samples<-samples[names(samples) %in% rownames(hemi_histonemut)]
+hemiNonBCOR_samples<-samples[names(samples) %in% rownames(hemi_nonBCOR)]
+
+midlineAdult_samples<-samples[names(samples) %in% rownames(midline_adult)]
+midlinePed_samples<-samples[names(samples) %in% rownames(midline_ped)]
+midline_samples<-samples[names(samples) %in% rownames(midline)]
+midlineHistoneMut_samples<-samples[names(samples) %in% rownames(midline_histoneMut)]
+midlineHistoneWT_samples<-samples[names(samples) %in% rownames(midline_histoneWT)]
+
+saveRDS(epn_samples, file="analysis/epn_samples.rds")
+
+saveRDS(hemi_samples, file="analysis/hemi_samples.rds")
+saveRDS(hemiBCOR_samples, file="analysis/hemiBCOR_samples.rds")
+saveRDS(hemiHistoneWT_samples, file="analysis/hemiHistoneWT_samples.rds")
+saveRDS(hemiHistonemut_samples, file="analysis/hemiHistonemut_samples.rds")
+saveRDS(hemiNonBCOR_samples, file="analysis/hemiNonBCOR_samples.rds")
+
+saveRDS(midlineAdult_samples, file="analysis/midlineAdult_samples.rds")
+saveRDS(midlinePed_samples, file="analysis/midlinePed_samples.rds")
+saveRDS(midline_samples, file="analysis/midline_samples.rds")
+saveRDS(midlineHistoneMut_samples, file="analysis/midlineHistoneMut_samples.rds")
+saveRDS(midlineHistoneWT_samples, file="analysis/midlineHistoneWT_samples.rds")
+```
+
+## Subset tumor stat for each subtype and export
+```{r}
+epn_tumor_stat<- tumor_stat[names(tumor_stat) %in% rownames(epn)]
+
+hemi_tumor_stat<- tumor_stat[names(tumor_stat) %in% rownames(hemi)]
+hemiBCOR_tumor_stat<- tumor_stat[names(tumor_stat) %in% rownames(hemi_BCOR)]
+hemiHistoneWT_tumor_stat<- tumor_stat[names(tumor_stat) %in% rownames(hemi_histoneWT)]
+hemiHistonemut_tumor_stat<- tumor_stat[names(tumor_stat) %in% rownames(hemi_histonemut)]
+hemiNonBCOR_tumor_stat<- tumor_stat[names(tumor_stat) %in% rownames(hemi_nonBCOR)]
+
+midlineAdult_tumor_stat<- tumor_stat[names(tumor_stat) %in% rownames(midline_adult)]
+midlinePed_tumor_stat<- tumor_stat[names(tumor_stat) %in% rownames(midline_ped)]
+midline_tumor_stat<- tumor_stat[names(tumor_stat) %in% rownames(midline)]
+midlineHistoneMut_tumor_stat<- tumor_stat[names(tumor_stat) %in% rownames(midline_histoneMut)]
+midlineHistoneWT_tumor_stat<- tumor_stat[names(tumor_stat) %in% rownames(midline_histoneWT)]
+
+## alternative for midline histone mutant- some cluster6 cells reclassified to normal
+cluster6CallNormal_vector<-rep("Normal", nrow(cluster6CallNormal))
+names(cluster6CallNormal_vector)<-rownames(cluster6CallNormal)
+midlineHistoneMut_tumor_stat_cluster6CellsNormal<- replace(midlineHistoneMut_tumor_stat,
+                                                           names(cluster6CallNormal_vector),
+                                                           cluster6CallNormal_vector)
+
+
+saveRDS(epn_tumor_stat, file="analysis/epn_call_tumor.rds")
+
+saveRDS(hemi_tumor_stat, file="analysis/hemi_call_tumor.rds")
+saveRDS(hemiBCOR_tumor_stat, file="analysis/hemiBCOR_call_tumor.rds")
+saveRDS(hemiHistoneWT_tumor_stat, file="analysis/hemiHistoneWT_call_tumor.rds")
+saveRDS(hemiHistonemut_tumor_stat, file="analysis/hemiHistonemut_call_tumor.rds")
+saveRDS(hemiNonBCOR_tumor_stat, file="analysis/hemiNonBCOR_call_tumor.rds")
+
+saveRDS(midlineAdult_tumor_stat, file="analysis/midlineAdult_call_tumor.rds")
+saveRDS(midlinePed_tumor_stat,file="analysis/midlinePed_call_tumor.rds")
+saveRDS(midline_tumor_stat, file="analysis/midline_call_tumor.rds")
+saveRDS(midlineHistoneMut_tumor_stat,file="analysis/midlineHistoneMut_call_tumor.rds")
+saveRDS(midlineHistoneMut_tumor_stat_cluster6CellsNormal,file="analysis/midlineHistoneMut_cluster6CellsNormal_call_tumor.rds")
+saveRDS(midlineHistoneWT_tumor_stat,file="analysis/midlineHistoneWT_call_tumor.rds")
+```
+
