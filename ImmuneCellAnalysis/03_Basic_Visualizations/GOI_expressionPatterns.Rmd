@@ -75,9 +75,12 @@ ped_immune_seurat<- readRDS(paste0(immune_data_dir, "tcell.myeloid_seurat_harmon
   ## Ped/Adult merged
   pedAdult_myeloid_seurat<- readRDS(paste0(ped.adult_myeloid_data_dir, "myeloid_seurat_Ped.AdultGBM.IDHMut_merged.Rds"))
 
-## Tumor- for ped only
+## Tumor
 load(paste0(tumor_dir, "AllTumorSeuratObj.Robj"))
 tumor_seurat<- tumor_merged; rm(tumor_merged)
+
+  ## adult tumor- just the 4 samples previously in our cohort
+  tumor_adult_seurat<- readRDS(paste0(tumor_dir,"../../Adult/analysis/seurat_obj_adult.Rds"))
 
 
 ```
@@ -402,6 +405,11 @@ pedAdult_cd8_seurat$program.Age<- paste0(pedAdult_cd8_seurat@meta.data[[tcell_pr
 DotPlot(pedAdult_cd8_seurat, group.by = "program.Age", features="SELPLG", scale=FALSE)
   scale_color_gradient(low="white", high="blue", limits=c(3.75,4.25))
  ggsave(paste0(figure_dir_use, "DotPlot_CD8_byAge.Program.png"), width=5, height=6) 
+ 
+pedAdult_cd4_seurat$program.Age<- paste0(pedAdult_cd4_seurat@meta.data[[tcell_program_name]], "_",pedAdult_cd4_seurat$Age )
+DotPlot(pedAdult_cd4_seurat, group.by = "program.Age", features="SELPLG", scale=FALSE)
+  #scale_color_gradient(low="white", high="blue", limits=c(3.75,4.25))
+ ggsave(paste0(figure_dir_use, "DotPlot_CD4_byAge.Program.png"), width=5, height=6) 
 
 ## Plot SELPLG expression vs age in CD8, removing any samples without at least 10 CD8 cells + also adding in adult
     ## Remove samples with < 10 cells
@@ -434,6 +442,44 @@ DotPlot(pedAdult_cd8_seurat, group.by = "program.Age", features="SELPLG", scale=
             axis.title = element_text(face="bold", color="black"))+
       ylim(0,4)
     ggsave(paste0(figure_dir_use, "Age.vs.SELPLGexpression_includeAdult_excludeUnder5Cells.png"), width=5, height=4)
+    
+## SELPLG receptors-SELP, SELL, SELE
+    ## Tumor- by sample, cell type, subtype
+    DotPlot(tumor_seurat, features=c("SELP", "SELL", "SELE"), group.by = "sample",scale=FALSE)
+    ggsave(paste0(figure_dir_use, "Tumor_DotPlot_receptors_bySample.png"), width=6, height=6)
+    
+    DotPlot(tumor_seurat, features=c("SELP", "SELL", "SELE"), group.by = "CellAnnot", scale=FALSE)
+    ggsave(paste0(figure_dir_use, "Tumor_DotPlot_receptors_byCellType.png"), width=6, height=6)
+    
+    DotPlot(tumor_seurat, features=c("SELP", "SELL", "SELE"), group.by = "subtype", scale=FALSE)
+    ggsave(paste0(figure_dir_use, "Tumor_DotPlot_receptors_bySubtype.png"), width=6, height=4)
+    
+    ## Tumor- by sample, with adult and ped
+    tumor_adult_seurat$Age<- "Adult"; tumor_seurat$Age<- "Ped"
+    seurat_tmp<- merge(tumor_seurat, tumor_adult_seurat)
+    seurat_tmp$sample<- factor(seurat_tmp$sample, levels=c(unique(tumor_seurat$sample), unique(tumor_adult_seurat$sample)))
+    DotPlot(seurat_tmp, features=c("SELP", "SELL", "SELE"), group.by = "sample",scale=FALSE)
+    ggsave(paste0(figure_dir_use, "Tumor.pedAdult_DotPlot_receptors_bySample.png"), width=6, height=6)
+    
+    ## Myeloid- by sample, cell type, subtype
+    DotPlot(adult_myeloid_seurat, features=c("SELP", "SELL", "SELE"), group.by = "sampleid", scale=FALSE)
+    ggsave(paste0(figure_dir_use, "Myeloid_DotPlot_receptors_bySample.png"), width=6, height=6)
+    
+    DotPlot(ped_myeloid_seurat, features=c("SELP", "SELL", "SELE"), group.by = myeloid_program_name, scale=FALSE)
+    ggsave(paste0(figure_dir_use, "Myeloid_DotPlot_receptors_byCellType.png"), width=6, height=4)
+    
+    DotPlot(ped_myeloid_seurat, features=c("SELP", "SELL", "SELE"), group.by = "NiceSubtype", scale=FALSE)
+    ggsave(paste0(figure_dir_use, "Myeloid_DotPlot_receptors_bySubtype.png"), width=6, height=4)
+    
+    ## Tcell- by sample, cell type, subtype
+    DotPlot(ped_tcell_seurat, features=c("SELP", "SELL", "SELE"), group.by = "sample", scale=FALSE)
+    ggsave(paste0(figure_dir_use, "Tcell_DotPlot_receptors_bySample.png"), width=6, height=6)
+    
+    DotPlot(ped_tcell_seurat, features=c("SELP", "SELL", "SELE"), group.by = tcell_program_name, scale=FALSE)
+    ggsave(paste0(figure_dir_use, "Tcell_DotPlot_receptors_byCellType.png"), width=6, height=4)
+    
+    DotPlot(ped_tcell_seurat, features=c("SELP", "SELL", "SELE"), group.by = "NiceSubtype", scale=FALSE)
+    ggsave(paste0(figure_dir_use, "Tcell_DotPlot_receptors_bySubtype.png"), width=6, height=4)
 ```
 
 ## ANXA1

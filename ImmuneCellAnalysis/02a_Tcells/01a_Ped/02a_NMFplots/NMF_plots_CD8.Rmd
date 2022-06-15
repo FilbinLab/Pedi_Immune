@@ -72,6 +72,7 @@ subtype_colors<-  readRDS("../../../plot_colors/Subtype.Rds")
 ```
 
 ## Optional: remove inhibitory (may not be real CD8 program)
+No longer necessary! removed at source
 ```{r}
 program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
 cd8_seurat$tmp<- cd8_seurat@meta.data[[program_name]]
@@ -308,14 +309,13 @@ program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnno
 cd8_seurat$tmp<- cd8_seurat@meta.data[[program_name]]
 
 ## Order programs
-cd8_seurat$tmp<- factor(cd8_seurat$tmp, levels=c( "Effector.Memory", "Memory","Inhibitory.Cycling", "Predysfunctional",
-                                                 "Cytotoxic", "IFN.Response", "Stress"))
+cd8_seurat$tmp<- factor(cd8_seurat$tmp, levels=c( "Effector.Memory", "Memory", "Predysfunctional",
+                                                 "Cytotoxic.NKreceptor", "IFN.Response", "Stress", "Cycling"))
 
 ## Nature2020 scores + subset of GOI
-DotPlot(cd8_seurat, features=c("naive", "dysfunctional","predysfunctional", "cytotoxic", 
+DotPlot(cd8_seurat, features=c("naive", "dysfunctional","predysfunctional", "cytotoxic",
                                "ANXA1", "CCR7", "SELL", "TOP2A","CTLA4", "PDCD1", "LAG3","ITGAE", "GZMK",
-                               "GNLY", "PRF1", "IFIT1", "IFIT3"),
-        group.by = "tmp")+
+                               "GNLY", "PRF1", "IFIT1", "IFIT3"), group.by = "tmp")+
   theme(axis.text.x = element_text(angle=45, hjust=1),
         axis.text = element_text(face="bold", color="black"))+
   ylab("") + xlab("")+

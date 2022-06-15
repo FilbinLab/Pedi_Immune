@@ -73,18 +73,15 @@ annot_name<- paste0("detailed_annot_byNMFrank", rank_use, "_mergedBy", sharedBy)
 
 ## UMAP of programs
 ```{r}
-DimPlot(cd4_seurat, group.by = program_name)+scale_color_manual(values=colors_use)
+DimPlot(cd4_seurat, group.by = program_name)+scale_color_manual(values=program_colors)
 ggsave(paste0(figure_dir, "CD4_byProgram.png"), width=7, height=5)
 
-DimPlot(cd8_seurat, group.by = program_name)+scale_color_manual(values=colors_use)
+DimPlot(cd8_seurat, group.by = program_name)+scale_color_manual(values=program_colors)
 ggsave(paste0(figure_dir, "CD8_byProgram.png"), width=7, height=5)
 ```
 
 ## Breakdown of programs within cd4/cd8
 ```{r}
-
-
-
 ## Proportion of program by CD4/CD8
 meta<-data.frame(program=tcell_seurat@meta.data[[program_name]],
                  celltype=tcell_seurat@meta.data[[annot_name]],
@@ -436,14 +433,11 @@ ggsave(paste0(figure_dir, "CD8_Heatmap_CytoCD4.InhCD8.CD4.EM.png"), width=7, hei
 
 ## Based on the above, update NMF annotations as needed
 ```{r}
-program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy)
-new_program_name<- paste0(program_name, "_reAnnot")
-
-current_programs<- unique(as.character(tcell_seurat@meta.data[[program_name]]))
-
 ## Rank8, shared by union
-names(current_programs)<-c("Memory","Inhibitory", "Inhibitory.Cycling", "IFN.Response", "Stress", "Effector.Memory",
-                           "Predysfunctional", "Treg", "Cytotoxic")
+current_programs<-c("Memory", "Inhibitory", "Inhibitory.Cycling","IFN.Response", "Stress", "Effector.Memory",
+                    "Predysfunctional", "Treg", "Cytotoxic")
+names(current_programs)<-c("Memory","Inhibitory", "Cycling", "IFN.Response", "Stress", "Effector.Memory",
+                           "Predysfunctional", "Treg", "Cytotoxic.NKreceptor")
 
 ## Update seurat objects
 tcell_seurat@meta.data[[new_program_name]]<- as.character(plyr::mapvalues(tcell_seurat@meta.data[[program_name]],
@@ -462,18 +456,36 @@ program_markers$cluster<- as.character(plyr::mapvalues(program_markers$cluster, 
 ## Update program colors
 program_colors<- readRDS(paste0("../../../plot_colors/Tcell.programs_rank", rank_use, "sharedBy", sharedBy, ".Rds"))
 names(program_colors)<- plyr::mapvalues(names(program_colors), current_programs, names(current_programs))
+names(program_colors)<- gsub("Inhibitory.Cycling", "Cycling", gsub("Cytotoxic","Cytotoxic.NKreceptor", names(program_colors)))
 
 ## Update scores
-all_scores<- readRDS(paste0("../01_compare_NMF/analysis/newMarkers_deNovoPed.AdultTcell/",
-                            "scores_merged.ped.adultRank", rank, "_specific.sharedBy", sharedBy, ".Rds"))
-colnames(all_scores)<-plyr::mapvalues(colnames(all_scores), current_programs, names(current_programs))
-all_scores$MaxProgram<- plyr::mapvalues(all_scores$MaxProgram, current_programs, names(current_programs))
+  ## get list of all score files
+  score_dir<-"../02_detailed_annot/analysis/identifyCD4.CD8_byNMF/rank8_sharedByunion/"
+  score_files<- list.files(score_dir, pattern="_program_scores.Rds")
+  
+  ## Read in and update
+  all_score_files<- lapply(score_files, function(x){
+    tmp<- readRDS(paste0(score_dir, x))
+    colnames(tmp)<-plyr::mapvalues(colnames(tmp), current_programs, names(current_programs))
+    if(sum(c("MaxProgram") %in% colnames(tmp)) != 0){
+      tmp$MaxProgram<- plyr::mapvalues(tmp$MaxProgram, current_programs, names(current_programs))
+    }
+    return(tmp)
+  })
+  names(all_score_files)<-score_files
+  
+  ## Export
+  for(file in names(all_score_files)){
+    tmp<- all_score_files[[file]]
+    saveRDS(tmp, file=paste0(score_dir, file))
+  }
 
 
 ## Update seurat list split by each program
 seurat_list<- readRDS(paste0("../02_detailed_annot/analysis/identifyCD4.CD8_byNMF/rank", rank_use,
                              "_sharedBy", sharedBy, "/seurat_list_splitByNMFrank", rank_use, ".Rds"))
 names(seurat_list)<- plyr::mapvalues(names(seurat_list), current_programs, names(current_programs))
+names(seurat_list)<- gsub("Inhibitory.Cycling", "Cycling", gsub("Cytotoxic","Cytotoxic.NKreceptor", names(seurat_list)))
 
 ## Save
 saveRDS(tcell_seurat, file=paste0(analysis_dir, "ped.adult_seurat_tcell_harmony.Rds"))
@@ -486,7 +498,7 @@ saveRDS(program_markers, paste0("../01_compare_NMF/analysis/newMarkers_deNovoPed
 saveRDS(program_colors, file=paste0("../../../plot_colors/Tcell.programs_rank", rank_use, "sharedBy", sharedBy, "_reAnnot.Rds"))
 
 saveRDS(all_scores, file=paste0("../01_compare_NMF/analysis/newMarkers_deNovoPed.AdultTcell/",
-                            "scores_merged.ped.adultRank", rank, "_specific.sharedBy", sharedBy, "_reAnnot.Rds"))
+                            "scores_merged.ped.adultRank", rank_use, "_specific.sharedBy", sharedBy, "_reAnnot.Rds"))
 
 saveRDS(seurat_list, file=paste0("../02_detailed_annot/analysis/identifyCD4.CD8_byNMF/rank", rank_use,
                              "_sharedBy", sharedBy, "/seurat_list_splitByNMFrank", rank_use, ".Rds"))
@@ -494,9 +506,30 @@ saveRDS(seurat_list, file=paste0("../02_detailed_annot/analysis/identifyCD4.CD8_
 
 ```
 
+## CD8 has a few "inhibitory" cells- very small count, especially in ped alone. May not actually be CD8- either way, too small to be meaningful
+These cells removed from CD8 as of 6/13/22. Clustering NOT re-run as the number of cells is so low
+Cell count: 32 adult CD8 inhibitory, 3 pediatric
+```{r}
+cd8_seurat<-readRDS(paste0(analysis_dir, "ped.adult_seurat_cd8_harmony.Rds"))
+tcell_seurat<-readRDS(paste0(analysis_dir, "ped.adult_seurat_tcell_harmony.Rds"))
+
+## Remove from cd8
+cd8_seurat<- subset(cd8_seurat, NMF_rank8_annot_mergedByunion_reAnnot != "Inhibitory")
+
+## Remove from all tcells
+tcell_seurat$remove<- ifelse(tcell_seurat$NMF_rank8_annot_mergedByunion_reAnnot=="Inhibitory" & tcell_seurat$detailed_annot_byNMFrank8_mergedByunion=="CD8",
+                             "remove", "keep")
+tcell_seurat<- subset(tcell_seurat, remove != "remove")
+tcell_seurat$remove<-NULL
+
+saveRDS(cd8_seurat, file=paste0(analysis_dir, "ped.adult_seurat_cd8_harmony.Rds"))
+saveRDS(tcell_seurat, file=paste0(analysis_dir, "ped.adult_seurat_tcell_harmony.Rds"))
+```
+
+
 ## Remove cycling from CD8, rerun clustering- does Inhibitory.Cycling still cluster separately?
 ```{r}
-cycling_genes<- read.table(paste0(base_dir,"Dropbox (Partners HealthCare)/FilbinLab/data_analysis/",
+cycling_genes<- read.table(paste0(base_dir,"Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/",
                                 "Marker_genes/regev_lab_cell_cycle_genes.txt"))
 
 cm<- cd8_seurat@assays$RNA@counts
@@ -507,13 +540,17 @@ cd8_seurat_noCycling<- AddMetaData(cd8_seurat_noCycling,
                                    cd8_seurat@meta.data[,!colnames(cd8_seurat@meta.data) %in%
                                                           colnames(cd8_seurat_noCycling@meta.data)])
 
-DimPlot(cd8_seurat_noCycling, group.by = "tmp") +
+DimPlot(cd8_seurat_noCycling, group.by = "NMF_rank8_annot_mergedByunion_reAnnot") +
   scale_color_manual(values=program_colors)
 saveRDS(cd8_seurat_noCycling, file=paste0(analysis_dir, "cd8_seurat_harmony_no.cycling.genes.Rds"))
 ```
 
 ## Split by ped/adult
 ```{r}
+cd8_seurat<-readRDS(paste0(analysis_dir, "ped.adult_seurat_cd8_harmony.Rds"))
+cd4_seurat<-readRDS(paste0(analysis_dir, "ped.adult_seurat_cd4_harmony.Rds"))
+tcell_seurat<-readRDS(paste0(analysis_dir, "ped.adult_seurat_tcell_harmony.Rds"))
+
 ## Pediatric
 ped_cd8_seurat<- subset(cd8_seurat, Age=="Ped")
 ped_cd4_seurat<- subset(cd4_seurat, Age=="Ped")

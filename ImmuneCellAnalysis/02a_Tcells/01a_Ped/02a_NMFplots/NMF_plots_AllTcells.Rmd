@@ -17,6 +17,7 @@ library(clusterProfiler)
 library(biomaRt)
 library(stringr)
 library(harmony)
+library(ggpubr)
 
 base_dir = "/Users/jlabelle/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
@@ -64,6 +65,7 @@ program_markers<- readRDS(paste0("../../02_Ped.Adult/01_compare_NMF/analysis/new
                                  "new_markers_NMFrank", rank_use, "_bySeurat_sharedBy", sharedBy, "_reAnnot.Rds"))
 
 
+
 ## Read in colors to use
 program_colors<- readRDS(paste0("../../../plot_colors/Tcell.programs_rank", rank_use, "sharedBy", sharedBy, "_reAnnot.Rds"))
 celltype_colors<- readRDS(paste0("../../../plot_colors/Tcell.celltypes.Rds"))
@@ -71,6 +73,7 @@ subtype_colors<-  readRDS("../../../plot_colors/Subtype.Rds")
 ```
 
 ## Optional: remove inhibitory (may not be real CD8 program)
+No longer necessary- removed at source
 ```{r}
 program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
 tcell_seurat$tmp<- paste0(tcell_seurat$detailed_annot_byNMFrank8_mergedByunion,  tcell_seurat@meta.data[[program_name]])
@@ -100,29 +103,53 @@ all_markers$cluster<- as.character(all_markers$cluster)
 
 
 
-## Plot heatmaps of top marker gene expression- pseudobulk by CD4/CD8
+## Plot heatmaps of top marker gene expression
 ```{r}
 rank<- "8"
-sharedBy<- "union"
 add_lines<- TRUE
 program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
-bySubtype<- TRUE
+grouping_variable<- "detailed_annot" ## variable to pseudobulk by. "Subtype", "Age", "detailed_annot"
 
+top_markers<-all_markers
+program_order<- c("Cytotoxic\nNKreceptor", "Predysfunctional", "Inhibitory", "Treg", "Cycling", "IFN\nResponse", "Memory","Effector\nMemory", "Stress")
+
+## Order markers
+top_markers$cluster<- factor(top_markers$cluster, levels=gsub("\n", "\\.", program_order))
+top_markers<- top_markers[order(top_markers$cluster),]
+top_markers$cluster<- as.character(top_markers$cluster)
 
 ## Pseudobulk
-tcell_seurat$PB_variable<- paste0(tcell_seurat$detailed_annot_byNMFrank8_mergedByunion, 
-                                  "_", gsub("\\.", "\n", tcell_seurat@meta.data[[program_name]]))
+if(grouping_variable=="Subtype"){
+  tcell_seurat$SubtypeEdit<- gsub("Hemispheric-BCOR", "BCOR", gsub("Hemispheric-H3G34R/V", "H3G34R/V", gsub("Midline-H3K27M", "H3K27M",
+                           gsub("GBM", "Adult.GBM",gsub("IDH-G", "Adult.IDH-G", tcell_seurat$NiceSubtype)))))
+  tcell_seurat$PB_variable<- paste0(tcell_seurat$SubtypeEdit, "_",
+                                gsub("\\.", "\n", tcell_seurat@meta.data[[program_name]]))
+  figure_append<- "_bySubtype"
+}else if(grouping_variable=="Age"){
+  tcell_seurat$PB_variable<- paste0(tcell_seurat$Age, "_", 
+                                gsub("\\.", "\n", tcell_seurat@meta.data[[program_name]]))
+  figure_append<- "_byAge"
+} else if(grouping_variable== "detailed_annot"){
+  tmp<- paste0(grouping_variable, "_byNMFrank", rank_use, "_mergedBy", sharedBy)
+  tcell_seurat$PB_variable<- paste0(tcell_seurat@meta.data[[tmp]], "_", 
+                                gsub("\\.", "\n", tcell_seurat@meta.data[[program_name]]))
+  figure_append<- "_byDetailedAnnot"
+}
 
-
+## Pseudobulk
 pb<- pseudobulk_byVariable(tcell_seurat@assays$RNA@counts, tcell_seurat@meta.data, "PB_variable")
+
+## Remove "Unclear" (for detailed_annot)
+pb<-pb[,!grepl("Unclear", colnames(pb))]
 
 ## center and score
 pb_list<- NormCenter(pb)
 pb_center<- pb_list$center_data
 
+
 ## Plot
 p<- myHeatmap(pb_center, GOI=top_markers$gene, min.value = -3, max.value = 3, 
-              orderFactors =  gsub("\\.", "\n", unique(top_markers$cluster))) +
+              orderFactors =  gsub("\\.", "\n", program_order)) +
   scale_fill_gradient2(high="red", low="blue", mid="white", name="Centered log2(TPM)")
 
 ## Add horizontal lines around each set of nmf genes
@@ -142,7 +169,7 @@ if(add_lines){
 }else{p}
 
   
-ggsave(paste0(figure_dir, "Heatmap_TopNMFgenes_annot_rank", rank, ".png"), width=17, height=11)
+ggsave(paste0(figure_dir, "AllTcells_Heatmap_TopNMFgenes_annot_rank", rank,figure_append, ".png"), width=16, height=11)
 
 
 ```
@@ -171,74 +198,7 @@ cowplot::plot_grid(plotlist=all_plots, ncol = 2)
 ggsave(paste0(figure_dir, "CD8_UMAP_indv.png"), width=6, height=10)
 ```
 
-## Density plots
-```{r}
-## Read in scores for programs
-rank<- "8"
-sharedBy<- "union"
-program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
 
-## remove GBM? Very few cells
-removeGBM<- TRUE
-
-if(removeGBM){
-  tcell_seurat_use<- subset(tcell_seurat, NiceSubtype != "Hemispheric-HistoneWT")
-}else{
-  tcell_seurat_use<- tcell_seurat
-}
-## Create df for plotting
-df<-tcell_seurat_use@meta.data[,c("sampleid", "NiceSubtype", program_name)]
-scores_use<- all_scores[rownames(all_scores) %in% rownames(df),]
-sum(rownames(scores_use) == rownames(df)); nrow(scores_use); nrow(df)
-df<- cbind(df, scores_use[,!grepl("Max", colnames(scores_use))] )
-
-
-## get number of cells per subtype, add to df
-nCells<- as.data.frame(table(tcell_seurat_use$NiceSubtype))
-df$NCells<- plyr::mapvalues(tcell_seurat_use$NiceSubtype, nCells$Var1, nCells$Freq)
-df$JustSubtype<- df$NiceSubtype
-df$NiceSubtype<- paste0(df$NiceSubtype, "\n", "nCells=",df$NCells)
-
-
-colors_use<- subtype_colors
-names(colors_use)<- plyr::mapvalues(names(colors_use), df$JustSubtype, df$NiceSubtype, warn_missing=FALSE)
-
-
-
-## Plot each nmf program
-all_plots<- list()
-for(i in as.character(unique(tcell_seurat_use@meta.data[[program_name]]))){
-  print(i)
-  df_tmp<- df[,c(i, "NiceSubtype")]
-  colnames(df_tmp)<- c("score", "NiceSubtype")
-  p<-ggplot(df_tmp, aes(x=score, fill=NiceSubtype))+
-    geom_density(alpha=0.6)+
-    ggtitle(i)+
-    scale_fill_manual(values=colors_use)+
-    theme_classic()+
-    theme(legend.title = element_blank(),
-          legend.position = "none",
-          plot.title = element_text(size=20, face="bold", hjust=0.5))
-
-  all_plots[[i]]<-p
-}
-
-## add legend separately
-legend<-ggplot(df_tmp, aes(x=score, fill=NiceSubtype))+
-    geom_density(alpha=0.6)+
-    ggtitle(i)+
-    scale_fill_manual(values=colors_use)+
-    theme_classic()+
-    theme(legend.title = element_blank(),
-          legend.key.size = unit(1.5, 'cm'),
-          legend.text = element_text(size=20))
-all_plots$legend<-  as_ggplot(get_legend(legend))
-cowplot::plot_grid(plotlist = all_plots, ncol=3)
-
-filename<- ifelse(removeGBM,"Density_NMFScoreBySubtype_noGBM", "Density_NMFScoreBySubtype" )
-ggsave(paste0(figure_dir, filename, ".png"), width=15, height=12)
-
-```
 
 ## Programs by subtype
 ```{r}
@@ -292,137 +252,10 @@ ggsave(paste0(figure_dir,filename, ".png"), width=5, height=4)
 ```
 
 
-## Plot GOI+ Nature2020 genesets (and individual GOI from these genesets) for each program
-```{r}
-program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
-tcell_seurat$tmp<- tcell_seurat@meta.data[[program_name]]
-
-## Nature2020 scores + subset of GOI
-DotPlot(tcell_seurat, features=c("naive", "cytotoxic", "predysfunctional", "dysfunctional",
-                               "ENTPD1", "ITGAE", "TNFRSF9", "CCL4L1", "PDCD1", "CTLA4", "LAG3", "GZMK", "GNLY"),
-        group.by = "tmp")+
-  theme(axis.text.x = element_text(angle=45, hjust=1),
-        axis.text = element_text(face="bold", color="black"))+
-  ylab("") + xlab("")
-ggsave(paste0(figure_dir, "DotPlot_Nature2020.GOI_byProgram.png"), width=8, height=5)
-
-## Inhibitory GOI
-DotPlot(tcell_seurat, features=c( "ITGAE", "TNFRSF9",  "PDCD1", "CTLA4", "LAG3", "TIGIT", "KLRB1", "HLA-DRA", "PTGER2"),
-        group.by = "tmp")+
-  theme(axis.text.x = element_text(angle=45, hjust=1),
-        axis.text = element_text(face="bold", color="black"))+
-  ylab("") + xlab("")
-ggsave(paste0(figure_dir, "DotPlot_Inhibitory.GOI_byProgram.png"), width=8, height=5)
-```
 
 
 
-## Plot scores for Nature2020 genesets (cytotoxic, dysfunctional, naive, predysfunctional), colored by program
-```{r}
-program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
-tcell_seurat$tmp<- tcell_seurat@meta.data[[program_name]]
 
-df<- tcell_seurat@meta.data[,c("tmp", "naive", "cytotoxic", "predysfunctional", "dysfunctional")]
-
-## option 1: cyto/naive on 1 scale, predys/dys on the other scale
-df$scale1<- df$cytotoxic-df$naive
-df$scale2<- df$dysfunctional - df$predysfunctional
-ggplot(df, aes(x=scale1, y=scale2, color=tmp))+
-  geom_point()+
-  xlab("high naive ----------> high cytotoxic")+
-  ylab("high predysfunctional ---------->  high dysfunctional")+
-  scale_color_manual(values=program_colors)+
-  ylim(-4, 4)
-
- ## color separately for each program
-  all_plots<- lapply(unique(df$tmp), function(x){
-    df_tmp<- df
-    df_tmp$tmp<- ifelse(df_tmp$tmp==x, x, "Other")
-    ggplot(df_tmp, aes(x=scale1, y=scale2, color=tmp, alpha=tmp))+
-      geom_point()+
-      theme_bw()+
-      xlab("high naive ----------> high cytotoxic")+
-      ylab("high predysfunctional ---------->  high dysfunctional")+
-      scale_color_manual(values=c(program_colors, Other="grey"))+
-      scale_alpha_manual(values=c(Other=0.2))+
-      theme(legend.position = "none",
-            axis.text = element_text(face="bold", color="black"),
-            axis.title = element_text(face="bold", color="black", size=7),
-            title = element_text(face="bold", size=12))+
-      ylim(-4,4)+
-      ggtitle(x)
-  })
-  cowplot::plot_grid(plotlist=all_plots, ncol=3)
-  ggsave(paste0(figure_dir, "Nature2020Genesets.NaivCytoDysPredys_scoresByCell_indv.png"), width=9, height = 9)
-
-## Option 2: no naive score, just cyto on 1 scale, predys/dys on other scale
-df$scale1<- df$cytotoxic
-df$scale2<- df$dysfunctional - df$predysfunctional
-ggplot(df, aes(x=scale1, y=scale2, color=tmp))+
-  geom_point()+
-  xlab("low cytotoxic ----------> high cytotoxic")+
-  ylab("high predysfunctional ---------->  high dysfunctional")+
-  scale_color_manual(values=program_colors)
-  
-  ## color separately for each program
-  all_plots<- lapply(unique(df$tmp), function(x){
-    df_tmp<- df
-    df_tmp$tmp<- ifelse(df_tmp$tmp==x, x, "Other")
-    ggplot(df_tmp, aes(x=scale1, y=scale2, color=tmp, alpha=tmp))+
-      geom_point()+
-      theme_bw()+
-      xlab("low cytotoxic ----------> high cytotoxic")+
-      ylab("high predysfunctional ---------->  high dysfunctional")+
-      scale_color_manual(values=c(program_colors, Other="grey"))+
-      scale_alpha_manual(values=c(Other=0.2))+
-      theme(legend.position = "none",
-            axis.text = element_text(face="bold", color="black"),
-            axis.title = element_text(face="bold", color="black", size=7),
-            title = element_text(face="bold", size=12))+
-      ylim(-4,4)+
-      ggtitle(x)
-  })
-  cowplot::plot_grid(plotlist=all_plots, ncol=3)
-  ggsave(paste0(figure_dir, "Nature2020Genesets.CytoDysPredys_scoresByCell_indv.png"), width=9, height = 9)
-  
-## Option 3: only predysfunction/cytotoxic
-df$scale2<- df$cytotoxic
-df$scale1<- df$predysfunctional
-ggplot(df, aes(x=scale1, y=scale2, color=tmp))+
-  geom_point()+
-  theme_bw()+
-  ylab("low cytotoxic ----------> high cytotoxic")+
-  xlab("low predysfunctional ---------->  high predysfunctional")+
-  scale_color_manual(values=program_colors)+
-  theme(axis.text = element_text(face="bold", color="black"),
-        axis.title = element_text(face="bold", color="black", size=7),
-        title = element_text(face="bold", size=12))+
-  xlim(-4,4)+ylim(-2.5, 5)
-
-  ## color separately for each program
-  all_plots<- lapply(unique(df$tmp), function(x){
-    df_tmp<- df
-    df_tmp$tmp<- ifelse(df_tmp$tmp==x, x, "Other")
-    ggplot(df_tmp, aes(x=scale1, y=scale2, color=tmp, alpha=tmp))+
-      geom_point()+
-      theme_bw()+
-      ylab("low cytotoxic ----------> high cytotoxic")+
-      xlab("low predysfunctional ---------->  high predysfunctional")+
-      scale_color_manual(values=c(program_colors, Other="grey"))+
-      scale_alpha_manual(values=c(Other=0.2))+
-      theme(legend.position = "none",
-            axis.text = element_text(face="bold", color="black"),
-            axis.title = element_text(face="bold", color="black", size=7),
-            title = element_text(face="bold", size=12))+
-      ggtitle(x)+
-      xlim(-4,4)+ylim(-2.5, 5)
-  })
-  cowplot::plot_grid(plotlist=all_plots, ncol=3)
-  ggsave(paste0(figure_dir, "
-                Nature2020Genesets.CytoPredys_scoresByCell_indv.png"), width=9, height = 9)
-  
-  
-```
 
 
 

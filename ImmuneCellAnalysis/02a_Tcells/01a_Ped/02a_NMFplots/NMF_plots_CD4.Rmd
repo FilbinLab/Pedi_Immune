@@ -60,9 +60,13 @@ cd4_seurat<- readRDS(paste0(data_dir, "ped_seurat_cd4_harmony.Rds"))
 program_markers<- readRDS(paste0("../../02_Ped.Adult/01_compare_NMF/analysis/newMarkers_deNovoPed.AdultTcell/", 
                                  "new_markers_NMFrank", rank_use, "_bySeurat_sharedBy", sharedBy, "_reAnnot.Rds"))
 
+## Read in marker genes
+program_markers<- readRDS(paste0("../../02_Ped.Adult/01_compare_NMF/analysis/newMarkers_deNovoPed.AdultTcell/", 
+                                 "new_markers_NMFrank", rank_use, "_bySeurat_sharedBy", sharedBy, "_reAnnot.Rds"))
 ## Read in scores
 all_scores<- readRDS(paste0("../../02_Ped.Adult/02_detailed_annot/analysis/identifyCD4.CD8_byNMF/",
                               "rank", rank_use, "_sharedBy",sharedBy, "/ped_cd4_program_scores.Rds"))
+
 
 ## Read in colors to use
 program_colors<- readRDS(paste0("../../../plot_colors/Tcell.programs_rank", rank_use, "sharedBy", sharedBy, "_reAnnot.Rds"))
@@ -296,7 +300,7 @@ program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnno
 cd4_seurat$tmp<- cd4_seurat@meta.data[[program_name]]
 
 ## Order programs
-cd4_seurat$tmp<- factor(cd4_seurat$tmp, levels=c( "Effector.Memory", "Memory","Inhibitory.Cycling", "Inhibitory",
+cd4_seurat$tmp<- factor(cd4_seurat$tmp, levels=c( "Effector.Memory", "Memory","Cycling", "Inhibitory",
                                                  "Treg", "IFN.Response", "Stress"))
 
 ## Nature2020 scores + subset of GOI

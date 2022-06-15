@@ -17,6 +17,7 @@ library(clusterProfiler)
 library(biomaRt)
 library(stringr)
 library(harmony)
+library(ggpubr)
 
 base_dir = "/Users/jlabelle/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
@@ -38,11 +39,11 @@ source(nmf_helper)
 
 ```
 
-## Read in ped tcell seurat object. Contains NMF assignments (annots added in deNovoPedTcell.v.deNovoAdultTcell, based on correlation with adult T cell + correlation with ped cd4/cd8 programs)
+## Read in data
 ```{r}
 rank_use<-8
 sharedBy<- "union" 
-data_dir<- paste0("../02_detailed_annot/analysis/identifyCD4.CD8_byNMF/", "rank",rank_use, "_sharedBy", sharedBy, "/" )
+data_dir<- paste0("../03_Visualize.Reannotate_programs/analysis/Reannotate_programs/", "rank",rank_use, "_sharedBy", sharedBy, "/" )
 
 ## figure/analysis dir based on rank + how shared programs are merged
 figure_dir<- paste0(figure_dir_tmp, "rank", rank_use, "_sharedBy", sharedBy, "/")
@@ -51,13 +52,14 @@ analysis_dir<- paste0(analysis_dir_tmp, "rank", rank_use, "_sharedBy", sharedBy,
 if(!dir.exists(figure_dir)){dir.create(figure_dir,recursive = TRUE)}
 if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
   
-## ped/adult tcell seurat objects
+## ped/adult tcell seurat object
 cd8_seurat<- readRDS(paste0(data_dir, "ped.adult_seurat_cd8_harmony.Rds"))
 
 
 ## Read in marker genes
 program_markers<- readRDS(paste0("../01_compare_NMF/analysis/newMarkers_deNovoPed.AdultTcell/", 
                                  "new_markers_NMFrank", rank_use, "_bySeurat_sharedBy", sharedBy, "_reAnnot.Rds"))
+
 
 ## Read in scores
 all_scores<- readRDS(paste0("../01_compare_NMF/analysis/newMarkers_deNovoPed.AdultTcell/",
@@ -326,24 +328,30 @@ ggsave(paste0(figure_dir, "CD8_NumericAge.vs.ProgramProportion.png"), width=10, 
 ## Plot GOI+ Nature2020 genesets (and individual GOI from these genesets) for each program
 ```{r}
 program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
-cd8_seurat$tmp<- cd8_seurat@meta.data[[program_name]]
+
+
+## Order programs
+cd8_seurat$tmp<- factor(cd8_seurat@meta.data[[program_name]], levels=c( "Memory","Cycling", "Predysfunctional", "Cytotoxic.NKreceptor",
+                                                                       "Stress", "Effector.Memory", "IFN.Response"))
 
 ## Nature2020 scores + subset of GOI
-DotPlot(cd8_seurat, features=c(names(all_markers),
+DotPlot(cd8_seurat, features=c("naive", "dysfunctional",  "predysfunctional","cytotoxic",
                                "ENTPD1", "ITGAE", "TNFRSF9", "CCL4L1", "PDCD1", "CTLA4", "LAG3", "GZMK", "GNLY"),
         group.by = "tmp")+
   theme(axis.text.x = element_text(angle=45, hjust=1),
         axis.text = element_text(face="bold", color="black"))+
-  ylab("") + xlab("")
-ggsave(paste0(figure_dir, "CD8_DotPlot_Nature2020.GOI_byProgram.png"), width=8, height=5)
+  ylab("") + xlab("")+
+  coord_flip()
+ggsave(paste0(figure_dir, "CD8_DotPlot_Nature2020.GOI_byProgram.png"), width=6, height=6)
 
 ## Inhibitory GOI
 DotPlot(cd8_seurat, features=c( "ITGAE", "TNFRSF9",  "PDCD1", "CTLA4", "LAG3", "TIGIT", "KLRB1", "HLA-DRA"),
         group.by = "tmp")+
   theme(axis.text.x = element_text(angle=45, hjust=1),
         axis.text = element_text(face="bold", color="black"))+
-  ylab("") + xlab("")
-ggsave(paste0(figure_dir, "CD8_DotPlot_Inhibitory.GOI_byProgram.png"), width=8, height=5)
+  ylab("") + xlab("")+
+  coord_flip()
+ggsave(paste0(figure_dir, "CD8_DotPlot_Inhibitory.GOI_byProgram.png"), width=6, height=5)
 ```
 
 
@@ -351,12 +359,13 @@ ggsave(paste0(figure_dir, "CD8_DotPlot_Inhibitory.GOI_byProgram.png"), width=8, 
 ## Plot scores for Nature2020 genesets (cytotoxic, dysfunctional, naive, predysfunctional), colored by program
 ```{r}
 program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
+
 cd8_seurat$tmp<- cd8_seurat@meta.data[[program_name]]
 
-df<- cd8_seurat@meta.data[,c("tmp", names(all_markers))]
+df<- cd8_seurat@meta.data[,c("tmp", c("naive", "dysfunctional",  "predysfunctional","cytotoxic"))]
 
 ## option 1: cyto/naive on 1 scale, predys/dys on the other scale
-df$scale2<- df$cytotoxic-df$naive
+df$scale1<- df$cytotoxic-df$naive
 df$scale2<- df$dysfunctional - df$predysfunctional
 ggplot(df, aes(x=scale1, y=scale2, color=tmp))+
   geom_point()+

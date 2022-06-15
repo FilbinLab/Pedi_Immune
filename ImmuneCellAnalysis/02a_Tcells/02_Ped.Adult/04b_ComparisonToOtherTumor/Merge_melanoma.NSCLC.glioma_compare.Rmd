@@ -37,7 +37,7 @@ source(nmf_helper)
 ```{r}
 rank_use<-8
 sharedBy<- "union" 
-data_dir<- paste0("../02_detailed_annot/analysis/identifyCD4.CD8_byNMF/", "rank",rank_use, "_sharedBy", sharedBy, "/" )
+data_dir<- paste0("../03_Visualize.Reannotate_programs/analysis/Reannotate_programs/", "rank",rank_use, "_sharedBy", sharedBy, "/" )
 
 ## Read in seurat objects
 nsclc_cd8<- readRDS("analysis/NSCLC/cd8_seurat_nsclc.Rds")
@@ -50,16 +50,16 @@ melanoma_cd4<- readRDS("analysis/melanoma/cd4_seurat_melanoma.Rds")
 
 ## May remove this- no programs for melanoma
   ## Read in marker genes for programs
-  nsclc_cd8_markers<- read.csv(paste0(analysis_dir, "nsclc_cd8_cluster_markers_annot.csv"))
+  nsclc_cd8_markers<- read.csv("analysis/NSCLC/nsclc_cd8_cluster_markers_annot.csv")
   glioma_markers<- readRDS(paste0("../01_compare_NMF/analysis/newMarkers_deNovoPed.AdultTcell/", 
                                    "new_markers_NMFrank", rank_use, "_bySeurat_sharedBy", sharedBy, "_reAnnot.Rds"))
   
-  nsclc_cd4_markers<- read.csv(paste0(analysis_dir, "nsclc_cd4_cluster_markers_annot.csv"))
+  nsclc_cd4_markers<- read.csv("analysis/NSCLC/nsclc_cd4_cluster_markers_annot.csv")
   
 ## Read in colors to use- add on nsclc-specific programs
   program_colors<- readRDS(paste0("../../../plot_colors/Tcell.programs_rank", rank_use, "sharedBy", sharedBy, "_reAnnot.Rds"))
   program_colors<- c(program_colors, CD28="pink", Naive="skyblue4", MAIT="brown", Predysfunctional.2="lightsalmon1",
-                     Dysfunctional="violetred")
+                     Dysfunctional="violetred", Cytotoxic="yellowgreen")
   program_colors<-c(program_colors, CD69="pink", GZMA="brown",ANXA1="lightsalmon3", ActivatedTreg="gold")
   program_colors<- c(program_colors, M0="grey", M1="grey", M2="grey", M3="grey", M4="grey", M5="grey")
 ```
@@ -145,7 +145,7 @@ merge_cd8$maxGeneset_lowScore<- ifelse(merge_cd8$maxGeneset_score<0.2, "ScoreToo
 
 ## Plot
 DimPlot(merge_cd8, group.by = "maxGeneset_lowScore")
-ggsave(paste0(figure_dir, "UMAP_maxNature2020Score.png"), width=6, height=5)
+ggsave(paste0(figure_dir, "CD8_UMAP_maxNature2020Score.png"), width=6, height=5)
 
 ## Proportion by tumor type
 bd<- as.data.frame(table(merge_cd8$maxGeneset_lowScore, merge_cd8$TumorType))
@@ -153,7 +153,7 @@ colnames(bd)<- c("Geneset", "TumorType", "NCells")
 bd<- bd %>% group_by(TumorType) %>% mutate(perCells=NCells/sum(NCells)) %>% as.data.frame()
 ggplot(bd, aes(x=TumorType,y=perCells, fill=Geneset))+
   geom_bar(stat="identity")
-ggsave(paste0(figure_dir, "ProportionNature2020_byTumorType.png"), width=4, height=4)
+ggsave(paste0(figure_dir, "CD8_ProportionNature2020_byTumorType.png"), width=4, height=4)
 
 ## Expressin of GOI by tumor type + max geneset
 merge_cd8$maxGeneset_byTumor<- paste0(merge_cd8$maxGeneset_lowScore, "_", merge_cd8$TumorType)
@@ -163,7 +163,9 @@ DotPlot(merge_cd8, group.by = "maxGeneset_byTumor",
                    "PRF1", "GNLY", "GZMA", 
                    "SELPLG", "KLRB1", "PTGER2"))+
   theme(axis.text.x = element_text(angle=45, hjust=1))
-ggsave(paste0(figure_dir, "Dotplot_GOI_byNature2020MaxProgram.png"), width=8, height = 6)
+ggsave(paste0(figure_dir, "CD8_Dotplot_GOI_byNature2020MaxProgram.png"), width=8, height = 6)
+
+saveRDS(merge_cd8, file=paste0(analysis_dir, "cd8_seurat_nsclc.glioma.melanoma.Rds"))
 ```
 
 ## Basic plots
@@ -174,36 +176,36 @@ merge_cd4<- readRDS(paste0(analysis_dir, "cd4_seurat_nsclc.glioma.melanoma.Rds")
 ## CD8
   ## By glioma/nsclc/melanoma
   DimPlot(merge_cd8, group.by = "TumorType", label=FALSE)
-  ggsave(paste0(figure_dir, "UMAP_byTumorType.png"), width=5, height=4.5)
+  ggsave(paste0(figure_dir, "CD8_UMAP_byTumorType.png"), width=5, height=4.5)
   
   ## By cell type
   DimPlot(merge_cd8, group.by = "cellAnnot")+
     scale_color_manual(values=program_colors)
-  ggsave(paste0(figure_dir, "UMAP_byCellType.png"), width=11, height=9)
+  ggsave(paste0(figure_dir, "CD8_UMAP_byCellType.png"), width=11, height=9)
 
   
   ## Dotplot of inhibitory GOI by tumor type
   DotPlot(merge_cd8, group.by = "TumorType", 
             features=c("PDCD1", "HAVCR2", "TIGIT", "CTLA4", "GZMK", "ITGAE"))+
       theme(axis.text.x = element_text(angle=45, hjust=1))
-  ggsave(paste0(figure_dir, "Dotplot_CD8_InhibitoryGOI_byTumorType.png"), width=6, height=6)
+  ggsave(paste0(figure_dir, "CD8_Dotplot_InhibitoryGOI_byTumorType.png"), width=6, height=6)
   
   ## Dotplot of  GOI by tumor type
   DotPlot(merge_cd8, group.by = "TumorType", 
             features=c("CD8A", "SELPLG", "PTGER2", "KLRB1"), scale=FALSE)+
       theme(axis.text.x = element_text(angle=45, hjust=1))
-  ggsave(paste0(figure_dir, "Dotplot_CD8_GOI_byTumorType.png"), width=5, height=4)
+  ggsave(paste0(figure_dir, "CD8_Dotplot_GOI_byTumorType.png"), width=5, height=4)
  
   
 ## CD4
   ## By glioma/nsclc
-  DimPlot(merge_cd4, group.by = "TumorType", label=TRUE)+NoLegend()
-  ggsave(paste0(figure_dir, "UMAP_CD4_byTumorType.png"), width=5, height=5)
+  DimPlot(merge_cd4, group.by = "TumorType")
+  ggsave(paste0(figure_dir, "CD4_UMAP_byTumorType.png"), width=5, height=5)
   
   ## By cell type
   DimPlot(merge_cd4, group.by = "cellAnnot")+
     scale_color_manual(values=program_colors[names(program_colors) %in% unique(merge_cd4$cellAnnot)])
-  ggsave(paste0(figure_dir, "UMAP_CD4_byCellType.png"), width=10, height=9)
+  ggsave(paste0(figure_dir, "CD4_UMAP_byCellType.png"), width=10, height=9)
   
   ## Dotplot of GOI
   merge_cd4$cellAnnot_byTumor<- paste0( merge_cd4$cellAnnot, "_", merge_cd4$TumorType)
@@ -212,102 +214,93 @@ merge_cd4<- readRDS(paste0(analysis_dir, "cd4_seurat_nsclc.glioma.melanoma.Rds")
                      "CXCR1", "PRF1", "GNLY",
                      "GZMK", "ITGAE", "PDCD1", "HAVCR2", "TIGIT", "CTLA4"))+
       theme(axis.text.x = element_text(angle=45, hjust=1))
-  ggsave(paste0(figure_dir, "Dotplot_CD4_GOI_byCellType.png"), width=10, height=6)
+  ggsave(paste0(figure_dir, "CD4_Dotplot_GOI_byCellType.png"), width=10, height=6)
   
 
 
 
 ```
 
-## Score all cells for glioma and nsclc gene sets, correlate scores
+## Generate new marker genes based on Nature2020 assignment (for CD8 only)
 ```{r}
-## CD8
-  ## Remove Tregs and Inhibitory- cd4 specifc
-  glioma_markers<- glioma_markers[!glioma_markers$cluster %in% c("Treg", "Inhibitory"),]
-  
-  ## Subset markers to top 100 (may be fewer than this) for each program
-  glioma_top_markers<- glioma_markers %>% group_by(cluster) %>% top_n(n=100, wt=avg_log2FC) %>% as.data.frame()
-  nsclc_top_markers<- nsclc_cd8_markers %>% group_by(Cluster) %>% top_n(n=100, wt=F) %>% as.data.frame()
-  
-  ## Split into list
-  glioma_marker_list<- split(glioma_top_markers, f=glioma_top_markers$cluster)
-  glioma_marker_list<- lapply(glioma_marker_list, function(x){x$gene})
-  names(glioma_marker_list)<- paste0("Glioma_", names(glioma_marker_list))
-  
-  nsclc_marker_list<- split(nsclc_top_markers, f=nsclc_top_markers$Cluster)
-  nsclc_marker_list<- lapply(nsclc_marker_list, function(x){x$Gene.Symbol})
-  names(nsclc_marker_list)<- paste0("NSCLC_", names(nsclc_marker_list))
-  all_markers<-c(glioma_marker_list, nsclc_marker_list)
-  
-  ## Norm/center
-  cm_list<-NormCenter(merge_cd8@assays$RNA@counts)
-  cm_mean<- rowMeans(log2(cm_list$raw_data+1))
-  
-  ## Score
-  scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, all_markers)))
-  
-  ## Correlate and plot heatmap
-  scores_factor_hc = clusterNmfFactors(scores)
-  scores_factor_cor = scores_factor_hc$cor_coef[scores_factor_hc$hc_obj$order, scores_factor_hc$hc_obj$order]
-  
-  ## Heatmap of correlations
-  hm_colors = rev((brewer.pal(n=9, name="RdBu")))
-  hm_colors = colorRampPalette(colors = hm_colors)
-  pheatmap(scores_factor_cor, color = hm_colors(100), 
-           cluster_rows = F, cluster_cols = F, 
-           annotation_names_row = F, annotation_names_col =T,
-           show_rownames = T, show_colnames = F,
-           filename = paste0(figure_dir, "Cor_CD8programs_Glioma.vs.NSCLC.png"),
-           width = 8, height = 4)
-  
-  ## Dendrogram of hierarchical clustering 
-  jpeg(filename=paste0(figure_dir, "HC_CD8programs_Glioma.vs.NSCLC.png"), width = 400, height = 600)
-  plot(scores_factor_hc$hc_obj)
-  dev.off()
-  
-## CD4
-  ## Remove cd8-specific markers
-  glioma_markers<- glioma_markers[!glioma_markers$cluster %in% c("Cytotoxic","Predysfunctional"),]
-  
-  ## Subset markers to top 100 (may be fewer than this) for each program
-  glioma_top_markers<- glioma_markers %>% group_by(cluster) %>% top_n(n=100, wt=avg_log2FC) %>% as.data.frame()
-  nsclc_top_markers<- nsclc_cd4_markers %>% group_by(Cluster) %>% top_n(n=100, wt=F) %>% as.data.frame()
-  
-  ## Split into list
-  glioma_marker_list<- split(glioma_top_markers, f=glioma_top_markers$cluster)
-  glioma_marker_list<- lapply(glioma_marker_list, function(x){x$gene})
-  names(glioma_marker_list)<- paste0("Glioma_", names(glioma_marker_list))
-  
-  nsclc_marker_list<- split(nsclc_top_markers, f=nsclc_top_markers$Cluster)
-  nsclc_marker_list<- lapply(nsclc_marker_list, function(x){x$Gene.Symbol})
-  names(nsclc_marker_list)<- paste0("NSCLC_", names(nsclc_marker_list))
-  all_markers<-c(glioma_marker_list, nsclc_marker_list)
-  
-  ## Norm/center
-  cm_list<-NormCenter(merge_cd4@assays$RNA@counts)
-  cm_mean<- rowMeans(log2(cm_list$raw_data+1))
-  
-  ## Score
-  scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, all_markers)))
-  
-  ## Correlate and plot heatmap
-  scores_factor_hc = clusterNmfFactors(scores)
-  scores_factor_cor = scores_factor_hc$cor_coef[scores_factor_hc$hc_obj$order, scores_factor_hc$hc_obj$order]
-  
-  ## Heatmap of correlations
-  hm_colors = rev((brewer.pal(n=9, name="RdBu")))
-  hm_colors = colorRampPalette(colors = hm_colors)
-  pheatmap(scores_factor_cor, color = hm_colors(100), 
-           cluster_rows = F, cluster_cols = F, 
-           annotation_names_row = F, annotation_names_col =T,
-           show_rownames = T, show_colnames = F,
-           filename = paste0(figure_dir, "Cor_CD4programs_Glioma.vs.NSCLC.png"),
-           width = 8, height = 4)
-  
-  ## Dendrogram of hierarchical clustering 
-  jpeg(filename=paste0(figure_dir, "HC_CD4programs_Glioma.vs.NSCLC.png"), width = 400, height = 600)
-  plot(scores_factor_hc$hc_obj)
-  dev.off()
+## Split by tumor type
+cd8_list<- SplitObject(merge_cd8, split.by = "TumorType")
+
+## For each tumor type, remove "ScoreTooLow" and find markers for remaining 4 Nature 2020 genesets
+marker_list<- lapply(cd8_list, function(x){
+  print(unique(x$TumorType))
+  tmp<- subset(x, maxGeneset_lowScore != "ScoreTooLow")
+  tmp<- SetIdent(tmp, value=tmp$maxGeneset_lowScore)
+  markers<- FindAllMarkers(tmp, min.pct = 0.2)
+  return(markers)
+})
+
+## Filter
+marker_list_filtered<- lapply(marker_list, function(x){
+  x[x$p_val_adj<0.05 & x$avg_log2FC>0.5,]
+})
+
+## Save
+saveRDS(marker_list_filtered, file=paste0(analysis_dir, "markers_forNature2020Annot_byTumorType.Rds"))
+```
+
+
+## Score all cells for glioma, melanoma, and nsclc gene sets, correlate scores (for CD8 only)
+```{r}
+## Read in markers generated above
+marker_list<- readRDS(paste0(analysis_dir, "markers_forNature2020Annot_byTumorType.Rds"))
+
+## Subset to top 50
+marker_list<- lapply(marker_list, function(x){
+  tmp<- x[order(x$cluster, -x$avg_log2FC),]
+  tmp<- tmp %>% group_by(cluster) %>% top_n(n=50, wt=avg_log2FC) %>% as.data.frame()
+  return(tmp)
+})
+
+## Add on tumor type to cluster name
+marker_list<- lapply(names(marker_list), function(x){
+  tmp<- marker_list[[x]]
+  tmp$cluster<- paste0(x,"_", gsub("[0-9]", "" ,tmp$cluster))
+  return(tmp)
+})
+
+## Reformat into single list- 1 entry per geneset/tumor type
+marker_list_gene<- lapply(marker_list, function(x){
+  tmp<-split(x, f=x$cluster)
+  tmp2<- lapply(tmp, function(x){x$gene})
+  names(tmp2)<- names(tmp)
+  return(tmp2)
+  })
+marker_list_gene<- do.call(c, marker_list_gene)
+
+
+## Norm/center
+cm_list<-NormCenter(merge_cd8@assays$RNA@counts)
+cm_mean<- rowMeans(log2(cm_list$raw_data+1))
+
+## Score
+scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, marker_list_gene)))
+
+## Correlate and plot heatmap
+scores_factor_hc = clusterNmfFactors(scores)
+scores_factor_cor = scores_factor_hc$cor_coef[scores_factor_hc$hc_obj$order, scores_factor_hc$hc_obj$order]
+
+## Heatmap of correlations
+hm_colors = rev((brewer.pal(n=9, name="RdBu")))
+hm_colors = colorRampPalette(colors = hm_colors)
+pheatmap(scores_factor_cor, color = hm_colors(100), 
+         cluster_rows = F, cluster_cols = F, 
+         annotation_names_row = F, annotation_names_col =T,
+         show_rownames = T, show_colnames = F,
+         filename = paste0(figure_dir, "Cor_CD8programs_Glioma.vs.NSCLC.vs.melanoma.png"),
+         width = 8, height = 4)
+
+## Dendrogram of hierarchical clustering 
+jpeg(filename=paste0(figure_dir, "HC_CD8programs_Glioma.vs.NSCLC.vs.Melanoma.png"), width = 400, height = 600)
+plot(scores_factor_hc$hc_obj)
+dev.off()
+
+
   
 ```
 

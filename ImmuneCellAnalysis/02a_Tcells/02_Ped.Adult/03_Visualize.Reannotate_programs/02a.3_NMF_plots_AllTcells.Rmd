@@ -42,7 +42,7 @@ source(nmf_helper)
 ```{r}
 rank_use<-8
 sharedBy<- "union" 
-data_dir<- paste0("../02_detailed_annot/analysis/identifyCD4.CD8_byNMF/", "rank",rank_use, "_sharedBy", sharedBy, "/" )
+data_dir<- paste0("../03_Visualize.Reannotate_programs/analysis/Reannotate_programs/", "rank",rank_use, "_sharedBy", sharedBy, "/" )
 
 ## figure/analysis dir based on rank + how shared programs are merged
 figure_dir<- paste0(figure_dir_tmp, "rank", rank_use, "_sharedBy", sharedBy, "/")
@@ -51,7 +51,7 @@ analysis_dir<- paste0(analysis_dir_tmp, "rank", rank_use, "_sharedBy", sharedBy,
 if(!dir.exists(figure_dir)){dir.create(figure_dir,recursive = TRUE)}
 if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
   
-## ped/adult tcell seurat objects
+## ped/adult tcell seurat object
 tcell_seurat<- readRDS(paste0(data_dir, "ped.adult_seurat_tcell_harmony.Rds"))
 
 ## Read in marker genes
@@ -90,33 +90,48 @@ all_markers$cluster<- as.character(all_markers$cluster)
 rank<- "8"
 add_lines<- TRUE
 program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
-bySubtype<- FALSE
+grouping_variable<- "Age" ## variable to pseudobulk by. "Subtype", "Age", "detailed_annot"
 
 top_markers<-all_markers
+program_order<- c("Cytotoxic\nNKreceptor", "Predysfunctional", "Inhibitory", "Treg", "Cycling", "IFN\nResponse", "Memory","Effector\nMemory", "Stress")
+
+## Order markers
+top_markers$cluster<- factor(top_markers$cluster, levels=gsub("\n", "\\.", program_order))
+top_markers<- top_markers[order(top_markers$cluster),]
+top_markers$cluster<- as.character(top_markers$cluster)
 
 ## Pseudobulk
-if(bySubtype){
+if(grouping_variable=="Subtype"){
   tcell_seurat$SubtypeEdit<- gsub("Hemispheric-BCOR", "BCOR", gsub("Hemispheric-H3G34R/V", "H3G34R/V", gsub("Midline-H3K27M", "H3K27M",
                            gsub("GBM", "Adult.GBM",gsub("IDH-G", "Adult.IDH-G", tcell_seurat$NiceSubtype)))))
   tcell_seurat$PB_variable<- paste0(tcell_seurat$SubtypeEdit, "_",
                                 gsub("\\.", "\n", tcell_seurat@meta.data[[program_name]]))
   figure_append<- "_bySubtype"
-}else{
+}else if(grouping_variable=="Age"){
   tcell_seurat$PB_variable<- paste0(tcell_seurat$Age, "_", 
                                 gsub("\\.", "\n", tcell_seurat@meta.data[[program_name]]))
-  figure_append<- ""
+  figure_append<- "_byAge"
+} else if(grouping_variable== "detailed_annot"){
+  tmp<- paste0(grouping_variable, "_byNMFrank", rank_use, "_mergedBy", sharedBy)
+  tcell_seurat$PB_variable<- paste0(tcell_seurat@meta.data[[tmp]], "_", 
+                                gsub("\\.", "\n", tcell_seurat@meta.data[[program_name]]))
+  figure_append<- "_byDetailedAnnot"
 }
 
-
+## Pseudobulk
 pb<- pseudobulk_byVariable(tcell_seurat@assays$RNA@counts, tcell_seurat@meta.data, "PB_variable")
+
+## Remove "Unclear" (for detailed_annot)
+pb<-pb[,!grepl("Unclear", colnames(pb))]
 
 ## center and score
 pb_list<- NormCenter(pb)
 pb_center<- pb_list$center_data
 
+
 ## Plot
 p<- myHeatmap(pb_center, GOI=top_markers$gene, min.value = -3, max.value = 3, 
-              orderFactors =  gsub("\\.", "\n", unique(top_markers$cluster))) +
+              orderFactors =  gsub("\\.", "\n", program_order)) +
   scale_fill_gradient2(high="red", low="blue", mid="white", name="Centered log2(TPM)")
 
 ## Add horizontal lines around each set of nmf genes
@@ -136,7 +151,7 @@ if(add_lines){
 }else{p}
 
   
-ggsave(paste0(figure_dir, "AllTcells_Heatmap_TopNMFgenes_annot_rank", rank,figure_append, ".png"), width=19, height=11)
+ggsave(paste0(figure_dir, "AllTcells_Heatmap_TopNMFgenes_annot_rank", rank,figure_append, ".png"), width=18, height=11)
 
 
 ```

@@ -42,7 +42,7 @@ source(nmf_helper)
 ```{r}
 rank_use<-8
 sharedBy<- "union" 
-data_dir<- paste0("../02_detailed_annot/analysis/identifyCD4.CD8_byNMF/", "rank",rank_use, "_sharedBy", sharedBy, "/" )
+data_dir<- paste0("../03_Visualize.Reannotate_programs/analysis/Reannotate_programs/", "rank",rank_use, "_sharedBy", sharedBy, "/" )
 
 ## figure/analysis dir based on rank + how shared programs are merged
 figure_dir<- paste0(figure_dir_tmp, "rank", rank_use, "_sharedBy", sharedBy, "/")
@@ -136,7 +136,7 @@ if(add_lines){
 }else{p}
 
   
-ggsave(paste0(figure_dir, "CD4_Heatmap_TopNMFgenes_annot_rank", rank,figure_append, ".png"), width=13, height=11)
+ggsave(paste0(figure_dir, "CD4_Heatmap_TopNMFgenes_annot_rank", rank,figure_append, ".png"), width=17, height=11)
 
 
 ```
@@ -324,9 +324,11 @@ ggsave(paste0(figure_dir, "CD4_NumericAge.vs.ProgramProportion.png"), width=10, 
 ## Plot scores for Nature2020 genesets (cytotoxic, dysfunctional, naive, predysfunctional), colored by program
 ```{r}
 program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
+
+## Order programs
 cd4_seurat$tmp<- cd4_seurat@meta.data[[program_name]]
 
-df<- cd4_seurat@meta.data[,c("tmp", names(all_markers))]
+df<- cd4_seurat@meta.data[,c("tmp", "naive", "dysfunctional",  "predysfunctional","cytotoxic")]
 
 ## option 1: cyto/naive on 1 scale, predys/dys on the other scale
 df$scale1<- df$cytotoxic-df$naive

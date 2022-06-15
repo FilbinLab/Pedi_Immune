@@ -37,7 +37,7 @@ source(nmf_helper)
 ```{r}
 rank_use<-8
 sharedBy<- "union" 
-data_dir<- paste0("../02_detailed_annot/analysis/identifyCD4.CD8_byNMF/", "rank",rank_use, "_sharedBy", sharedBy, "/" )
+data_dir<- paste0("../03_Visualize.Reannotate_programs/analysis/Reannotate_programs/", "rank",rank_use, "_sharedBy", sharedBy, "/" )
 
 ## Read in seurat objects
 nsclc_cd8<- readRDS(paste0(analysis_dir, "cd8_seurat_nsclc.Rds"))
@@ -56,7 +56,7 @@ nsclc_cd4_markers<- read.csv(paste0(analysis_dir, "nsclc_cd4_cluster_markers_ann
 ## Read in colors to use- add on nsclc-specific programs
 program_colors<- readRDS(paste0("../../../plot_colors/Tcell.programs_rank", rank_use, "sharedBy", sharedBy, "_reAnnot.Rds"))
 program_colors<- c(program_colors, CD28="pink", Naive="skyblue4", MAIT="brown", Predysfunctional.2="lightsalmon1",
-                   Dysfunctional="violetred")
+                   Dysfunctional="violetred", Cytotoxic = "greenyellow")
 program_colors<-c(program_colors, CD69="pink", GZMA="brown",ANXA1="lightsalmon3", ActivatedTreg="gold")
 ```
 
@@ -120,21 +120,20 @@ merge_cd4<- readRDS(paste0(analysis_dir, "cd4_seurat_nsclc.glioma.Rds"))
 ## CD8
   ## By glioma/nsclc
   DimPlot(merge_cd8, group.by = "TumorType", label=TRUE)+NoLegend()
-  ggsave(paste0(figure_dir, "UMAP_byTumorType.png"), width=5, height=5)
+  ggsave(paste0(figure_dir, "CD8_UMAP_byTumorType.png"), width=5, height=5)
   
   ## By cell type
   DimPlot(merge_cd8, group.by = "cellAnnot")+
     scale_color_manual(values=program_colors)
-  ggsave(paste0(figure_dir, "UMAP_byCellType.png"), width=10, height=9)
+  ggsave(paste0(figure_dir, "CD8_UMAP_byCellType.png"), width=10, height=9)
   
   ## Dotplot of GOI by cell type
   merge_cd8$cellAnnot_byTumor<- paste0( merge_cd8$cellAnnot, "_", merge_cd8$TumorType)
-  merge_cd8$cellAnnot_byTumor<- factor(merge_cd8$cellAnnot_byTumor, levels=rev(c("Inhibitory_Glioma" 
-                                                                             ,"CD28_NSCLC","MAIT_NSCLC","Stress_Glioma","IFN.Response_Glioma","Effector.Memory_Glioma" ,
-                                                                             "Naive_NSCLC","Memory_Glioma",
-                                                                             "Cytotoxic_NSCLC", "Cytotoxic_Glioma",
-                                                                             "Predysfunctional_NSCLC", "Predysfunctional.2_NSCLC", "Predysfunctional_Glioma",
-                                                                             "Dysfunctional_NSCLC", "Inhibitory.Cycling_Glioma" )))
+  merge_cd8$cellAnnot_byTumor<- factor(merge_cd8$cellAnnot_byTumor, levels=rev(c("CD28_NSCLC","MAIT_NSCLC","Stress_Glioma","IFN.Response_Glioma",
+                                                                                 "Effector.Memory_Glioma" ,"Naive_NSCLC","Memory_Glioma",
+                                                                                 "Cytotoxic_NSCLC", "Cytotoxic.NKreceptor_Glioma",
+                                                                                 "Predysfunctional_NSCLC", "Predysfunctional.2_NSCLC", "Predysfunctional_Glioma",
+                                                                                 "Dysfunctional_NSCLC", "Cycling_Glioma" )))
   DotPlot(merge_cd8, group.by = "cellAnnot_byTumor", 
             features=c("CD28","CXCR1", "PRF1", "GNLY","PDCD1", "HAVCR2", "TIGIT", "CTLA4",
                        "IFIT1","TOP2A","SLC4A10", "SELL", "CCR7", "GZMK", "ITGAE", "HSPA6","CD8A", "CD4"))+
@@ -164,7 +163,7 @@ merge_cd4<- readRDS(paste0(analysis_dir, "cd4_seurat_nsclc.glioma.Rds"))
     ylab("Proportion of cells")+xlab("")+
     theme(axis.text = element_text(face="bold", color="black"),
           axis.title = element_text(face="bold", color="black"))
-  ggsave(paste0(figure_dir, "cellTypes_byTumorType.png"), width=5, height=4)
+  ggsave(paste0(figure_dir, "CD8_cellTypes_byTumorType.png"), width=5, height=4)
   
 ## CD4
   ## By glioma/nsclc
@@ -176,7 +175,7 @@ merge_cd4<- readRDS(paste0(analysis_dir, "cd4_seurat_nsclc.glioma.Rds"))
     scale_color_manual(values=program_colors[names(program_colors) %in% unique(merge_cd4$cellAnnot)])
   ggsave(paste0(figure_dir, "UMAP_CD4_byCellType.png"), width=10, height=9)
   
-  ## Dotplot of GOI
+  ## Dotplot of GOIs
   merge_cd4$cellAnnot_byTumor<- paste0( merge_cd4$cellAnnot, "_", merge_cd4$TumorType)
   DotPlot(merge_cd4, group.by = "cellAnnot_byTumor", 
             features=c("CCR7", "FOXP3", "EOMES", "ANXA1", "CD69",
@@ -201,12 +200,15 @@ merge_cd4<- readRDS(paste0(analysis_dir, "cd4_seurat_nsclc.glioma.Rds"))
     ylab("Proportion of cells")+xlab("")+
     theme(axis.text = element_text(face="bold", color="black"),
           axis.title = element_text(face="bold", color="black"))
-  ggsave(paste0(figure_dir, "cellTypes_byTumorType.png"), width=5, height=4)
+  ggsave(paste0(figure_dir, "CD4_cellTypes_byTumorType.png"), width=5, height=4)
 
 ```
 
 ## Score all cells for glioma and nsclc gene sets, correlate scores
 ```{r}
+merge_cd8<- readRDS(paste0(analysis_dir, "cd8_seurat_nsclc.glioma.Rds"))
+merge_cd4<- readRDS(paste0(analysis_dir, "cd4_seurat_nsclc.glioma.Rds"))
+
 ## CD8
   ## Remove Tregs and Inhibitory- cd4 specifc
   glioma_markers<- glioma_markers[!glioma_markers$cluster %in% c("Treg", "Inhibitory"),]
@@ -253,7 +255,7 @@ merge_cd4<- readRDS(paste0(analysis_dir, "cd4_seurat_nsclc.glioma.Rds"))
   
 ## CD4
   ## Remove cd8-specific markers
-  glioma_markers<- glioma_markers[!glioma_markers$cluster %in% c("Cytotoxic","Predysfunctional"),]
+  glioma_markers<- glioma_markers[!glioma_markers$cluster %in% c("Cytotoxic.NKreceptor","Predysfunctional"),]
   
   ## Subset markers to top 100 (may be fewer than this) for each program
   glioma_top_markers<- glioma_markers %>% group_by(cluster) %>% top_n(n=100, wt=avg_log2FC) %>% as.data.frame()
