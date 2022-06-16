@@ -1,0 +1,330 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+## Purpose:
+Use programs generated in single cell data (for both tcells and myeloid cells) to deconvolute bulk data and determine if there is any effect on survival, etc. 
+
+## Approach:
+Cibersort run on bulk data, results imported here. Merge with clinical for survival aanlysis. Plot predicted proportions
+
+```{r}
+library(Seurat) 
+library(harmony)
+library(survival)
+library(survminer)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/04b_DeconvoluteBulk/")
+
+analysis_dir<- paste0(working_dir, "/analysis/bulk_deconvolute/")
+figure_dir<- paste0(working_dir, "/figures/bulk_deconvolute/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir,recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+## colors
+tcell_program_colors<- readRDS(paste0("../plot_colors/Tcell.programs_rank8sharedByunion_reAnnot.Rds"))
+names(tcell_program_colors)<- gsub("\\.", "_", names(tcell_program_colors))
+
+myeloid_program_colors<- readRDS("../plot_colors/Myeloid_program_colors.Rds")
+myeloid_program_colors<- myeloid_program_colors$rank6
+
+celltype_colors<- readRDS(paste0("../plot_colors/ImmuneCell.celltypes.Rds"))
+celltype_colors<- c(celltype_colors, Tumor="violetred")
+```
+
+
+## Functions
+```{r}
+## input_df should consist of: time=numeric column of time to death, censored=logical column with dead=1/alive=0, DepColumnName=name of column with dependent variable to split survival analysis on- ex: High/Low expression of gene set
+run_mySurvAnalysis<- function(input_df, DepColumnName){
+  ## Run survival based on dependent variable
+  input_df$Marker<-input_df[[DepColumnName]]
+  fit <- survfit(Surv(time, censored) ~Marker,
+                   data = input_df)
+  
+  ## Create dataframe of survival results
+  pvalue<-surv_pvalue(fit, input_df)$pval.txt
+  pvalue<-gsub("p = ", "", pvalue)
+  myFit_median<-surv_median(fit)
+  highMarker_median<-myFit_median[myFit_median$strata=="Marker=High", "median"]
+  lowMarker_median<-myFit_median[myFit_median$strata=="Marker=Low", "median"]
+  df<-data.frame(Marker=DepColumnName, pvalue=pvalue,
+                   HighMarkerMedianSurvival=highMarker_median,
+                   LowMarkerMedianSurvival=lowMarker_median)
+  
+  ## Return list of results
+  res_list<- list(fit=fit, res_df=df )
+  return(res_list)
+}
+
+## Visualize survival results with survminer
+## input_df should consist of: time=numeric column of time to death, censored=logical column with dead/alive, DepColumnName=name of column with dependent variable to split survival analysis on- ex: High/Low expression of gene set
+## Surv_fit is results from running survfit(Surv(time, censored)~Dep, data=input_df). 
+plot_mySurvAnalysis<- function(surv_fit,input_df, DepColumnName, plotName=NULL){
+  ## Add on "Marker" to input df- so that it matches exactly from survival analysis
+  input_df$Marker<-input_df[[DepColumnName]]
+  
+  plotTitle<- ifelse(is.null(plotName), GeneSetName, plotName )
+  p<-ggsurvplot(surv_fit, pval=TRUE, input_df)+ggtitle(plotTitle)
+  return(p)
+}
+ 
+
+## Nice barchart theme
+my_barchart_theme<- function(p, title="", colors_use){
+  p+theme_classic()+
+    scale_fill_manual(values=colors_use)+
+    theme(axis.text.x = element_blank())+
+    ggtitle(title)
+}
+```
+
+## Read in cibersort results and clinical info
+```{r}
+data_dir<- "/Users/jlabelle/Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/PublishedDatasets/BulkRNAseq/"
+
+## CBTN
+cb_cbtn<- read.csv("data/CIBERSORTx_Results_CBTN.csv")
+clinical_cbtn<- read.csv(paste0(data_dir,"CBTN/H3F3A_HGG.DIPG_Mutation_Clinical.tsv"), sep="\t")
+cbtn_meta<- read.csv(paste0(data_dir,"CBTN/clinical_metadata_withHistoneStatus.csv"))
+
+  ## clinical edits- remove derived cell line samples, rename columns, fix censored
+  clinical_cbtn<- clinical_cbtn[clinical_cbtn$SAMPLE_TYPE != "Derived Cell Line",]
+  clinical_cbtn<- clinical_cbtn %>% dplyr::rename("Sample"="Patient.ID",
+                                                  "time"="OS_MONTHS",
+                                                  "censored"="OS_STATUS") %>% as.data.frame()
+  clinical_cbtn$censored<- as.numeric(gsub(":DECEASED", "", gsub(":LIVING", "", clinical_cbtn$censored)))
+  
+  ## K27M/WT
+  cb_cbtn_k27m<- cb_cbtn[cb_cbtn$Mixture %in% cbtn_meta$Patient.ID[cbtn_meta$HistoneStatus=="K27M"],]
+  clinical_cbtn_k27m<- clinical_cbtn[clinical_cbtn$Sample %in% cb_cbtn_k27m$Mixture,]
+  
+  cb_cbtn_wt<- cb_cbtn[cb_cbtn$Mixture %in% cbtn_meta$Patient.ID[cbtn_meta$HistoneStatus=="WT"],]
+  clinical_cbtn_wt<- clinical_cbtn[clinical_cbtn$Sample %in% cb_cbtn_wt$Mixture,]
+  
+## DFCI- Frank/Mimi, HGG
+load(paste0(data_dir, "HGG_FrankMimi/HGGPed_clinical.Robj"))
+load(paste0(data_dir, "HGG_FrankMimi/HGGPed_survival.Robj"))
+  
+  ## Clinical edits- merging survival/clinical, fixing censored
+  clinical_dfci<- merge(HGGPed_clinical, HGGPed_survival,by="submitter_id")
+  clinical_dfci$censored<- as.numeric(clinical_dfci$censored)
+  clinical_dfci<- clinical_dfci%>% dplyr::rename("Sample"="submitter_id") %>% as.data.frame()
+
+cb_dfci<- read.csv("data/CIBERSORTx_Results_DFCI.HGG.csv")
+
+## TCGA: IDHmut, AYA
+load(paste0(data_dir, "TCGA/TCGA_ClinicalMetadata.Robj"))
+clinical_tcga<- clinical_list$idh1_YA; rm(clinical_list)
+
+load(paste0(data_dir, "TCGA/TCGASurvivalMetadata_CountsMatch.Robj"))
+survival_tcga<- meta_read$idh1_YA; rm(meta_read)
+  
+  ## Clinical edits- merging clinical/survival, renaming columns, fixing censored
+  survival_tcga<- survival_tcga %>% dplyr::rename("Sample"="submitter_id") %>% as.data.frame()
+  clinical_tcga<- clinical_tcga %>% dplyr::rename("Sample"="case_submitter_id")
+  clinical_tcga<- merge(clinical_tcga, survival_tcga, by="Sample")
+  
+cb_tcga<- read.csv("data/CIBERSORTx_Results_TCGA.IDHmut.AYA.csv")
+  
+
+  
+## List of cibersort res/clinical
+input_list<- list(CBTN_WT=list(ciber=cb_cbtn_wt, meta=clinical_cbtn_wt),
+                  CBTN_K27M=list(ciber=cb_cbtn_k27m, meta=clinical_cbtn_k27m),
+                  DFCI=list(ciber=cb_dfci, meta=clinical_dfci),
+                  TCGA_IDHmutAYA=list(ciber=cb_tcga, meta=clinical_tcga))
+
+## Fix program annotations
+input_list<- lapply(input_list, function(input){
+  cb<- input$ciber
+  colnames(cb)<- gsub("Cytotoxic", "Cytotoxic_NKreceptor", gsub("Inhibitory_Cycling", "Cycling", colnames(cb)))
+  return(list(ciber=cb, meta=input$meta))
+})
+
+## Remove any clinical columns where all samples are NA
+input_list<- lapply(input_list, function(input){
+  clinical<- input$meta
+  col_na<- apply(clinical, 2, function(x){sum(is.na(x)) == nrow(clinical)})
+  clinical<- clinical[,!col_na]
+  return(list(ciber=input$ciber, meta=clinical))
+})
+
+saveRDS(input_list, file=paste0(analysis_dir, "cb_clinical_cohortList.Rds"))
+```
+
+
+
+
+## For each cohort, calculate proportions of broad cell types
+```{r}
+input_list<- readRDS(paste0(analysis_dir, "cb_clinical_cohortList.Rds"))
+
+## Set broad cell types- myeloid, CD4, CD8, Tumor
+cb_res<- input_list[[1]]$ciber
+cd4_cellTypes<- colnames(cb_res)[grepl("CD4", colnames(cb_res))]
+cd8_cellTypes<- colnames(cb_res)[grepl("CD8", colnames(cb_res))]
+myeloid_cellTypes<- colnames(cb_res)[!colnames(cb_res) %in% 
+                                       c(cd4_cellTypes, cd8_cellTypes, "Mixture", "Tumor", "P.value", "Correlation", "RMSE")]
+
+
+## For each cohort, generate 2 dfs: program prop with broad cell type + broad cell type prop
+cb_prop_list<-  lapply(input_list, function(input){
+  ## Get cb results and clinical data
+  cb_res<- input$ciber
+  clinical_use<- input$meta
+  
+  ## Reformat
+  cb_res_melt<-cb_res[,!colnames(cb_res) %in% c( "P.value", "Correlation", "RMSE")]
+  cb_res_melt<- melt(cb_res_melt, id="Mixture")
+  colnames(cb_res_melt)<-c("Sample", "Program", "perCells")
+  
+  ## Add on broad cell type, get proportion of broad cell types
+  cb_res_melt$CellType<- ifelse(cb_res_melt$Program %in% cd4_cellTypes, "CD4", 
+                                 ifelse(cb_res_melt$Program %in% cd8_cellTypes, "CD8",
+                                        ifelse(cb_res_melt$Program %in% myeloid_cellTypes,"Myeloid", "Tumor")))
+  
+  ## get proportions of broad cell types
+  cb_res_broad<- cb_res_melt %>% group_by(Sample, CellType) %>% summarise(perCells=sum(perCells)) %>% as.data.frame()
+  
+  return(list(program_prop=cb_res_melt, broad_prop=cb_res_broad))
+})
+
+## For each cohort, calculate proportions of each program within its major cell type
+cb_program_norm_list<- lapply(cb_prop_list, function(cb_prop){
+  program_prop<- cb_prop$program_prop
+  
+  ## CD8
+  res_cd8<- program_prop[program_prop$CellType=="CD8",]
+  res_cd8<- res_cd8 %>% group_by(Sample) %>% mutate(perCells=perCells/sum(perCells)) %>% as.data.frame()
+  res_cd8$Program<- gsub("CD8_", "", res_cd8$Program)
+  
+  ## CD4
+  res_cd4<- program_prop[program_prop$CellType=="CD4",]
+  res_cd4<- res_cd4 %>% group_by(Sample) %>% mutate(perCells=perCells/sum(perCells)) %>% as.data.frame()
+  res_cd4$Program<- gsub("CD4_", "", res_cd4$Program)
+  
+  ## Myeloid
+  res_myeloid<- program_prop[program_prop$CellType=="Myeloid",]
+  res_myeloid<- res_myeloid %>% group_by(Sample) %>% mutate(perCells=perCells/sum(perCells)) %>% as.data.frame()
+  
+  return(list(cd8=res_cd8, cd4=res_cd4, myeloid=res_myeloid))
+})
+
+```
+
+## Plot overall proportions
+```{r}
+for(cohort in names(cb_prop_list)){
+  print(cohort)
+  
+  ## Set output dir
+  figure_dir_use<- paste0(figure_dir, cohort, "/")
+  if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
+  
+  ## Get broad cell type prop for cohort
+  broad_prop<- cb_prop_list[[cohort]]$broad_prop
+  
+  ## plot
+  p<-ggplot(broad_prop, aes(x=Sample, y=perCells, fill=CellType))+
+    geom_bar(stat="identity")
+  my_barchart_theme(p, title="CBTN Cibersort predicted proportions: broad cell types",
+                      colors=celltype_colors[names(celltype_colors) %in% cb_res_broad$CellType])
+ggsave(paste0(figure_dir_use, "broadCellTypeProp.png"), width=6, height=3)
+}
+
+```
+
+
+## Plot proportions within each broad cell type
+```{r}
+for(cohort in names(cb_prop_list)){
+  print(cohort)
+  
+  ## Set output dir
+  figure_dir_use<- paste0(figure_dir, cohort, "/")
+  if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
+  
+  program_prop<- cb_program_norm_list[[cohort]]
+  
+  ## CD8
+  p<-ggplot(program_prop$cd8, aes(x=Sample, y=perCells, fill=Program))+
+    geom_bar(stat="identity")
+  my_barchart_theme(p, "Cibersort predicted proportions: CD8 programs",
+                    tcell_program_colors[names(tcell_program_colors) %in% program_prop$cd8$Program] )
+  ggsave(paste0(figure_dir_use, "CD8_programProp.png"), width=6, height=3)
+  
+  ## CD4
+  p<-ggplot(program_prop$cd4, aes(x=Sample, y=perCells, fill=Program))+
+    geom_bar(stat="identity")
+  my_barchart_theme(p, "Cibersort predicted proportions: CD4 programs",
+                    tcell_program_colors[names(tcell_program_colors) %in% program_prop$cd4$Program])
+  ggsave(paste0(figure_dir_use, "CD4_programProp.png"), width=6, height=3)
+  
+  ## Myeloid
+  p<-ggplot(program_prop$myeloid, aes(x=Sample, y=perCells, fill=Program))+
+    geom_bar(stat="identity")
+  my_barchart_theme(p, "Cibersort predicted proportions: Myeloid programs",
+                    myeloid_program_colors[names(myeloid_program_colors) %in% program_prop$myeloid$Program])
+  ggsave(paste0(figure_dir_use, "Myeloid_programProp.png"), width=6, height=3)
+  
+}
+```
+
+## Calculate high/low for each program (based on 50/50 split)
+```{r}
+## Settings
+quant_split_thresh<- .5
+
+clinical_split_list<- lapply(names(cb_program_norm_list), function(cohort){
+  print(cohort)
+  cb_program_norm<- cb_program_norm_list[[cohort]]
+  clinical_use<- input_list[[cohort]]$meta
+  
+  ## For each broad cell type, split samples into high/low
+  broad_split<- lapply(cb_program_norm, function(program_prop){
+    
+    ## Calculate quantile split for each gene set (high/low)
+    programs<- as.character(unique(program_prop$Program))
+    program_prop$Program<- as.character(program_prop$Program)
+
+    quant_split<- lapply(programs, function(program){
+      tmp<- program_prop[program_prop$Program == program,]
+      tmp[[program]]<- ifelse(tmp$perCells > quantile(tmp$perCells, probs=quant_split_thresh), "High", "Low" )
+      return(tmp[,c("Sample", program)])
+      })
+    
+    ## Reformat
+    quant_split<- do.call("cbind", quant_split)
+    rownames(quant_split)<- quant_split$Sample
+    quant_split<- quant_split[,!grepl("Sample", colnames(quant_split))]
+    quant_split$Sample<- rownames(quant_split)
+    
+    ## Merge clinical and quantile
+    clinical_quant<- merge(quant_split, clinical_use, by="Sample")
+    return(clinical_quant)
+  })
+  return(broad_split)
+})
+names(clinical_split_list)<- names(cb_program_norm_list)
+
+## Save each cohort separately
+for(cohort in names(clinical_split_list)){
+  clinical_split<- clinical_split_list[[cohort]]
+  saveRDS(clinical_split, file=paste0(analysis_dir, "HighLowPropSplit_clinical_", cohort, ".Rds"))
+}
+
+
+```
+

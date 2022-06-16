@@ -1,0 +1,181 @@
+---
+title: "Kaplan-Meier survival analysis"
+output: html_document
+---
+
+This template shows how to run kaplan-meier survival analysis. Bulk RNAseq data is split into 2 or more groups- based on high/low geneset score, cell type proportion, etc
+
+Survival analysis is often run for multiple cohorts, but cohorts kept separate due to batch effects. This template allows for running multiple cohorts in parallel to streamline analysis
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(survminer)
+library(factoextra)
+library(viridis)
+library(reshape2)
+library(survival)
+library(gridExtra)
+library(RColorBrewer)
+
+## Set working/script directory
+base_dir = "/Users/jlabelle/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/04b_DeconvoluteBulk/")
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/Scripts/"
+
+
+## load helper functions
+helper_functions<- paste0(base_dir, script_dir,"Survival_HelperFunctions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(helper_functions)
+source(nmf_helper)
+source(preprocessing)
+
+
+## Create analysis/figure directories
+figure_dir<- paste0("figures/KM_Survival/")
+analysis_dir<- paste0("analysis/KM_Survival/")
+data_dir<- paste0(working_dir, "/analysis/bulk_deconvolute/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir)}
+
+```
+
+
+## Load in processed data (03_DeconvoluteBulke_Preprocess.Rmd)
+separate dataframes for each cohort- survival + high/low norm prop, separate for each major cell type
+```{r}
+files<- list.files(data_dir, pattern="HighLowPropSplit")
+
+surv_obj_list_allCellTypes<- lapply(files, function(x){
+  tmp<- readRDS(paste0(data_dir, x))
+  return(tmp)
+})
+names(surv_obj_list_allCellTypes)<- gsub("HighLowPropSplit_clinical_", "", gsub(".Rds", "", files))
+```
+
+
+##############################
+## Run KM survival analysis ##
+##############################
+
+
+## Run survival analysis: CD8
+```{r}
+genesets_test<- c("Memory", "Predysfunctional", "Cytotoxic_NKreceptor", "IFN_Response", "Stress", "Effector_Memory", "Cycling")
+surv_obj_list<- lapply(surv_obj_list_allCellTypes, function(x){x$cd8})
+
+surv_res_list<- lapply(surv_obj_list, function(FinalMeta){
+  all_genesets_surv<- lapply(genesets_test, function(geneset){
+    surv_res<- run_mySurvAnalysis(FinalMeta, DepColumnName = geneset)
+    return(surv_res)
+  })
+  names(all_genesets_surv)<- genesets_test
+  return(all_genesets_surv)
+})
+
+
+## Plot results separately for each cohort
+for(cohort in names(surv_res_list)){
+  print(cohort)
+  
+  ## Set output dir- separate for each cohort
+  figure_dir_use<- paste0(figure_dir, cohort, "/")
+  if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
+  
+  ## Set input/km results
+  input<- surv_obj_list[[cohort]]
+  survRes<- surv_res_list[[cohort]]
+  
+  ## Plot
+  all_plots<- lapply(genesets_test, function(geneset){
+    plot_mySurvAnalysis(survRes[[geneset]]$fit,input, DepColumnName = geneset)
+  })
+  p<-arrange_ggsurvplots(all_plots, ncol=3, nrow=ceiling(length(all_plots)/3))
+  ggsave(plot=p, paste0(figure_dir_use, "CD8_SurvRes_allGenesets.png"), width=9, height=9)
+}
+```
+
+
+
+## Run survival analysis: CD4
+```{r}
+genesets_test<- c("Memory", "Treg", "Inhibitory", "IFN_Response", "Stress", "Effector_Memory", "Cycling")
+surv_obj_list<- lapply(surv_obj_list_allCellTypes, function(x){x$cd4})
+
+surv_res_list<- lapply(surv_obj_list, function(FinalMeta){
+  all_genesets_surv<- lapply(genesets_test, function(geneset){
+    surv_res<- run_mySurvAnalysis(FinalMeta, DepColumnName = geneset)
+    return(surv_res)
+  })
+  names(all_genesets_surv)<- genesets_test
+  return(all_genesets_surv)
+})
+
+
+## Plot results separately for each cohort
+for(cohort in names(surv_res_list)){
+  print(cohort)
+  
+  ## Set output dir- separate for each cohort
+  figure_dir_use<- paste0(figure_dir, cohort, "/")
+  if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
+  
+  ## Set input/km results
+  input<- surv_obj_list[[cohort]]
+  survRes<- surv_res_list[[cohort]]
+  
+  ## Plot
+  all_plots<- lapply(genesets_test, function(geneset){
+    plot_mySurvAnalysis(survRes[[geneset]]$fit,input, DepColumnName = geneset)
+  })
+  p<-arrange_ggsurvplots(all_plots, ncol=3, nrow=ceiling(length(all_plots)/3))
+  ggsave(plot=p, paste0(figure_dir_use, "CD4_SurvRes_allGenesets.png"), width=9, height=9)
+}
+```
+
+## Run survival analysis: Myeloid
+```{r}
+genesets_test<-  c("IFN_TAM", "Monocytes", "Inflammatory", "SEPP1_Mo_TAM", "Hypoxic_TAM", "Stress_Response")
+surv_obj_list<- lapply(surv_obj_list_allCellTypes, function(x){x$myeloid})
+
+surv_res_list<- lapply(surv_obj_list, function(FinalMeta){
+  ## Remove any programs that are "low" for all samples (i.e., 0% for all)
+  program_0per<- apply(FinalMeta[,genesets_test], 2, function(x){dim(table(x))==1})
+  FinalMeta<- FinalMeta[,!colnames(FinalMeta) %in% names(program_0per)[program_0per]]
+  genesets_test_use<- genesets_test[!genesets_test %in% names(program_0per)[program_0per]]
+  
+  all_genesets_surv<- lapply(genesets_test_use, function(geneset){
+    surv_res<- run_mySurvAnalysis(FinalMeta, DepColumnName = geneset)
+    return(surv_res)
+  })
+  names(all_genesets_surv)<- genesets_test_use
+  return(all_genesets_surv)
+})
+
+
+## Plot results separately for each cohort
+for(cohort in names(surv_res_list)){
+  print(cohort)
+  
+  ## Set output dir- separate for each cohort
+  figure_dir_use<- paste0(figure_dir, cohort, "/")
+  if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
+  
+  ## Set input/km results
+  input<- surv_obj_list[[cohort]]
+  survRes<- surv_res_list[[cohort]]
+  
+  ## Plot
+  all_plots<- lapply(names(survRes), function(geneset){
+    plot_mySurvAnalysis(survRes[[geneset]]$fit,input, DepColumnName = geneset)
+  })
+  p<-arrange_ggsurvplots(all_plots, ncol=3, nrow=ceiling(length(all_plots)/3))
+  ggsave(plot=p, paste0(figure_dir_use, "Myeloid_SurvRes_allGenesets.png"), width=9, height=9)
+}
+```
+
