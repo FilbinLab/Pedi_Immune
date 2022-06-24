@@ -91,6 +91,8 @@ my_barchart_theme<- function(p, title="", colors_use){
 ```
 
 ## Read in cibersort results and clinical info
+Need to reformat clinical so columns match as much as possible. Kept separate for now (so can retain cohort-specific metadata), but want columns that store the same data to be named the same way
+Sample, Age, TumorType_detailed, Ethnicity, Sex, Location, Primary_Recurrent, HistoneStatus
 ```{r}
 data_dir<- "/Users/jlabelle/Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/PublishedDatasets/BulkRNAseq/"
 
@@ -99,12 +101,23 @@ cb_cbtn<- read.csv("data/CIBERSORTx_Results_CBTN.csv")
 clinical_cbtn<- read.csv(paste0(data_dir,"CBTN/H3F3A_HGG.DIPG_Mutation_Clinical.tsv"), sep="\t")
 cbtn_meta<- read.csv(paste0(data_dir,"CBTN/clinical_metadata_withHistoneStatus.csv"))
 
-  ## clinical edits- remove derived cell line samples, rename columns, fix censored
+  ## clinical edits- remove derived cell line samples, rename columns, fix censored, add histone status, fix primary/recurrent
   clinical_cbtn<- clinical_cbtn[clinical_cbtn$SAMPLE_TYPE != "Derived Cell Line",]
-  clinical_cbtn<- clinical_cbtn %>% dplyr::rename("Sample"="Patient.ID",
-                                                  "time"="OS_MONTHS",
-                                                  "censored"="OS_STATUS") %>% as.data.frame()
+  clinical_cbtn<- clinical_cbtn %>% dplyr::rename(Sample=Patient.ID,time=OS_MONTHS,censored=OS_STATUS,
+                                                  Age=AGE, TumorType_detailed=CANCER_TYPE_DETAILED, Ethnicity=ETHNICITY,
+                                                   Sex=SEX, Location=TUMOR_TISSUE_SITE, Primary_Recurrent=TUMOR_TYPE) %>% as.data.frame()
   clinical_cbtn$censored<- as.numeric(gsub(":DECEASED", "", gsub(":LIVING", "", clinical_cbtn$censored)))
+  clinical_cbtn$HistoneStatus<- ifelse(clinical_cbtn$Sample %in% cbtn_meta$Patient.ID, 
+                                       as.character(plyr::mapvalues(clinical_cbtn$Sample, cbtn_meta$Patient.ID,
+                                                                    cbtn_meta$HistoneStatus,warn_missing = FALSE)),
+                                                    "DataNotAvailable")
+  clinical_cbtn$Primary_Recurrent<- gsub("Diagnosis", "Primary", 
+                                    gsub("Initial CNS Tumor", "Primary", 
+                                    gsub("Progressive", "Recurrence",
+                                    gsub("Second Malignancy", "Recurrence",
+                                         clinical_cbtn$Primary_Recurrent))))
+  
+
   
   ## K27M/WT
   cb_cbtn_k27m<- cb_cbtn[cb_cbtn$Mixture %in% cbtn_meta$Patient.ID[cbtn_meta$HistoneStatus=="K27M"],]
@@ -117,10 +130,16 @@ cbtn_meta<- read.csv(paste0(data_dir,"CBTN/clinical_metadata_withHistoneStatus.c
 load(paste0(data_dir, "HGG_FrankMimi/HGGPed_clinical.Robj"))
 load(paste0(data_dir, "HGG_FrankMimi/HGGPed_survival.Robj"))
   
-  ## Clinical edits- merging survival/clinical, fixing censored
+  ## Clinical edits- merging survival/clinical, fixing censored, fixing recurrence (0=primary, 1=recurrence), fixing sex (M->Male)
   clinical_dfci<- merge(HGGPed_clinical, HGGPed_survival,by="submitter_id")
   clinical_dfci$censored<- as.numeric(clinical_dfci$censored)
-  clinical_dfci<- clinical_dfci%>% dplyr::rename("Sample"="submitter_id") %>% as.data.frame()
+  clinical_dfci<- clinical_dfci%>% dplyr::rename(Sample=submitter_id,
+                                                 Primary_Recurrent=Recurrent,
+                                                 HistoneStatus=Histone_group,
+                                                 Sex=Gender) %>% as.data.frame()
+  clinical_dfci$Primary_Recurrent<- gsub(1, "Recurrence", gsub(0, "Primary", clinical_dfci$Primary_Recurrent))
+  clinical_dfci$Sex<- gsub("F", "Female", gsub("M", "Male", clinical_dfci$Sex))
+  
 
 cb_dfci<- read.csv("data/CIBERSORTx_Results_DFCI.HGG.csv")
 
@@ -131,10 +150,13 @@ clinical_tcga<- clinical_list$idh1_YA; rm(clinical_list)
 load(paste0(data_dir, "TCGA/TCGASurvivalMetadata_CountsMatch.Robj"))
 survival_tcga<- meta_read$idh1_YA; rm(meta_read)
   
-  ## Clinical edits- merging clinical/survival, renaming columns, fixing censored
-  survival_tcga<- survival_tcga %>% dplyr::rename("Sample"="submitter_id") %>% as.data.frame()
-  clinical_tcga<- clinical_tcga %>% dplyr::rename("Sample"="case_submitter_id")
-  clinical_tcga<- merge(clinical_tcga, survival_tcga, by="Sample")
+  ## Clinical edits- remove columns that are all na, merging clinical/survival, renaming columns, fixing censored, fixing sex (male->Male)
+  clinical_tcga<- clinical_tcga[,apply(clinical_tcga,2, function(x){sum(is.na(x))!= length(x)})]
+  survival_tcga<- survival_tcga %>% dplyr::rename(Sample=submitter_id) %>% as.data.frame()
+  clinical_tcga<- clinical_tcga %>% dplyr::rename(Sample=case_submitter_id, Age=age_at_index, Ethnicity=ethnicity, Sex=gender,
+                                                  TumorType_detailed=primary_diagnosis)
+  clinical_tcga<- merge(clinical_tcga, survival_tcga[,colnames(survival_tcga) != "project_id"], by="Sample")
+  clinical_tcga$Sex<- gsub("female", "Female", gsub("\\<male\\>", "Male", clinical_tcga$Sex))
   
 cb_tcga<- read.csv("data/CIBERSORTx_Results_TCGA.IDHmut.AYA.csv")
   
@@ -143,6 +165,7 @@ cb_tcga<- read.csv("data/CIBERSORTx_Results_TCGA.IDHmut.AYA.csv")
 ## List of cibersort res/clinical
 input_list<- list(CBTN_WT=list(ciber=cb_cbtn_wt, meta=clinical_cbtn_wt),
                   CBTN_K27M=list(ciber=cb_cbtn_k27m, meta=clinical_cbtn_k27m),
+                  CBTN_All=list(ciber=cb_cbtn, meta=clinical_cbtn),
                   DFCI=list(ciber=cb_dfci, meta=clinical_dfci),
                   TCGA_IDHmutAYA=list(ciber=cb_tcga, meta=clinical_tcga))
 
@@ -240,7 +263,7 @@ for(cohort in names(cb_prop_list)){
   p<-ggplot(broad_prop, aes(x=Sample, y=perCells, fill=CellType))+
     geom_bar(stat="identity")
   my_barchart_theme(p, title="CBTN Cibersort predicted proportions: broad cell types",
-                      colors=celltype_colors[names(celltype_colors) %in% cb_res_broad$CellType])
+                      colors=celltype_colors[names(celltype_colors) %in% broad_prop$CellType])
 ggsave(paste0(figure_dir_use, "broadCellTypeProp.png"), width=6, height=3)
 }
 

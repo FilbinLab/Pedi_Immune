@@ -44,7 +44,7 @@ if(!dir.exists(analysis_dir)){dir.create(analysis_dir)}
 tcell_data_dir<- paste0("../../02a_Tcells/02_Ped.Adult/03_Visualize.Reannotate_programs/analysis/Reannotate_programs/",
                          "rank", rank_use, "_sharedBy", sharedBy, "/")
 myeloid_data_dir<- paste0("../../01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/", cohort, "/")
-tumor_data_dir<- "../../../../TumorCellAnnotation/AllSubtypesTogether/analysis/Merge_allSubtypes/"
+tumor_data_dir<- "../../../TumorCellAnnotation/AllSubtypesTogether/analysis/Merge_allSubtypes/"
 
 ## Load in seurat objects
 tcell_seurat<- readRDS(paste0(tcell_data_dir, "ped_seurat_tcell_harmony.Rds"))

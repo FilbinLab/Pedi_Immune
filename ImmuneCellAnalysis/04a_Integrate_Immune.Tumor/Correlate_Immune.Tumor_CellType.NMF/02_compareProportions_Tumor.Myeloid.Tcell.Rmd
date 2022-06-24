@@ -64,7 +64,7 @@ figure_dir_use<- paste0(figure_dir, "clonal/")
 if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
 
 ## Input
-ind_data<- "cd8"
+ind_data<- "myeloid"
 dep_data<- "clonal_cd8"
 colors_use<- c("cyan", "olivedrab", "navy", "violetred", "orange", "gold", "purple", "grey") ## Colors- for independent variable
 confounders_test<- c("age_numeric", "Subtype")
@@ -124,8 +124,8 @@ figure_dir_use<- paste0(figure_dir, "byProportion/")
 if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
 
 ## Input
-ind_data<- "myeloid"
-dep_data<- "cd4"
+ind_data<- "tumor_noEPN"
+dep_data<- "myeloid"
 colors_use<- c("cyan", "olivedrab", "navy", "violetred", "orange", "gold", "purple", "grey") ## Colors- for independent variable
 confounders_test<- c("age_numeric", "Subtype")
 
@@ -220,7 +220,7 @@ figure_dir_use<- paste0(figure_dir, "byProportion/")
 if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
 
 ## Input- use single independent and all dependent
-ind_data<- "tumor_noEPN" 
+ind_data<- "myeloid" 
 dep_data<-names(prop_list)[names(prop_list) != ind_data & names(prop_list) !="tumor"]
 
 ## Merge together
@@ -288,7 +288,7 @@ if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
 
 ## Input
 ind_data<- "myeloid"
-dep_data<- "cd8"
+dep_data<- "cd4"
 colors_use<- c("cyan", "olivedrab", "navy", "violetred", "orange", "gold", "purple", "grey") ## Colors- for independent variable
 confounders_test<- c("age_numeric", "Subtype")
 
@@ -362,123 +362,6 @@ ggsave(paste0(figure_dir_use,ind_data,".vs.", dep_data, "_modelWith",
               paste(control_for, collapse = "."), ".png"), width=5, height=4)
 ```
 
-
-
-## NOT CURRENTLY IN USE ## 
-## Plot 2 proportions of 2 cell types of interest, with lm
-```{r}
-## input: list with 2 cell sets and 2 cell types of interest. Cell type 1 will be set as independent variable
-celltype_comparisons<- list(list(cellSet_1=tumor_cellType, cellSet_2=cd8_program,
-                                 cellType_1="Immune_Reactive", cellType_2= "CD8_Inhibitory"),
-                            list(cellSet_1=tumor_cellType, cellSet_2=myeloid_program,
-                                 cellType_1="MES2", cellType_2= "IFN_TAM"),
-                            list(cellSet_1=tumor_cellType, cellSet_2=myeloid_program,
-                                 cellType_1="MES2", cellType_2= "Monocytes"),
-                            list(cellSet_1=tumor_cellType, cellSet_2=myeloid_program,
-                                 cellType_1="GIPC-like", cellType_2= "SEPP1_Mo_TAM"),
-                            list(cellSet_1=tumor_cellType, cellSet_2=cd8_program,
-                                 cellType_1="OPC-like", cellType_2= "CD8_Inhibitory"),
-                            list(cellSet_1=tumor_cellType, cellSet_2=cd8_program,
-                                 cellType_1="OC-like", cellType_2= "CD8_NK"),
-                            list(cellSet_1=tumor_cellType, cellSet_2=cd8_program,
-                                 cellType_1="OC-like", cellType_2= "CD8_Memory"),
-                            list(cellSet_1=tumor_cellType, cellSet_2=cd8_program,
-                                 cellType_1="OC-like", cellType_2= "CD8_Cytotoxic"),
-                            list(cellSet_1=tumor_cellType, cellSet_2=cd8_program,
-                                 cellType_1="MES2", cellType_2= "CD8_NK"),
-                            list(cellSet_1=tumor_cellType, cellSet_2=cd8_program,
-                                 cellType_1="GIPC-like", cellType_2= "CD8_Inhibitory"),
-                            list(cellSet_1=tumor_cellType, cellSet_2=cd4_program,
-                                 cellType_1="GIPC-like", cellType_2= "CD4_Inhibitory"),
-                            list(cellSet_1=tumor_cellType, cellSet_2=cd4_program,
-                                 cellType_1="OPC-like", cellType_2= "CD4_Inhibitory"),
-                             list(cellSet_1=tumor_cellType, cellSet_2=cd4_program,
-                                 cellType_1="OC-like", cellType_2= "CD4_Cytotoxic"))
-names(celltype_comparisons)<- paste0("c", 1:length(celltype_comparisons))
-
-## Merge cell type comparisons into single df, add on metadata
-all_comparisons_df<- lapply(celltype_comparisons, function(x){
-  ## Subset to same samples
-  cellSet_1<- x$cellSet_1[x$cellSet_1$Sample %in% x$cellSet_2$Sample,]
-  cellSet_2<- x$cellSet_2[x$cellSet_2$Sample %in% x$cellSet_1$Sample,]
-  print(paste0(length(unique(cellSet_2$Sample)), " shared samples"))
-  
-  ## Subset to cell types of interest
-  cellSet_1<- cellSet_1[cellSet_1$CellType==x$cellType_1,]
-  cellSet_2<- cellSet_2[cellSet_2$Program == x$cellType_2,]
-  
-  ## Merge
-  cellSet_merge<- merge(cellSet_1, cellSet_2, by="Sample")
-  
-  ## Add on metadata
-  cellSet_merge<- merge(cellSet_merge, sample_meta, by="Sample")
-  cellSet_merge$Subtype<- C(factor(cellSet_merge$Subtype), treatment)
-  cellSet_merge$age<- as.integer(cellSet_merge$age)
-  
-  return(cellSet_merge)
-})
-
-## Determine which variables to control for
-lm_covariates_test<- lapply(all_comparisons_df, function(x){
-  print(as.character(unique(x$CellType)))
-  ## qq plot
-  qqnorm(x$perCells_CellType, main = paste0("QQplot: Tumor ", unique(x$CellType))); qqline(x$perCells_CellType)
-  
-  sex_tmp<- x[x$sex != "NA",]
-  model_sex<-summary(lm(perCells_CellType ~ sex, sex_tmp)) 
-  model_subtype<-summary(lm(perCells_CellType ~  Subtype, x)) 
-  model_age<- summary(lm(perCells_CellType ~  age, x)) 
-  
-  cov_res<- data.frame(sex=model_sex$coefficients["sexM", "Pr(>|t|)"],
-                       subtype=min(model_subtype$coefficients[-1, "Pr(>|t|)"]), ## just report minimum- will control for if any is less than <0.05
-                       age=model_age$coefficients["age", "Pr(>|t|)"],
-                       celltype=unique(x$CellType))
-  cov_res$control_for<- paste(apply(cov_res[,1:3], 1, function(y){names(y)[y<0.05]}), collapse="_")
-  
-  return(cov_res)
-})  
-cov_res<- do.call("rbind", lm_covariates_test)
-
-## Run lm, controlling for any covariates
-all_model_res<- lapply(all_comparisons_df, function(x){
-  model<-lm(perCells_ImmuneProgram ~ perCells_CellType + Subtype, x)
-  model_summary<- summary(model)
-  model_res<- data.frame(pvalue=model_summary$coefficients["perCells_CellType", "Pr(>|t|)"],
-                         r2=model_summary$r.squared, 
-                         call=as.character(model$call)[2],
-                         independent_v=as.character(unique(x$CellType)))
-  return(model_res)
-})
-all_model_res<- do.call("rbind", all_model_res)
-
-
-## Plot
-all_plots<- lapply(names(all_comparisons_df), function(x){
-  model_res<- all_model_res[x,]
-  df<- all_comparisons_df[[x]]
-  cellType_1<- unique(df$CellType); cellType_2<- unique(df$Program)
-  ## Correlate 2 cell types of interest
-  cellSet_cor<- round(cor(df$perCells_CellType, df$perCells_ImmuneProgram),2)
-  
-  p<- ggplot(df, aes(x=perCells_CellType, y=perCells_ImmuneProgram))+
-    geom_point()+
-    ggtitle(paste0(cellType_1, " vs ", cellType_2), 
-            subtitle = paste0("Pearson correlation: ", cellSet_cor, "\n", "p value: ", round(model_res$pvalue, 6)))+
-    xlab(paste0("Proportion of ", cellType_1))+
-    ylab(paste0("Proportion of ", cellType_2))+
-    geom_smooth(se=FALSE, method="lm", color="red", linetype="dashed")
-    #annotate("text", label=paste0("Pearson correlation: ", cellSet_cor), x=mean(df$perCells_CellType), y=mean(df$perCells_ImmuneProgram))+
-    #annotate("text", label=paste0("p value: ", round(model_res$pvalue, 4)), x=mean(df$perCells_CellType)+10, y=mean(df$perCells_ImmuneProgram)+10)
-  return(p)
-})
-cowplot::plot_grid(plotlist=all_plots, ncol=4)
-ggsave(paste0(figure_dir, "pairwiseComparisons_Tumor.vs.CD8.CD4.Myeloid.png"), width=16, height=14)
-
-
-
-
-
-```
 
 
 

@@ -207,10 +207,13 @@ ggsave(paste0(figure_dir_use, "HeatmapBySampleProportion_Sender.", majorSender, 
 ```
 
 ## 4. Number of interactions between all pairwise combinations of 2 sets of minor cell types
+Plotting options: heatmap, chord diagram, sankey plot
+
+## Preprocess
 ```{r}
 ## Set major sender/receiver cell types
-majorCellType1<- c("CD4", "CD8")
-majorCellType2<- "Tumor" 
+majorCellType1<- c("CD4")
+majorCellType2<- "Myeloid" 
 
 ## Set normalization method-"noNorm", "bySample", "byCell"
 norm_method<- "noNorm"
@@ -278,18 +281,22 @@ majorCells2<- unique(sigLRs_plot$sender[sigLRs_plot$sender_major %in% majorCellT
 sigLRs_nLR$major_sender<- ifelse(sigLRs_nLR$sender %in% majorCells1, majorCellType1, majorCellType2 )
 sigLRs_nLR$major_receiver<- ifelse(sigLRs_nLR$receiver %in%majorCells1, majorCellType1, majorCellType2 )
 sigLRs_nLR$major_sr<- paste0(sigLRs_nLR$major_sender, "\nto\n", sigLRs_nLR$major_receiver)
+```
 
+## Heatmap
+```{r}
+sigLRs_plot<- sigLRs_nLR
 
 ## Switch sender/receiver for one- just for plotting purposes
-sigLRs_nLR$sender.plot<- ifelse(sigLRs_nLR$major_receiver==majorCellType1, sigLRs_nLR$receiver, sigLRs_nLR$sender)
-sigLRs_nLR$receiver.plot<- ifelse(sigLRs_nLR$major_receiver==majorCellType1, sigLRs_nLR$sender, sigLRs_nLR$receiver)
+sigLRs_plot$sender.plot<- ifelse(sigLRs_plot$major_receiver==majorCellType1, sigLRs_plot$receiver, sigLRs_plot$sender)
+sigLRs_plot$receiver.plot<- ifelse(sigLRs_plot$major_receiver==majorCellType1, sigLRs_plot$sender, sigLRs_plot$receiver)
 
 ## Order by major cell type
-sigLRs_nLR$sender.plot<- factor(sigLRs_nLR$sender.plot, levels=c(majorCells1, majorCells2))
-sigLRs_nLR$receiver.plot<- factor(sigLRs_nLR$receiver.plot, levels=c(majorCells1, majorCells2))
+sigLRs_plot$sender.plot<- factor(sigLRs_plot$sender.plot, levels=c(majorCells1, majorCells2))
+sigLRs_plot$receiver.plot<- factor(sigLRs_plot$receiver.plot, levels=c(majorCells1, majorCells2))
 
 ## Plot
-ggplot(sigLRs_nLR, aes(x=sender.plot, y=receiver.plot, fill=nLRs_norm))+
+ggplot(sigLRs_plot, aes(x=sender.plot, y=receiver.plot, fill=nLRs_norm))+
   geom_tile()+
   #theme_linedraw() + 
   theme_classic()+
@@ -307,8 +314,10 @@ ggsave(paste0(figure_dir, "HeatmapByTotalLR_Norm", norm_method,"_",majorCellType
 ```
 
 
-## Alternative to above: chord diagram
+## chord diagram
 ```{r}
+sigLRs_plot<- sigLRs_nLR
+
 ## Alternative: chord diagram
 majorCells1<- gsub("_", "\n",gsub("\\.", "\n",majorCells1))
 majorCells2<- gsub("_", "\n",gsub("\\.", "\n",majorCells2))
@@ -320,7 +329,7 @@ majorCells2<- gsub("_", "\n",gsub("\\.", "\n",majorCells2))
   names(colors_use)<- c(majorCells1, majorCells2)
   
   ## Subset to needed columns
-  tmp<- sigLRs_nLR[,c( "sender", "receiver","nLRs_norm")]
+  tmp<- sigLRs_plot[,c( "sender", "receiver","nLRs_norm")]
   tmp$sender<- gsub( "_","\n",gsub("\\.", "\n", tmp$sender))
   tmp$receiver<- gsub("_", "\n", gsub("\\.", "\n",tmp$receiver))
   
@@ -329,6 +338,196 @@ majorCells2<- gsub("_", "\n",gsub("\\.", "\n",majorCells2))
   chordDiagram(tmp,annotationTrack = c("grid", "name"), order=c(majorCells1, majorCells2),
                        grid.col = colors_use)
   dev.off()
+```
+
+
+## Sankey plot
+```{r}
+sigLRs_plot<- sigLRs_nLR
+
+## Order cell types by major cell type
+ordered_celltypes<- gsub("\n", "_", c(cd4_types, cd8_types, myeloid_types, tumor_types))
+sigLRs_plot$receiver.plot<- factor(sigLRs_plot$receiver, levels=ordered_celltypes[ordered_celltypes %in% sigLRs_plot$receiver])
+sigLRs_plot$sender.plot<- factor(sigLRs_plot$sender, levels=ordered_celltypes[ordered_celltypes %in% sigLRs_plot$sender])
+
+sigLRs_plot$major_sender<- gsub("CD4", "Immune", gsub("CD8", "Immune",gsub("Myeloid2", "Immune", sigLRs_plot$major_sender)))
+
+## optional (still testing)- plot sender -->receiver,sender-->receiver
+## So myeloid --> tcell, tcell --> myeloid
+## Slightly simplifies visual and maybe more direct sender/receiver comparison?
+## Need to 1) reformat to 3 
+## Plot
+all_plots<- lapply(c(unique(sigLRs_plot$major_sender), list(unique(sigLRs_plot$major_sender))), function(major_sender){
+  print(major_sender)
+  tmp<- sigLRs_plot[sigLRs_plot$major_sender %in% major_sender,]
+  
+  ggplot(data=tmp, aes(axis1=sender, axis2=receiver,  y=nLRs_norm))+
+    geom_alluvium(aes(fill = nLRs_norm)) +
+    geom_stratum() +
+    theme_classic()+
+    geom_text(stat = "stratum",
+              aes(label = after_stat(stratum))) +
+    scale_x_discrete(limits = c("Sender", "Receiver"),
+                     expand = c(0.15, 0.05), position="top") +
+    scale_fill_gradient2(low="blue", mid="white", high="red", midpoint=mean(sigLRs_plot$nLRs_norm))+
+    ylab("")+
+    theme(axis.text.y=element_blank(), 
+          axis.ticks.y=element_blank(),
+          axis.text.x = element_text(face="bold", color="black", size=12),
+          strip.text = element_blank())  
+    #facet_grid(rows=vars(major_sender), scale="free_y", space="free_y")
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+  
+ggsave(paste0(figure_dir, "Sankey_ByTotalLR_Norm", norm_method,"_",paste(majorCellType1, collapse="."),".", majorCellType2, ".png"),
+       width=24, height=7)
+}
+
+```
+
+
+sankey plot testing
+```{r}
+
+
+
+df<- sigLRs_plot[,c("sender", "receiver", "sender_major", "receiver_major")]
+df_list<- split(df, f=df$sender_major)
+df_list<- lapply(df_list, function(x){x[,!colnames(x) %in% c("sender_major", "receiver_major")]})
+colnames(df_list[[1]])<- c("CellA1", "CellB")
+colnames(df_list[[2]])<- c("CellB", "CellA2")
+
+test<- lapply(unique(df_list[[1]]$CellB), function(x){
+  df1<- df_list[[1]]
+  df2<- df_list[[2]]
+  
+  df1<- df1[df1$CellB==x,]
+  df2<- df2[df2$CellB==x,]
+  
+  ## get largest and smallest- CellB as sender or as receiver?
+  if(nrow(df1)>nrow(df2)){max_df<- df1; min_df<- df2}else{max_df<- df2;min_df<-df1}
+  row_diff<- nrow(max_df)-nrow(min_df)
+  
+  print(x)
+  if(sum(grepl("CellA1", colnames(max_df)))>0){
+    print("More LRs in tcell sender")
+  }else{print("More LRs in tcell receiver")}
+  
+  ## For min df- add on NAs to make up difference with major
+  min_df_add<- data.frame(CellA=rep(NA, row_diff), CellB=rep(x, row_diff))
+  min_df<- min_df[,order(colnames(min_df))]
+  colnames(min_df_add)<- colnames(min_df)
+  min_df<- rbind(min_df, min_df_add)
+  
+  ## Order columns in min/max the same way
+  min_df_cellA<- colnames(min_df)[grepl("CellA", colnames(min_df))]
+  min_df<-min_df[order(min_df[[min_df_cellA]]),]
+  
+  max_df_cellA<- colnames(max_df)[grepl("CellA", colnames(max_df))]
+  max_df<-max_df[order(max_df[[max_df_cellA]]),]
+  
+  ## Add on number to CellB- just for merging purposes
+  max_df$CellB<- paste0(1:nrow(max_df),"remove", max_df$CellB)
+  min_df$CellB<- paste0(1:nrow(min_df), "remove", min_df$CellB)
+  
+  ## Merge
+  df<- merge(max_df, min_df, by="CellB")
+  
+  ## Remove numbering from CellB
+  df$CellB<- gsub('([0-9])+(remove)', "", df$CellB)
+  df<-df[,c("CellA1", "CellB", "CellA2")]
+  
+  return(df)
+})
+test<- do.call("rbind", test)
+
+## for ggaluvial
+test$ID<- paste0(test$CellA1, "__", test$CellB, "__", test$CellA2)
+test2<- as.data.frame(table(test$ID))
+test2$CellA1<- sapply(test2$Var1, function(x){unlist(strsplit(as.character(x), split="__"))[1]})
+test2$CellB<- sapply(test2$Var1, function(x){unlist(strsplit(as.character(x), split="__"))[2]})
+test2$CellA2<- sapply(test2$Var1, function(x){unlist(strsplit(as.character(x), split="__"))[3]})
+
+## Determine number of LRs for each pair- use to color plot
+CellA_sender<- as.data.frame(table(paste0(test$CellA1, "__", test$CellB)))
+CellB_sender<- as.data.frame(table(paste0(test$CellB, "__", test$CellA2)))
+
+## Prep for sankey
+df<- test %>% make_long(CellA1, CellB, CellA2) 
+df$ID<- paste0(df$node, "__", df$next_node)
+df$nLR<- ifelse(df$x=="CellA1", plyr::mapvalues(df$ID, CellA_sender$Var1, CellA_sender$Freq, warn_missing = FALSE),
+         ifelse(df$x=="CellB", plyr::mapvalues(df$ID, CellB_sender$Var1, CellB_sender$Freq, warn_missing = FALSE),
+                0))
+df$nLR<- as.numeric(as.character(df$nLR))
+
+df$color<- ifelse(df$nLR>30, "high", "low")
+df$color<- ifelse(is.na(df$next_node) | is.na(df$next_x) | is.na(df$next_node), NA, df$color)
+
+nWithColor<- 2
+df$color<- c(rep("red", nWithColor), rep(NA, nrow(df)-nWithColor))
+df$color<-c("red", NA, NA,"red",rep(NA,2),"red", rep(NA,2), rep(NA, 699))
+df$color<- rep(c("red", NA, NA),236 )
+
+ggplot(df, aes(x = x, 
+               next_x = next_x, 
+               node = node, 
+               next_node = next_node,
+               #fill = test,
+               label=node)) +
+  geom_sankey(aes(fill=factor(color))) +
+  geom_sankey_label()+
+  theme_sankey(base_size = 16)
+    #theme(legend.position = "none")
+      #scale_fill_gradient2(low="blue", mid="white", high="red", midpoint = mean(df$nLR))
+
+
+```
+
+
+```{r}
+# Library
+library(networkD3)
+library(dplyr)
+ 
+# A connection data frame is a list of flows with intensity for each flow
+links <- data.frame(
+  source=c("group_A","group_A", "group_B", "group_C", "group_C", "group_E"), 
+  target=c("group_C","group_D", "group_E", "group_F", "group_G", "group_H"), 
+  value=c(2,3, 2, 3, 1, 3)
+  )
+links<- sigLRs_nLR[,c("sender", "receiver", "nLRs_norm")] 
+
+# From these flows we need to create a node data frame: it lists every entities involved in the flow
+nodes <- data.frame(
+  name=c(as.character(links$sender), 
+  as.character(links$receiver)) %>% unique()
+)
+ 
+# With networkD3, connection must be provided using id, not using real name like in the links dataframe.. So we need to reformat it.
+links$IDsender <- match(links$sender, nodes$name)-1 
+links$IDreceiver <- match(links$receiver, nodes$name)-1
+
+# Add a 'group' column to each connection:
+links$group <- as.factor(c("type_a","type_a","type_a","type_b","type_b","type_b"))
+ 
+# Add a 'group' column to each node. Here I decide to put all of them in the same group to make them grey
+nodes$group <- as.factor(c("my_unique_group"))
+ 
+# Give a color for each group:
+my_color <- 'd3.scaleOrdinal() .domain(["type_a", "type_b", "my_unique_group"]) .range(["#69b3a2", "steelblue", "grey"])'
+ 
+# Make the Network
+p <- sankeyNetwork(Links = links, Nodes = nodes, Source = "IDsource", Target = "IDtarget", 
+                   Value = "value", NodeID = "name", 
+                   colourScale=my_color, LinkGroup="group", NodeGroup="group")
+
+p
+
+p <- sankeyNetwork(Links = links, Nodes = nodes,
+              Source = "IDsender", Target = "IDreceiver",
+              Value = "nLRs_norm", NodeID = "name", 
+              sinksRight=FALSE)
+p
 ```
 
 ## 5. Summary plots for LRs of interest
@@ -386,38 +585,5 @@ width<- 5+length(unique(sigLRs_unique$Sample)) * .25
 ggsave(paste0(figure_dir, "LR.summary_Sender.", majorSender, "_Receiver.", majorReceiver, ".png"), width=width, height=height)
 ```
 
-## Exploratory- can delete
-```{r}
-## Interaction pairs with at least 2 samples
-sigLRs$pair<- paste0(sigLRs$sender, "__", sigLRs$receiver)
-nSamples_perPair<- sigLRs %>% group_by(pair) %>% summarise(nSamples=length(unique(Sample))) %>% as.data.frame()
-sigLRs_multiple<- sigLRs[sigLRs$pair %in% nSamples_perPair$pair[nSamples_perPair$nSamples > 1],]
 
-## Get # of LRs for each pair by sample
-nLR_bySample<- sigLRs_multiple %>% group_by(pair, Sample) %>% summarise(nLR=n()) %>% as.data.frame()
-
-## Add on number of total cells in that pair
-nLR_bySample$sender<- sapply(nLR_bySample$pair, function(x){unlist(strsplit(x, "__"))[[1]]})
-nLR_bySample$receiver<- sapply(nLR_bySample$pair, function(x){unlist(strsplit(x, "__"))[[2]]})
-nCells_inPair<- sapply(1:nrow(nLR_bySample), function(x){
-  tmp<- nLR_bySample[x,]
-  cells<- sum(nCellTypes$NCells[nCellTypes$Sample==tmp$Sample & nCellTypes$CellType==tmp$sender],
-              nCellTypes$NCells[nCellTypes$Sample==tmp$Sample & nCellTypes$CellType==tmp$receiver])
-  return(cells)
-})
-nLR_bySample$nCellsInput<- nCells_inPair
-
-## Plot for a few pairs
-nLR_plot<- nLR_bySample[nLR_bySample$pair %in% nSamples_perPair$pair[nSamples_perPair$nSamples>4],]
-all_plots<- lapply(unique(nLR_plot$pair), function(x){
-  tmp<- nLR_plot[nLR_plot$pair==x,]
-  ggplot(tmp, aes(x=nLR, y=nCellsInput))+
-    geom_point()+
-    geom_smooth(method="lm", se=FALSE)+
-    ggtitle(gsub("__", " to ", x))
-})
-cowplot::plot_grid(plotlist=all_plots, ncol=4)
-ggsave(paste0(figure_dir, "testing_nLRs.vs.cellInput.png"), width=12, height=12)
-
-```
 

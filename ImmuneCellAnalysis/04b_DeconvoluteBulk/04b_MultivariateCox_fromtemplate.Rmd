@@ -3,7 +3,7 @@ title: "Multivariate Cox regression analysis"
 output: html_document
 ---
 
-This template used to run multivariate cox regression analysis based on gene set score. This allows for controlling for confounders like tumor type, age, etc.
+Run multivariate cox regression analysis based on predicted proportion of programs. Control for confounders like tumor location, age, sex
 
 ## Overall steps:
 
@@ -34,6 +34,9 @@ analysis_dir<- paste0("analysis/coxRegression/")
 figure_dir<- paste0("figures/coxRegression/")
 if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)};if(!dir.exists(analysis_dir)){dir.create(analysis_dir)}
 
+## Load colors
+tcell_colors<- readRDS("../plot_colors/Tcell.programs_rank8sharedByunion_reAnnot.Rds")
+myeloid_colors<- readRDS("../plot_colors/Myeloid_program_colors.Rds")
 ```
 
 ## Load in data
@@ -48,14 +51,22 @@ Minimum columns required:
 
 2.Clinical metadata. Contains variables you want to control for- age/sex/diagnosis/treatment/etc. First column should be sample ID. 
 Note: should remove any variables with NA values for any sample, or remove those samples.
+
+## List all files, subset as needed. Set analysis name based on cohorts
 ```{r}
 ## Load in processed data (03_DeconvoluteBulke_Preprocess.Rmd)
 files<- list.files(data_dir, pattern="HighLowPropSplit")
 
-## Subset to just CBTN- 2 different cohorts, clinical matches exactly
-## For other cohorts, will have to run separately for each cohort or match up the metatdata as much as possible
-files<- files[grepl("CBTN", files)]
+## Subset cohorts as needed
+files<- files[!(grepl("K27M", files)| grepl("WT", files))] ## CBTN.DFCI.TCGA
+#files<- files[grep("CBTN_All", files)] ##  "onlyCBTN"
+#files<- files[grep("DFCI", files)] ## "onlyDFCI"
+#files<- files[grep("TCGA", files)] ## "onlyTCGA"
 
+analysis_name<- "CBTN.DFCI.TCGA"
+```
+
+```{r}
 surv_obj_list_allCellTypes<- lapply(files, function(x){
   tmp<- readRDS(paste0(data_dir, x))
   return(tmp)
@@ -76,15 +87,35 @@ final_meta_list<- lapply(names(surv_obj_list_allCellTypes), function(cohort){
   })
 names(final_meta_list)<-names(surv_obj_list_allCellTypes)
 
-## Flatten into 1 finalMeta df for each celltype
+
+## Flatten into 1 finalMeta df for each celltype. Need to subset to shared columns between all cohorts (varying clinical data)
 finalMeta_allCellTypes<- lapply(c("cd8", "cd4", "myeloid"), function(cellType){
   tmp<- lapply(final_meta_list, function(x){x[[cellType]]})
+  
+  ## Get vector of columsn that occur in all- time/censored, programs, any shared clinical data
+  shared_columns<- unlist(unname(lapply(tmp, function(x){colnames(x)})))
+  shared_columns<- table(shared_columns)
+  shared_columns<- names(shared_columns)[shared_columns==length(tmp)]
+  
+  ## Subset to shared columns
+  tmp<- lapply(tmp, function(x){x[,colnames(x) %in% shared_columns]})
+  
   tmp<- do.call("rbind", tmp)
   return(tmp)
 })
 names(finalMeta_allCellTypes)<- c("cd8", "cd4", "myeloid")
 
+## Set high/low to factor- so that comparison is always to "high" program proportion
+genesets<-c("Memory", "Predysfunctional", "Cytotoxic_NKreceptor", "IFN_Response", "Stress", "Effector_Memory", "Cycling",
+             "Treg", "Inhibitory",
+            "IFN_TAM", "Monocytes", "Inflammatory", "SEPP1_Mo_TAM", "Hypoxic_TAM", "Stress_Response")
+finalMeta_allCellTypes<- lapply(finalMeta_allCellTypes, function(x){
+  tmp<- x[,colnames(x) %in% genesets]
+  tmp<- tmp %>% mutate_if(is.character, factor, levels=c("Low","High")) %>% as.data.frame()
+  tmp<- cbind(tmp, x[,!colnames(x) %in% genesets])
+  return(tmp)
 
+})
 ```
 
 
@@ -93,29 +124,10 @@ names(finalMeta_allCellTypes)<- c("cd8", "cd4", "myeloid")
 ## Can also just use all variables
 ```{r}
 ## List with variables to control for (if running across multiple cohorts, may want to include "Cohort")
-ToControlFor<- c("AGE", "CANCER_TYPE", "ETHNICITY", "TUMOR_TYPE", "cohort")
+ToControlFor<- c( "Age", "Sex","cohort")
 
 ```
 
-
-## Optional: 
-1. Create additional variable, merging similar diagnoses together. This may not apply to all data.
-2. Subset by diagnosis- bc glioblastoma diagnosis has such a large effect, may want to remove it from consideration
-```{r}
-## Optional: add column to meta- astro/oligo/mixed/glio
-FinalMeta$MyDiagnosis<-gsub("Mixed glioma", "MixedGlioma", gsub("Astrocytoma, NOS", "Astrocytoma", 
-                         gsub("Oligodendroglioma, anaplastic", "Oligodendroglioma", 
-                              gsub("Oligodendroglioma, NOS", "Oligodendroglioma", 
-                                   gsub("Astrocytoma, anaplastic", "Astrocytoma", 
-                                        gsub("Glioblastoma", "Glioblastoma",
-                                             FinalMeta$primary_diagnosis))))))
-FinalMeta$MyDiagnosis<-as.factor(FinalMeta$MyDiagnosis)
-
-
-## Optional: Subset to remove gbm or just look at 1 type
-FinalMeta_NoGBM<- FinalMeta[FinalMeta$project_id=="TCGA-LGG",]
-FinalMeta_Mixed<-FinalMeta[FinalMeta$primary_diagnosis=="Mixed glioma",]
-```
 
                       
 ## Run univariate cox to determine which variables to control for
@@ -136,7 +148,7 @@ subsetToHighLow = when splitting 25/50/25, subset to just 25/25
 ## set exportCsv to FALSE if you want to examine results before exporting
 allSamples_diagnosis<- RunCoxWrapper(geneSet_groups = ToControlFor, AllMeta= finalMeta_allCellTypes$cd8, mySubset="AllSamples", 
                                      controlFor=FALSE, 
-                                     exportName = "CD8_univariate_variables", exportCsv=FALSE, resultsFolder = analysis_dir)
+                                     exportName = paste0("CD8_univariate_variables_", analysis_name), exportCsv=FALSE, resultsFolder = analysis_dir)
 
 ## select just variables that had significant hazard
 cox_df<-na.omit(allSamples_diagnosis$cox_df)
@@ -153,7 +165,7 @@ ToBeControlled<- sig_variables
 genesets_test<- c("Memory", "Predysfunctional", "Cytotoxic_NKreceptor", "IFN_Response", "Stress", "Effector_Memory", "Cycling")
 
 ## Run univariate for all samples
-allSamples<- RunCoxWrapper(genesets_test, finalMeta_allCellTypes$cd8, mySubset="AllSamples", 
+allSamples<- RunCoxWrapper(genesets_test, finalMeta_allCellTypes$cd8, mySubset=analysis_name, 
                                     controlFor=FALSE, exportName = "CD8_univariate",
                                     exportCsv=TRUE, subsetToHighLow = TRUE, resultsFolder = analysis_dir)
 ```
@@ -162,12 +174,22 @@ allSamples<- RunCoxWrapper(genesets_test, finalMeta_allCellTypes$cd8, mySubset="
 
 ```{r}
 ## Control for all sig clinical confounders- can also specify only a subset of these
-allSamples_diagnosis<- RunCoxWrapper(genesets_test, finalMeta_allCellTypes$cd8, mySubset="AllSamples",
-                                     controlFor=ToControlFor,
-                                     exportName="CD8_ControlForAll", exportCsv = TRUE, resultsFolder = analysis_dir)
+allSamples_diagnosis<- RunCoxWrapper(genesets_test, finalMeta_allCellTypes$cd8, mySubset=analysis_name,
+                                     controlFor=ToBeControlled,
+                                     exportName=paste0("CD8_ControlFor.", paste(ToBeControlled, collapse = ".")), 
+                                     exportCsv = TRUE, resultsFolder = analysis_dir)
 
 
 ```
+
+## Testing proportionality assumption
+## Check this for at least one of the above models
+## Tests whether it's appropriate to apply regression model to these variables
+## If p<0.05, may need to stratify by that variable rather than controlling for it
+```{r}
+lapply(allSamples_diagnosis$cox_objs, function(x){cox.zph(x)})
+```
+
 
 #########
 ## CD4 ##
@@ -175,7 +197,7 @@ allSamples_diagnosis<- RunCoxWrapper(genesets_test, finalMeta_allCellTypes$cd8, 
 ```{r}
 ## Run univariate cox for all potential controlling variables
 ## set exportCsv to FALSE if you want to examine results before exporting
-allSamples_diagnosis<- RunCoxWrapper(geneSet_groups = ToControlFor, AllMeta= finalMeta_allCellTypes$cd4, mySubset="AllSamples", 
+allSamples_diagnosis<- RunCoxWrapper(geneSet_groups = ToControlFor, AllMeta= finalMeta_allCellTypes$cd4, mySubset=analysis_name, 
                                      controlFor=FALSE, 
                                      exportName = "CD4_univariate_variables", exportCsv=FALSE, resultsFolder = analysis_dir)
 
@@ -185,6 +207,7 @@ sig<-cox_df[cox_df$`Pr(>|z|)` < 0.1,]
 sig_variables<-unique(sig$Variable)
 
 ToBeControlled<- sig_variables
+#ToBeControlled<- "HistoneStatus"
 ```
 
 
@@ -194,7 +217,7 @@ ToBeControlled<- sig_variables
 genesets_test<- c("Memory", "Treg", "Inhibitory", "IFN_Response", "Stress", "Effector_Memory", "Cycling")
 
 ## Run univariate for all samples
-allSamples<- RunCoxWrapper(genesets_test, finalMeta_allCellTypes$cd4, mySubset="AllSamples", 
+allSamples<- RunCoxWrapper(genesets_test, finalMeta_allCellTypes$cd4, mySubset=analysis_name, 
                                     controlFor=FALSE, exportName = "CD4_univariate",
                                     exportCsv=TRUE, subsetToHighLow = TRUE, resultsFolder = analysis_dir)
 ```
@@ -203,9 +226,10 @@ allSamples<- RunCoxWrapper(genesets_test, finalMeta_allCellTypes$cd4, mySubset="
 
 ```{r}
 ## Control for all sig clinical confounders- can also specify only a subset of these
-allSamples_diagnosis<- RunCoxWrapper(genesets_test, finalMeta_allCellTypes$cd4, mySubset="AllSamples",
-                                     controlFor=ToControlFor,
-                                     exportName="CD4_ControlForAll", exportCsv = TRUE, resultsFolder = analysis_dir)
+allSamples_diagnosis<- RunCoxWrapper(genesets_test, finalMeta_allCellTypes$cd4, mySubset=analysis_name,
+                                     controlFor=ToBeControlled,
+                                     exportName=paste0("CD4_ControlFor.", paste(ToBeControlled, collapse = ".")), 
+                                     exportCsv = TRUE, resultsFolder = analysis_dir)
 
 
 ```
@@ -226,7 +250,7 @@ lapply(allSamples_diagnosis$cox_objs, function(x){cox.zph(x)})
 ```{r}
 ## Run univariate cox for all potential controlling variables
 ## set exportCsv to FALSE if you want to examine results before exporting
-allSamples_diagnosis<- RunCoxWrapper(geneSet_groups = ToControlFor, AllMeta= finalMeta_allCellTypes$myeloid, mySubset="AllSamples", 
+allSamples_diagnosis<- RunCoxWrapper(geneSet_groups = ToControlFor, AllMeta= finalMeta_allCellTypes$myeloid, mySubset=analysis_name, 
                                      controlFor=FALSE, 
                                      exportName = "Myeloid_univariate_variables", exportCsv=FALSE, resultsFolder = analysis_dir)
 
@@ -236,6 +260,7 @@ sig<-cox_df[cox_df$`Pr(>|z|)` < 0.1,]
 sig_variables<-unique(sig$Variable)
 
 ToBeControlled<- sig_variables
+#ToBeControlled<- "HistoneStatus"
 ```
 
 
@@ -243,10 +268,13 @@ ToBeControlled<- sig_variables
 ## Univariate
 ```{r}
 genesets_test<-  c("IFN_TAM", "Monocytes", "Inflammatory", "SEPP1_Mo_TAM", "Hypoxic_TAM", "Stress_Response")
+tmp<- apply(finalMeta_allCellTypes$myeloid[,genesets_test], 2, function(x){length(unique(x))})
+genesets_test<- names(tmp)[tmp==2]
+
 
 
 ## Run univariate for all samples
-allSamples<- RunCoxWrapper(genesets_test, finalMeta_allCellTypes$myeloid, mySubset="AllSamples", 
+allSamples<- RunCoxWrapper(genesets_test, finalMeta_allCellTypes$myeloid, mySubset=analysis_name, 
                                     controlFor=FALSE, exportName = "Myeloid_univariate",
                                     exportCsv=TRUE, subsetToHighLow = TRUE, resultsFolder = analysis_dir)
 ```
@@ -255,9 +283,10 @@ allSamples<- RunCoxWrapper(genesets_test, finalMeta_allCellTypes$myeloid, mySubs
 
 ```{r}
 ## Control for all sig clinical confounders- can also specify only a subset of these
-allSamples_diagnosis<- RunCoxWrapper(genesets_test, finalMeta_allCellTypes$myeloid, mySubset="AllSamples",
-                                     controlFor=ToControlFor,
-                                     exportName="Myeloid_ControlForAll", exportCsv = TRUE, resultsFolder = analysis_dir)
+allSamples_diagnosis<- RunCoxWrapper(genesets_test, finalMeta_allCellTypes$myeloid, mySubset=analysis_name,
+                                     controlFor=ToBeControlled,
+                                     exportName=paste0("Myeloid_ControlFor.", paste(ToBeControlled, collapse = ".")), 
+                                     exportCsv = TRUE, resultsFolder = analysis_dir)
 
 
 ```
@@ -283,7 +312,7 @@ lapply(allSamples_diagnosis$cox_objs, function(x){cox.zph(x)})
 
 
 
-## Optional: merge results together into a single df in order to summarize in a plot
+## Merge results together into a single df in order to summarize in a plot
 Useful when you run multiple cohorts separately, but want to get an overview of all cohorts together
 May need to modify for your data
 ```{r}
@@ -292,10 +321,10 @@ genesets_test<-  c("IFN_TAM", "Monocytes", "Inflammatory", "SEPP1_Mo_TAM", "Hypo
                    "Memory", "Predysfunctional", "Cytotoxic_NKreceptor", "IFN_Response", "Stress", "Effector_Memory", "Cycling")
 
 ## Get all results files
-multi_files<-list.files(analysis_dir, pattern="ControlFor")
-multi_files<- multi_files[grep("AllSamples",multi_files)]
+multi_files<-list.files(analysis_dir, pattern=paste0("ControlFor.", paste(ToBeControlled, collapse=".")))
+multi_files<- multi_files[grepl(analysis_name, multi_files) & !grepl("allCoxResults", multi_files)]
 uni_files<-list.files(analysis_dir, pattern="univariate")
-uni_files<- uni_files[!grepl("variables_", uni_files)]
+uni_files<- uni_files[!grepl("variables_", uni_files)& grepl(analysis_name, uni_files)]
 
 ## Initiate dataframe with univariate file:
   ## Read in first file
@@ -334,12 +363,13 @@ uni_files<- uni_files[!grepl("variables_", uni_files)]
     colnames(df)<- c("Variable", "HazardRatio", "pvalue")
     
     #Get name of variable being controlled for, add to dataframe
-    ControlFor<- gsub("_AllSamples_results.csv", "",i )
-    ControlFor<-gsub("ControlFor", "", ControlFor)
+    ControlFor<- gsub("_results.csv", "", 
+                 gsub(paste0("_", analysis_name), "",
+                 gsub("CD4_", "", gsub("CD8_", "", gsub("Myeloid_", "", i )))))
     df$ControlFor<-ControlFor
     
     ## Remove any rows that are the variable being controlled for- not of interest
-    df2<- df[df$Variable %in% paste0(genesets_test, "Low"),]
+    df2<- df[df$Variable %in% paste0(genesets_test, "High"),]
 
     
     ## Add major cell type
@@ -349,12 +379,12 @@ uni_files<- uni_files[!grepl("variables_", uni_files)]
   }
 
 
-write.csv(AllCox,paste0(analysis_dir, "allCoxResults_CBTN.WT.K27M.csv"))
+write.csv(AllCox,paste0(analysis_dir, "allCoxResults_ControlFor.", paste(ToBeControlled, collapse="."),"_", analysis_name, ".csv"))
 ```
 
 ## Plot results
 ```{r}
-df<- AllCox
+df<- read.csv(paste0(analysis_dir, "allCoxResults_ControlFor.", paste(ToBeControlled, collapse="."),"_", analysis_name, ".csv"))
 
 df$tmp<-df$pvalue<0.05
 df$tmp2<- df$pvalue<0.1
@@ -362,13 +392,25 @@ df$Sig<-rowSums(df[,c("tmp", "tmp2")])
 df$Sig<-gsub("0", "NotSig", gsub("1", "AlmostSig", gsub("2", "Sig", df$Sig)))
 df$Sig<-factor(df$Sig, levels=c("NotSig", "AlmostSig", "Sig"))
 
+colors_use<- c(tcell_colors, myeloid_colors$rank6)
+names(colors_use)<- paste0(names(colors_use), "High")
+names(colors_use)<- gsub("\\.", "_", names(colors_use))
+
+df$Variable<- gsub("\\.", "_", df$Variable)
+
+df$Effect<- ifelse(df$HazardRatio>1, "Worse", "Better")
+
 ggplot(df, aes(x=HazardRatio, y=ControlFor,color=Variable ,alpha=Sig))+
-  geom_point(size=8)+
+  geom_jitter(size=8, width=0.01, height=0.2)+
   geom_vline(xintercept=1)+
+  theme_bw()+
   xlab("Hazard Ratio")+
   theme(axis.title.y = element_blank(),
         axis.text.y = element_text(face="bold", color="black", size="12"))+
-  facet_grid(rows=vars(CellType), space="free_y", scale="free_y")
+  facet_grid(rows=vars(CellType), space="free_y", cols=vars(Effect), scale="free")+
+  #facet_grid()+
+  scale_color_manual(values=colors_use)
+ggsave(paste0(figure_dir, "allCoxResults_ControlFor.", paste(ToBeControlled, collapse="."),"_", analysis_name, ".png"), width=10, height=4)
 ```
 
 
