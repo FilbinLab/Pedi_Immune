@@ -314,6 +314,7 @@ clinical_split_list<- lapply(names(cb_program_norm_list), function(cohort){
   print(cohort)
   cb_program_norm<- cb_program_norm_list[[cohort]]
   clinical_use<- input_list[[cohort]]$meta
+  clinical_use<- clinical_use[!duplicated(clinical_use$Sample),]
   
   ## For each broad cell type, split samples into high/low
   broad_split<- lapply(cb_program_norm, function(program_prop){
@@ -334,8 +335,21 @@ clinical_split_list<- lapply(names(cb_program_norm_list), function(cohort){
     quant_split<- quant_split[,!grepl("Sample", colnames(quant_split))]
     quant_split$Sample<- rownames(quant_split)
     
-    ## Merge clinical and quantile
+    ## Reformat raw proportions
+    program_prop_list<- split(program_prop, f=program_prop$Program)
+    program_prop_list<- lapply(names(program_prop_list), function(x){
+      tmp<- program_prop_list[[x]][,c("Sample", "perCells")]
+      colnames(tmp)<- c("Sample", paste0(x, "_perCells"))
+      return(tmp)
+      })
+    program_prop<- do.call("cbind", program_prop_list)
+    rownames(program_prop)<- program_prop$Sample; program_prop<- program_prop[,!grepl("Sample", colnames(program_prop))]
+    program_prop$Sample<- rownames(program_prop)
+    
+    ## Merge raw proportions with clinical and quantile
     clinical_quant<- merge(quant_split, clinical_use, by="Sample")
+    clinical_quant<- merge(clinical_quant, program_prop, by="Sample")
+    
     return(clinical_quant)
   })
   return(broad_split)
