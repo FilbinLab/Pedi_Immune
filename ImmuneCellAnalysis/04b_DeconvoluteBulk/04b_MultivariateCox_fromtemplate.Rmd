@@ -60,10 +60,11 @@ files<- list.files(data_dir, pattern="HighLowPropSplit")
 ## Subset cohorts as needed
 #files<- files[!(grepl("K27M", files)| grepl("WT", files))] ## CBTN.DFCI.TCGA
 #files<- files[grep("CBTN_All", files)] ##  "onlyCBTN"
-files<- files[grep("DFCI", files)] ## "onlyDFCI"
+#files<- files[grep("DFCI", files)] ## "onlyDFCI"
 #files<- files[grep("TCGA", files)] ## "onlyTCGA"
+files<- files[grepl(paste(c("CBTN_All"), collapse = "|"), files)]
 
-analysis_name<- "onlyDFCI"
+analysis_name<- "OnlyCBTN_noDNA"
 ```
 
 ## Reformat proportions/survival, flatten into single df for each major cell type (CD4, CD8, my)
@@ -106,6 +107,13 @@ finalMeta_allCellTypes<- lapply(c("cd8", "cd4", "myeloid"), function(cellType){
 })
 names(finalMeta_allCellTypes)<- c("cd8", "cd4", "myeloid")
 
+## If analysis name == OnlyCBTN_noDNA: remove samples that are "DataNotAvailable" for Histone mutation
+if(analysis_name=="OnlyCBTN_noDNA"){
+  finalMeta_allCellTypes<- lapply(finalMeta_allCellTypes, function(x){
+    x[x$HistoneStatus != "DataNotAvailable",]
+  })
+}
+
 ## Set high/low to factor- so that comparison is always to "high" program proportion
 genesets<-c("Memory", "Predysfunctional", "Cytotoxic_NKreceptor", "IFN_Response", "Stress", "Effector_Memory", "Cycling",
              "Treg", "Inhibitory",
@@ -129,7 +137,8 @@ head(finalMeta_allCellTypes$cd8)
 ## List with variables to control for (if running across multiple cohorts, may want to include "Cohort")
 #ToControlFor<- c( "Age", "Sex", "race", "project_id", "TumorType_detailed")
 #ToControlFor<- c("Age", "Sex", "TumorType_detailed", "Primary_Recurrent", "HistoneStatus")
-ToControlFor<- c("Age", "Sex", "Primary_Recurrent", "HistoneStatus", "Location")
+#ToControlFor<- c("Age", "Sex", "Primary_Recurrent", "HistoneStatus", "Location")
+ToControlFor<- c("Age", "Sex", "Primary_Recurrent", "HistoneStatus", "TumorType_detailed")
 
 split_method<- "" ## "" for high/low (default), "_numericProp" for actual proportions
 ```
@@ -163,6 +172,7 @@ sig<-cox_df[cox_df$`Pr(>|z|)` < 0.1,]
 sig_variables<-unique(sig$Variable)
 
 ToBeControlled<- sig_variables
+#ToBeControlled<- c(sig_variables, "HistoneStatus")
 ```
 
 
@@ -217,7 +227,7 @@ cox_df<-na.omit(allSamples_diagnosis$cox_df)
 sig<-cox_df[cox_df$`Pr(>|z|)` < 0.1,]
 sig_variables<-unique(sig$Variable)
 
-ToBeControlled<- sig_variables
+#ToBeControlled<- sig_variables
 #ToBeControlled<- "HistoneStatus"
 ```
 
@@ -267,7 +277,7 @@ cox_df<-na.omit(allSamples_diagnosis$cox_df)
 sig<-cox_df[cox_df$`Pr(>|z|)` < 0.1,]
 sig_variables<-unique(sig$Variable)
 
-ToBeControlled<- sig_variables
+#ToBeControlled<- sig_variables
 #ToBeControlled<- "HistoneStatus"
 ```
 
@@ -314,7 +324,7 @@ genesets_test<-  c("IFN_TAM", "Monocytes", "Inflammatory", "SEPP1_Mo_TAM", "Hypo
                    "Memory", "Predysfunctional", "Cytotoxic_NKreceptor", "IFN_Response", "Stress", "Effector_Memory", "Cycling")
 
 ## Get all results files
-multi_files<-list.files(analysis_dir, pattern=paste0("ControlFor.", paste(ToBeControlled, collapse="."), split_method))
+multi_files<-list.files(analysis_dir, pattern=paste0("ControlFor.", paste(ToBeControlled, collapse="."),"_", split_method))
 multi_files<- multi_files[grepl(analysis_name, multi_files) & !grepl("allCoxResults", multi_files)]
 uni_files<-list.files(analysis_dir, pattern=paste0("univariate", split_method))
 uni_files<- uni_files[!grepl("variables_", uni_files)& grepl(analysis_name, uni_files)]
@@ -386,14 +396,21 @@ write.csv(AllCox,paste0(analysis_dir, "allCoxResults_ControlFor.",
 
 ## Plot results
 ```{r}
+analysis_name<- "OnlyCBTN_noDNA"
+ToBeControlled<- c("Primary_Recurrent", "TumorType_detailed", "HistoneStatus")
+
+## Read in merged results
 df<- read.csv(paste0(analysis_dir, "allCoxResults_ControlFor.", paste(ToBeControlled, collapse="."),"_", analysis_name,split_method, ".csv"))
 
+## Set sig values for alpha
 df$tmp<-df$pvalue<0.05
 df$tmp2<- df$pvalue<0.1
 df$Sig<-rowSums(df[,c("tmp", "tmp2")])
 df$Sig<-gsub("0", "NotSig", gsub("1", "AlmostSig", gsub("2", "Sig", df$Sig)))
 df$Sig<-factor(df$Sig, levels=c("NotSig", "AlmostSig", "Sig"))
+df$Variable<- gsub("\\.", "_", df$Variable)
 
+## Rename colors as needed
 colors_use<- c(tcell_colors, myeloid_colors$rank6)
 if(split_method=="_numericProp"){
   names(colors_use)<- paste0(names(colors_use), "_perCells")
@@ -402,25 +419,94 @@ if(split_method=="_numericProp"){
 }
 names(colors_use)<- gsub("\\.", "_", names(colors_use))
 
-df$Variable<- gsub("\\.", "_", df$Variable)
-
+## Variable to facet wrap by
 df$Effect<- ifelse(df$HazardRatio>1, "Worse", "Better")
 
-ggplot(df, aes(x=HazardRatio, y=ControlFor,color=Variable ,alpha=Sig))+
-  geom_jitter(size=8, width=0.01, height=0.2)+
+## Plot
+ggplot(df, aes(x=HazardRatio, y=ControlFor,color=Variable ))+
+  geom_jitter(size=8, width=0.01, height=0.2, aes(alpha=Sig))+
   geom_vline(xintercept=1)+
   theme_bw()+
   xlab("Hazard Ratio")+
   theme(axis.title.y = element_blank(),
-        axis.text.y = element_text(face="bold", color="black", size="12"))+
+        axis.text.y = element_text(face="bold", color="black", size="12"),
+        legend.position = "bottom")+
   facet_grid(rows=vars(CellType), space="free_y", cols=vars(Effect), scale="free")+
   #facet_grid()+
-  scale_color_manual(values=colors_use)
+  scale_color_manual(values=colors_use)+
+  scale_alpha_manual(aes(alpha=Sig), values = c(NotSig=.2, AlmostSig=.5, Sig=1), guide="none")
 ggsave(paste0(figure_dir, "allCoxResults_ControlFor.", 
               paste(ToBeControlled, collapse="."),"_", 
-              analysis_name,split_method, ".png"), width=10, height=4)
+              analysis_name,split_method, ".png"), width=14, height=5)
 ```
 
 
+## Merge results across multiple analyses:
+1) Different cohort combinations (single cohort, merged)- univariate + control for all sig confounders for each
+2) Split by high/low + numeric proportions
+```{r}
+## Get all merged cox result files
+files<- list.files(analysis_dir, pattern="allCoxResults_ControlFor")
+
+
+## Read in + add on cohort, controlled for, numeric or highLow
+all_res<- lapply(files, function(x){
+  tmp<- read.csv(paste0(analysis_dir, x))
+  
+  ## Extract cohort info
+  cohort<- ifelse(grepl("numericProp", x),
+                  gsub(pattern = "(.*_)(.*)(_numericProp.*)",replacement = "\\2",x = x),
+                  gsub(pattern = "(.*_)(.*)(\\.csv.*)",replacement = "\\2",x = x))
+  tmp$cohort<- cohort
+  
+  ## Add on numeric or highLow
+  tmp$split_method<- ifelse(grepl("numericProp", x), "numericProp", "highLow")
+  return(tmp)
+})
+all_res_df<- do.call("rbind", all_res)
+
+## For numeric proportion analysis, hazard ratio can be at much higher scale. set max hazard ratio
+max_hr<- max(all_res_df$HazardRatio[all_res_df$split_method=="highLow"]) + 1
+all_res_df$HazardRatio_thresh<- ifelse(all_res_df$HazardRatio>max_hr, max_hr, all_res_df$HazardRatio)
+
+## Remove "perCells" and "High" from variable
+all_res_df$Variable<- gsub("_perCells", "", gsub("High", "", all_res_df$Variable))
+names(colors_use)<- gsub("_perCells", "", gsub("High", "", names(colors_use)))
+
+## Variable to facet wrap by
+all_res_df$Effect<- ifelse(all_res_df$HazardRatio>1, "Worse", "Better")
+
+## Set sig values for alpha
+all_res_df$tmp<-all_res_df$pvalue<0.05
+all_res_df$tmp2<- all_res_df$pvalue<0.1
+all_res_df$Sig<-rowSums(all_res_df[,c("tmp", "tmp2")])
+all_res_df$Sig<-gsub("0", "NotSig", gsub("1", "AlmostSig", gsub("2", "Sig", all_res_df$Sig)))
+all_res_df$Sig<-factor(all_res_df$Sig, levels=c("NotSig", "AlmostSig", "Sig"))
+all_res_df$Variable<- gsub("\\.", "_", all_res_df$Variable)
+
+## Merge control-for info + split (y axis)
+all_res_df$yaxis<- paste0(all_res_df$split_method, "_", all_res_df$ControlFor)
+
+## Split by major cell type- will plot separately
+all_res_split<- split(all_res_df, f=all_res_df$CellType)
+
+## Plot it all somehow
+all_plots<- lapply(all_res_split, function(x){
+  ggplot(x, aes(x=HazardRatio_thresh, y=yaxis,color=Variable ,alpha=Sig))+
+    geom_jitter(size=8, width=0.01, height=0.2)+
+    geom_vline(xintercept=1)+
+    theme_bw()+
+    xlab("Hazard Ratio")+
+    theme(axis.title.y = element_blank(),
+          axis.text.y = element_text(face="bold", color="black", size=12),
+          plot.title = element_text(face="bold", color="black", size=16))+
+    facet_grid(rows=vars(cohort), space="free_y", cols=vars(Effect), scale="free")+
+    #facet_grid()+
+    scale_color_manual(values=colors_use[names(colors_use) %in% x$Variable])+
+    ggtitle(unique(x$CellType))
+})
+cowplot::plot_grid(plotlist = all_plots, ncol=3)
+ggsave(paste0(figure_dir, "CoxRes_AllCohorts.AllSplits_062822.png"), width=40, height=8)
+```
 
 

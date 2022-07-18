@@ -303,6 +303,50 @@ for(cohort in names(cb_prop_list)){
   ggsave(paste0(figure_dir_use, "Myeloid_programProp.png"), width=6, height=3)
   
 }
+
+## For CBTN_All: facet_wrap by histone mutation status
+  cohort<- "CBTN_All"
+  
+  ## Set output dir
+  figure_dir_use<- paste0(figure_dir, cohort, "/")
+  if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
+  
+  program_prop<- cb_program_norm_list[[cohort]]
+  meta<- input_list[[cohort]]$meta
+  
+  ## Remove DataNotAvailabel samples from program_prop, map on histone mutation
+  program_prop<- lapply(program_prop, function(x){
+    x$HistoneStatus<- plyr::mapvalues(x$Sample, meta$Sample, meta$HistoneStatus, warn_missing = FALSE)
+    x<- x[x$HistoneStatus != "DataNotAvailable",]
+    x<- x[x$HistoneStatus != x$Sample,]
+    return(x)
+  })
+  
+  ## CD8
+
+  p<-ggplot(program_prop$cd8, aes(x=Sample, y=perCells, fill=Program))+
+    geom_bar(stat="identity")+
+    facet_grid(cols=vars(HistoneStatus), scale="free_x", space="free_x")
+  my_barchart_theme(p, "Cibersort predicted proportions: CD8 programs",
+                    tcell_program_colors[names(tcell_program_colors) %in% program_prop$cd8$Program] )
+  ggsave(paste0(figure_dir_use, "CD8_programProp_byHistoneMutation.png"), width=10, height=3)
+  
+  ## CD4
+  p<-ggplot(program_prop$cd4, aes(x=Sample, y=perCells, fill=Program))+
+    geom_bar(stat="identity")+
+    facet_grid(cols=vars(HistoneStatus), scale="free_x", space="free_x")
+  my_barchart_theme(p, "Cibersort predicted proportions: CD4 programs",
+                    tcell_program_colors[names(tcell_program_colors) %in% program_prop$cd4$Program] )
+  ggsave(paste0(figure_dir_use, "CD4_programProp_byHistoneMutation.png"), width=10, height=3)
+  
+  ## Myeloid
+  p<-ggplot(program_prop$myeloid, aes(x=Sample, y=perCells, fill=Program))+
+    geom_bar(stat="identity")+
+    facet_grid(cols=vars(HistoneStatus), scale="free_x", space="free_x")
+  my_barchart_theme(p, "Cibersort predicted proportions: Myeloid programs",
+                    myeloid_program_colors )
+  ggsave(paste0(figure_dir_use, "Myeloid_programProp_byHistoneMutation.png"), width=10, height=3)
+
 ```
 
 ## Calculate high/low for each program (based on 50/50 split)
@@ -361,7 +405,5 @@ for(cohort in names(clinical_split_list)){
   clinical_split<- clinical_split_list[[cohort]]
   saveRDS(clinical_split, file=paste0(analysis_dir, "HighLowPropSplit_clinical_", cohort, ".Rds"))
 }
-
-
 ```
 
