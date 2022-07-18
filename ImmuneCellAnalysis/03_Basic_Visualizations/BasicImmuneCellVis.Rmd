@@ -51,6 +51,7 @@ tcell_seurat<- readRDS(paste0(tcell_data_dir, "ped_seurat_tcell_harmony.Rds"))
 cd4_seurat<- readRDS(paste0(tcell_data_dir, "ped_seurat_cd4_harmony.Rds"))
 cd8_seurat<- readRDS(paste0(tcell_data_dir, "ped_seurat_cd8_harmony.Rds"))
 adult_tcell<- readRDS(paste0(tcell_data_dir, "adult_seurat_tcell_harmony.Rds"))
+ped.adult_tcell<-readRDS(paste0(tcell_data_dir, "ped.adult_seurat_tcell_harmony.Rds"))
 
 ## Read in colors
 immune_colors<- readRDS("../plot_colors/ImmuneCell.celltypes.Rds")
@@ -323,10 +324,10 @@ ggsave(paste0(figure_dir, "Tcells_clonal.vs.nonclonal.png"), width=10, height=3)
 ##  T cell types, with adult
 ```{r}
 ## Plot and save adult umap with major annotations
-seurat_plot<- subset(adult_tcell, detailed_annot_withCycling != "Unclear")
-seurat_plot$plotting<- seurat_plot$detailed_annot_withCycling
+seurat_plot<- subset(ped.adult_tcell, Final_detailed_annot != "Unclear")
+seurat_plot$plotting<- seurat_plot$Final_detailed_annot
 DimPlot(seurat_plot, group.by = "plotting",label=TRUE, label.size = 5) %>% umap_theme(immune_colors)
-ggsave(paste0(figure_dir, "Adult_TCellMajorCellTypes_WithCycling.png"), width=6, height=5.5)
+ggsave(paste0(figure_dir, "Ped.Adult_TCellMajorCellTypes.png"), width=5, height=5.5)
 
 ## Bar plot of adult major annots + ped major annots. Grouped by subtype
   ## Ped
