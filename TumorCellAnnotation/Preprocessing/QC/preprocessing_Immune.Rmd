@@ -19,7 +19,7 @@ source(preprocessing)
 
 
 ```{r load-house-keeping-genes}
-marker_dir = "/Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Marker_genes/"
+marker_dir = "/Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/Marker_genes/"
 hk_genes_dir = paste0(base_dir, marker_dir, "tirosh_house_keeping.txt")
 hk_genes = readLines(hk_genes_dir)
 hk_genes = hk_genes[3:length(hk_genes)]
