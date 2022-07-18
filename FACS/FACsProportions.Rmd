@@ -26,7 +26,7 @@ if(!dir.exists(analysis_dir)){dir.create(analysis_dir)}
 
 ## Read in FACs data
 ```{r}
-facs_df<- read.csv("FACsPercentages.csv")
+facs_df<- read.csv("../notUploaded/FACsPercentages.csv")
 colnames(facs_df)<- c("Sample", "CD3", "CD45", "TumorCells", "Total")
 ```
 
@@ -44,7 +44,7 @@ facs_df<- facs_df[!facs_remove,]
 facs_df<- facs_df[facs_df$Total>=0.99,]
 
 ## add subtype info
-subtypes<- read.csv("Subtypes.csv")
+subtypes<- read.csv("../notUploaded/Subtypes.csv")
 facs_df$Subtype<- plyr::mapvalues(facs_df$Sample, subtypes$sample, subtypes$MySubtypes)
 
 ## Clean up subtype
