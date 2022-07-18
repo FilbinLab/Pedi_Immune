@@ -374,14 +374,14 @@ all_plots<- lapply(c(unique(sigLRs_plot$major_sender), list(unique(sigLRs_plot$m
     theme(axis.text.y=element_blank(), 
           axis.ticks.y=element_blank(),
           axis.text.x = element_text(face="bold", color="black", size=12),
-          strip.text = element_blank())  
-    #facet_grid(rows=vars(major_sender), scale="free_y", space="free_y")
+          strip.text = element_blank())  +
+    facet_grid(rows=vars(major_sender), scale="free_y", space="free_y")
 })
 cowplot::plot_grid(plotlist=all_plots, ncol=3)
   
 ggsave(paste0(figure_dir, "Sankey_ByTotalLR_Norm", norm_method,"_",paste(majorCellType1, collapse="."),".", majorCellType2, ".png"),
        width=24, height=7)
-}
+
 
 ```
 
@@ -390,8 +390,7 @@ sankey plot testing
 ```{r}
 
 
-
-df<- sigLRs_plot[,c("sender", "receiver", "sender_major", "receiver_major")]
+df<- sigLRs_plot[,c("sender", "receiver", "major_sender", "major_receiver")]
 df_list<- split(df, f=df$sender_major)
 df_list<- lapply(df_list, function(x){x[,!colnames(x) %in% c("sender_major", "receiver_major")]})
 colnames(df_list[[1]])<- c("CellA1", "CellB")
