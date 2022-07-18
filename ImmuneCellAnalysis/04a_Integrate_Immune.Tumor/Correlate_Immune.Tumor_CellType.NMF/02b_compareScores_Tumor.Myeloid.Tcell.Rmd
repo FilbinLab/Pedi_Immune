@@ -1,0 +1,288 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+## Purpose:
+Compare scores for myeloid, tcell, and tumor programs. Do certain programs/cell types correlate with others? 
+
+## Approach:
+Using program proportions/scores by sample processed in 01_Preprocess_proportionFiles.Rmd, compare mean scores by sample for cd8/cd4 vs myeloid programs  using linear regression and pearson correlation
+
+
+```{r}
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/", 
+                     "04a_Integrate_Immune.Tumor/Correlate_Immune.Tumor_CellType.NMF/")
+
+library(Seurat)
+library(ggplot2)
+library(ggpubr)
+library(randomcoloR)
+
+figure_dir_tmp<- paste0("figures/")
+analysis_dir_tmp<- paste0("analysis/")
+
+if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp, recursive = TRUE)}
+if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+source(paste0(working_dir, "HelperFunctions.R"))
+```
+
+## Set analysis/figure directories. Read in processed files with  mean scores and sample metadata
+processed in 01_Preprocess_proportionFiles.Rmd
+```{r}
+cohort<- "pedOnly_nomuv63"
+figure_dir<- paste0(figure_dir_tmp, cohort, "/byScores/");analysis_dir<- paste0(analysis_dir_tmp, cohort, "/")
+if(!dir.exists(figure_dir)){dir.create(figure_dir)}; if(!dir.exists(analysis_dir)){dir.create(analysis_dir)}
+
+
+## Mean scores by sample
+score_list<- readRDS(paste0(analysis_dir, "program_scores_myeloid.cd4.cd8.tumor.Rds"))
+
+
+## Sample metadata
+sample_meta<- readRDS(paste0(analysis_dir, "all_sample_metadata.Rds"))
+```
+
+## Reformat scores into single data frame
+```{r}
+## Add on broad cell type
+score_list_withCellType<- lapply(names(score_list), function(x){
+  tmp<- score_list[[x]]
+  tmp$cellType<-x
+  tmp$Program<- paste0(x, "_", tmp$Program)
+  return(tmp)
+})
+names(score_list_withCellType)<- names(score_list)
+
+## Merge into single df
+score_df<- do.call("rbind", score_list_withCellType)
+score_df$Program<- as.character(score_df$Program)
+
+## remove "-" (issues with lm downstream)
+score_df$Program<- gsub("-", "_", score_df$Program)
+
+```
+
+
+## Generate df of scores for each pair of programs
+```{r}
+## Get all program pairs
+programs<- unique(score_df$Program)
+program_pairs<- apply(combn(programs,2),2,paste,collapse='__')
+
+## manually add "pairs" for same program
+#program_pairs<- c(program_pairs, unname(sapply(programs, function(x){paste0(x, "__", x)})))
+
+## Cycle through all pairs, get samples with both programs, reformat into single df for each pair
+all_pair_score_df<- lapply(program_pairs, function(x){
+  ## Subset to pair
+  pair<- unlist(strsplit(x, split="__"))
+  score_tmp<- score_df[score_df$Program %in% pair, ]
+  
+  ## remove rows without 2 samples (i.e., found in both programs in pair)
+  nSamples<- table(score_tmp$Sample)
+  score_tmp<- score_tmp[score_tmp$Sample %in% names(nSamples)[nSamples==2],]
+  
+  ## reformat: 1 df with columns for both
+  score_split<- split(score_tmp, f=score_tmp$Program)
+  score_split<- lapply(score_split, function(x){
+    tmp<-x
+    colnames(tmp)<-c("Sample", "Program", unique(tmp$Program), "cellType")
+    tmp$Program<-NULL; tmp$cellType<-NULL
+    return(tmp)
+  })
+  score_tmp<- merge(score_split[[1]], score_split[[2]], by="Sample")
+  return(score_tmp)
+})
+names(all_pair_score_df)<- program_pairs
+
+saveRDS(all_pair_score_df, file=paste0(analysis_dir, "programScores_splitByPairs.Rds"))
+```
+
+## Pearson correlation for each pair of programs
+```{r}
+all_pair_score_df<- readRDS(paste0(analysis_dir, "programScores_splitByPairs.Rds"))
+all_pearson<- sapply(all_pair_score_df, function(x){
+  cor(x[,2], x[,3], method="pearson")
+})
+```
+
+
+## linear regression for each pair of programs
+```{r}
+all_pair_score_df<- readRDS(paste0(analysis_dir, "programScores_splitByPairs.Rds"))
+all_lm<- lapply(all_pair_score_df, function(x){
+  #print(colnames(x))
+  runLm<- paste0("lm(", colnames(x)[2], "~", colnames(x)[3], ", x)")
+  lm_res<-summary(eval(parse(text=runLm)))
+  return(list(model=lm_res,
+              r2=lm_res$r.squared,
+              pvalue=lm_res$coefficients[colnames(x)[3], "Pr(>|t|)"]))
+    
+})
+
+## vector of pvalues
+all_pvalues<- sapply(all_lm, function(x){x$pvalue})
+all_r2<- sapply(all_lm, function(x){x$r2})
+```
+
+## Plot heatmap of pearson correlation
+```{r}
+## reformat into dataframe
+pearson_df<- as.data.frame(all_pearson)
+pearson_df$p1<- sapply(rownames(pearson_df), function(x){unlist(strsplit(x, split="__"))[1]})
+pearson_df$p2<- sapply(rownames(pearson_df), function(x){unlist(strsplit(x, split="__"))[2]})
+
+## add on broad cell type
+pearson_df$broad1<- gsub("_.*", "", pearson_df$p1)
+pearson_df$broad2<- gsub("_.*", "", pearson_df$p2)
+
+## remove broad cell type from program name
+pearson_df$p1<- gsub("cd4_", "", gsub("cd8_", "", gsub("myeloid_", "", gsub("tumor_", "", pearson_df$p1))))
+pearson_df$p2<- gsub("cd4_", "", gsub("cd8_", "", gsub("myeloid_", "", gsub("tumor_", "", pearson_df$p2))))
+
+## Optional- remove correlations between same broad cell types
+pearson_df<- pearson_df[pearson_df$broad1 != pearson_df$broad2,]
+
+
+## Order programs- reverse p2 so that it aligns with p1 in heatmap
+#pearson_df$p1<- factor(pearson_df$p1, levels=unique(pearson_df$p1))
+#pearson_df$p2<- factor(pearson_df$p2, levels=rev(unique(pearson_df$p1)))
+
+## Add on sig from linear regression (used to add box on plot)
+pearson_df$pvalue<- as.numeric(plyr::mapvalues(rownames(pearson_df), names(all_pvalues), all_pvalues, warn_missing = FALSE))
+pearson_df$sig<- ifelse(pearson_df$pvalue<0.01, "verySig",ifelse(pearson_df$pvalue<0.05, "sig", "notSig")) 
+
+
+## Change cell type to upper case for nicer plotting
+pearson_df$broad1<- gsub("cd4", "CD4", gsub("cd8","CD8", gsub("myeloid", "Myeloid", gsub("tumor", "Tumor", pearson_df$broad1))))
+pearson_df$broad2<- gsub("cd4", "CD4", gsub("cd8","CD8", gsub("myeloid", "Myeloid", gsub("tumor", "Tumor", pearson_df$broad2))))
+
+## Order by cell type 
+pearson_df$broad1<- factor(pearson_df$broad1, levels=c( "Myeloid","CD4", "CD8"))
+pearson_df$broad2<- factor(pearson_df$broad2, levels=rev(c( "Tumor", "CD8", "CD4")))
+
+pearson_df<- pearson_df %>% dplyr::rename(PearsonCorrelation=all_pearson) %>% as.data.frame()
+
+## Plot
+ggplot(pearson_df, aes(x=p1, y=p2, fill=PearsonCorrelation))+
+  geom_tile()+
+  theme_bw()+
+  scale_fill_gradient2(low="blue", mid="white", high="red")+
+  theme(axis.text.x = element_text(angle=45, hjust=1),
+        axis.text = element_text(face="bold", color="black"),
+        strip.text = element_text(face="bold", color="black", size=12))+
+  facet_grid(cols=vars(broad1), rows=vars(broad2), scales="free", space="free")+
+  geom_tile(data = pearson_df[pearson_df$sig=="sig",], fill = NA, color = "black", size = .5) +
+    geom_tile(data = pearson_df[pearson_df$sig=="verySig",], fill = NA, color = "black", size = 1.5) +
+  xlab("") + ylab("")
+ggsave(paste0(figure_dir, "Heatmap_pearsonCorr_lmForSig_cd4.cd8.myeloid.tumor.Scores.png"), width=7.5, height=5)
+```
+
+
+## 3. Mean scores by sample for cd8/cd4 vs myeloid programs 
+```{r}
+## Input
+ind_data<- "tumor"
+dep_data<- "myeloid"
+colors_use<- c("cyan", "olivedrab", "navy", "violetred", "orange", "gold", "purple", "grey") ## Colors- for independent variable
+confounders_test<- c("age_numeric", "Subtype")
+
+## Merge together
+ind_df<- score_list[[ind_data]]
+dep_df<- score_list[[dep_data]]
+ind_df<- ind_df %>% dplyr::rename(indProgram=Program, indMeanScore=MeanScore) 
+dep_df<- dep_df %>% dplyr::rename(depProgram=Program, depMeanScore=MeanScore) 
+df<- merge(ind_df, dep_df, by="Sample")
+
+## Add on sample metadata
+df<- merge(df, sample_meta, by="Sample")
+
+## Run pearson corrleation for all combinations
+cor_df<- correlateProportions(df=df, dep_value_column="depMeanScore",ind_value_column="indMeanScore",
+                                dep_splitter_column="depProgram",ind_splitter_column="indProgram")
+
+## then do lm test
+  ## Determine which variables to control for
+  ## RESULTS: according to this, need to control for age/subtype (also sex, but only sig for 1, so decided not to)
+  dependent_programs<-as.character(unique(df$depProgram))
+  test_covariates<- lapply(dependent_programs, function(x){
+    message(x)
+    tmp_input_df<- df[df$depProgram==x,]
+    model_res<-lm_checkForConfounders(tmp_input_df, 
+                                      confounder_columns =  c("age_numeric","Subtype"),
+                                      dep_value_column =  "depMeanScore")
+    pvalues<- lapply(model_res, function(y){y$min_pvalue})
+    return(unlist(pvalues))
+  } ); names(test_covariates)<-dependent_programs
+  control_for<- c( "Subtype", "age_numeric")
+
+  ## Run lm for all comparisons, controling for age/sex/subtype
+  all_lm<- linearRegression_multiplePrograms(df=df, dep_value_column="depMeanScore",ind_value_column="indMeanScore",
+                                             dep_splitter_column="depProgram",ind_splitter_column="indProgram",
+                                             controlFor = control_for)
+  all_lm_res<- all_lm$model_res
+                        
+  
+## Merge pearson correlation and lm results
+  ## Add unique id to correlation/lm for merging
+  cor_df$ind_v_dep<- paste0(cor_df$ind_variable, "_vs_", cor_df$dep_variable)
+  all_lm_res$ind_v_dep<- paste0(all_lm_res$ind_variable, "_vs_", all_lm_res$dep_variable)
+  
+  ## Order the same way by unique id
+  cor_df<- cor_df[order(cor_df$ind_v_dep),]
+  all_lm_res<- all_lm_res[order(all_lm_res$ind_v_dep),]
+  sum(all_lm_res$ind_v_dep == cor_df$ind_v_dep); length(unique(all_lm_res$ind_v_dep)); length(unique(cor_df$ind_v_dep))
+  cor_lm_results<- merge(cor_df[,c("PearsonCorrelation", "ind_v_dep")],
+                         all_lm_res[,c("pvalue", "r2", "ind_v_dep")],
+                         by="ind_v_dep")
+  
+  ## Split unique id back into indepedent/dependent
+  cor_lm_results$independent_variable<- sapply(strsplit(cor_lm_results$ind_v_dep, split = "_vs_"), function(x){x[1]})
+  cor_lm_results$dependent_variable<- sapply(strsplit(cor_lm_results$ind_v_dep, split = "_vs_"), function(x){x[2]})
+
+  ## Add on cutoff for pvalue- will change shape if <0.1
+  cor_lm_results$`sig(<0.1)`<- ifelse(cor_lm_results$pvalue<=0.1, "sig", "notSig")
+
+## Plot
+ggplot(cor_lm_results, aes(x=independent_variable, y=dependent_variable, color=PearsonCorrelation, size=pvalue, shape=`sig(<0.1)`))+
+  geom_point()+
+  scale_color_gradient2(low="blue", mid="white", high="red", midpoint = 0)+
+  scale_size(trans = 'reverse', breaks=c(0, .05, .1, .25, .5, .75), labels=c(0, .05, .1, .25, .5, .75))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle=45, hjust=1),
+        axis.text=element_text(color="black", face="bold"))+
+  ylab("")+ xlab("")+
+  ggtitle(paste0(ind_data, " vs ", dep_data))
+ggsave(paste0(figure_dir_use,ind_data,".vs.", dep_data, "_modelWith",
+              paste(control_for, collapse = "."), ".png"), width=5, height=4)
+```
+
+## Heatmap with correlation for all
+```{r}
+## Add major cell type to program name
+all_scores<- lapply(names(score_list), function(x){
+  tmp<- score_list[[x]]
+  tmp$Program<- paste0(x, "_", tmp$Program)
+  tmp$CellType<-x
+  return(tmp)
+})
+names(all_scores)<- names(score_list)
+
+## Reformat into single df
+scores_df<- do.call("rbind", all_scores)
+
+test<- split(scores_df, f=scores_df$Sample)
+
+```
+
+

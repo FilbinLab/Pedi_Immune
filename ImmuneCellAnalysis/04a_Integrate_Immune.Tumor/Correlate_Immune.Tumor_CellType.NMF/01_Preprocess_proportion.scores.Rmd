@@ -35,6 +35,7 @@ source(paste0(working_dir, "HelperFunctions.R"))
 
 
 
+
 ## Load in seurat objects + scores
 ```{r}
 rank_use<- 8; sharedBy<- "union"; cohort<- "pedOnly_nomuv63"
@@ -63,8 +64,42 @@ cd4_scores<- readRDS(paste0("../../02a_Tcells/02_Ped.Adult/02_detailed_annot/ana
 cd8_scores<- readRDS(paste0("../../02a_Tcells/02_Ped.Adult/02_detailed_annot/analysis/identifyCD4.CD8_byNMF/",
                                 "rank", rank_use, "_sharedBy", sharedBy,"/ped_cd8_program_scores.Rds"))
 
-all_scores<- list(myeloid=myeloid_scores, cd4=cd4_scores, cd8=cd8_scores)
 ```
+
+## Score tumor cells for tumor programs
+1. remove epn from seurat
+2. findAllMarkers for tumor programs
+3. score tumor cells for tumor programs
+
+## remove epn + find all markers
+```{r}
+tumor_seurat_noEPN<- subset(tumor_seurat, subtype != "epn")
+tumor_seurat_noEPN$CellAnnot<- gsub("cycling", "Cycling", tumor_seurat_noEPN$CellAnnot)
+tumor_seurat_noEPN<- SetIdent(tumor_seurat_noEPN, value=tumor_seurat_noEPN$CellAnnot)
+
+all_markers<- FindAllMarkers(tumor_seurat_noEPN, min.pct =0.2, logfc.threshold = .2 )
+all_markers_filtered<- all_markers[all_markers$p_val_adj<0.05 & all_markers$avg_log2FC>0,]
+saveRDS(all_markers_filtered, file=paste0(analysis_dir, "tumor_markers_allSubtypesTogether.Rds"))
+```
+
+## score
+```{r}
+all_markers_filtered<- readRDS(paste0(analysis_dir, "tumor_markers_allSubtypesTogether.Rds"))
+
+## Normalize and center
+cm_list<- NormCenter(tumor_seurat_noEPN@assays$RNA@counts)
+cm_mean<- rowMeans(log2(cm_list$raw_data + 1))
+
+## Reformat genes
+top_genes<- all_markers_filtered %>% group_by(cluster) %>% top_n(n=100, wt=avg_log2FC) %>% as.data.frame()
+top_genes<- split(top_genes, f=top_genes$cluster)
+top_genes<- lapply(top_genes, function(x){x$gene})
+
+## Score
+scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, top_genes)))
+saveRDS(scores, file=paste0(analysis_dir, "tumor_scores_allSubtypesTogether.Rds"))
+```
+
 
 ## Create sample metadata df- metadata for all samples (with at least 1 tcell or myeloid cell)
 ```{r}
@@ -120,14 +155,29 @@ saveRDS(prop_list, file=paste0(analysis_dir, "program_proportions_tumor.myeloid.
 
 ## Process scores for myeloid/tcell programs for use downstream
 ```{r}
-## Create list of scores
-all_scores<- list(myeloid=myeloid_scores, cd4=cd4_scores, cd8=cd8_scores)
+tumor_scores<- readRDS(paste0(analysis_dir, "tumor_scores_allSubtypesTogether.Rds"))
 
-## Add on sample
-all_scores<- lapply(all_scores, function(x){
-  x$Sample<- sapply(strsplit(rownames(x), split="CD"), function(y){y[1]})
-  return(x)
+## Remove inhibitory from cd8
+cd8_scores<- cd8_scores[,colnames(cd8_scores) != "Inhibitory",]
+
+## Create list of scores
+all_scores_raw<- list(myeloid=myeloid_scores, cd4=cd4_scores, cd8=cd8_scores, tumor=tumor_scores)
+
+## Add on sample. Split by "CD" for immune, by ".P" for tumor
+all_scores<- lapply(names(all_scores_raw), function(x){
+  tmp<- all_scores_raw[[x]]
+  if(x=="tumor"){
+    tmp$Sample<- sapply(strsplit(rownames(tmp), split="\\.P"), function(y){y[1]})
+  }else{
+    tmp$Sample<- sapply(strsplit(rownames(tmp), split="CD"), function(y){y[1]})
+  }
+  
+  ## Sub out "vent" and "pons"- so name matches across tumor/immune
+  tmp$Sample<- gsub("vent", "", gsub("pons", "", tmp$Sample))
+  
+  return(tmp)
 })
+names(all_scores)<- names(all_scores_raw) 
 
 ## Remove max program/max score column
 all_scores<- lapply(all_scores, function(x){x[,!grepl("Max", colnames(x))]})
@@ -146,10 +196,10 @@ mean_scores<- lapply(mean_scores, function(x){
   return(x)
 })
 
-## Save
-saveRDS(mean_scores, file=paste0(analysis_dir, "program_scores_myeloid.cd4.cd8.Rds"))
+## Save- mean scores by sample, scores by cell
+saveRDS(mean_scores, file=paste0(analysis_dir, "program_scores_myeloid.cd4.cd8.tumor.Rds"))
+saveRDS(all_scores, file=paste0(analysis_dir, "program_scores_byCell_myeloid.cd4.cd8.tumor.Rds"))
 ```
-
 
 
 

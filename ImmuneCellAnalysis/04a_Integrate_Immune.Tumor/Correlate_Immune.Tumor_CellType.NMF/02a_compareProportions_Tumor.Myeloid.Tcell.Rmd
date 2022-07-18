@@ -4,13 +4,13 @@ output: html_document
 ---
 
 ## Purpose:
-Compare proportions/scores for myeloid, tcell, and tumor programs. Do certain programs/cell types correlate with others? 
+Compare proportions for myeloid, tcell, and tumor programs. Do certain programs/cell types correlate with others? 
 
 ## Approach:
-Using program proportions/scores by sample processed in 01_Preprocess_proportionFiles.Rmd, compare the following using linear regression and pearson correlation:
+Using program proportions by sample processed in 01_Preprocess_proportion.scores.Rmd, compare the following using linear regression and pearson correlation:
 1. Proportion of cd8 clonal cells vs cd8/cd4/myeloid/tumor programs 
 2. Proportion of cd8/cd4/myeloid/tumor vs cd8/cd4/myeloid/tumor programs
-3. Mean scores by sample for cd8/cd4 vs myeloid programs 
+
 
 
 ```{r}
@@ -49,8 +49,6 @@ if(!dir.exists(figure_dir)){dir.create(figure_dir)}; if(!dir.exists(analysis_dir
 ## Proportion list
 prop_list<- readRDS(paste0(analysis_dir, "program_proportions_tumor.myeloid.cd4.cd8.cd8Clonal.Rds"))
 
-## Mean scores by sample
-score_list<- readRDS(paste0(analysis_dir, "program_scores_myeloid.cd4.cd8.Rds"))
 
 ## Sample metadata
 sample_meta<- readRDS(paste0(analysis_dir, "all_sample_metadata.Rds"))
@@ -214,6 +212,7 @@ ggsave(paste0(figure_dir_use, ind_data, ".vs.", dep_data, "_modelWith",
                         
 
 ```
+
 ## 2b: Alternative plot- heatmap by pearson correlation for multiple cell types
 ```{r}
 figure_dir_use<- paste0(figure_dir, "byProportion/")
@@ -278,88 +277,6 @@ ggplot(cor_df, aes(x=ind_variable, y=dep_variable, fill=PearsonCorrelation))+
   xlab(paste0(gsub("_noEPN", "", ind_data), " cell types"))+ ylab("")
 
 ggsave(paste0(figure_dir_use, "Heatmap_PearsonCor_", ind_data, ".vs.",paste(dep_data, collapse = "."), ".png"), width=5, height=6)
-```
-
-
-## 3. Mean scores by sample for cd8/cd4 vs myeloid programs 
-```{r}
-figure_dir_use<- paste0(figure_dir, "byScores/")
-if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
-
-## Input
-ind_data<- "myeloid"
-dep_data<- "cd4"
-colors_use<- c("cyan", "olivedrab", "navy", "violetred", "orange", "gold", "purple", "grey") ## Colors- for independent variable
-confounders_test<- c("age_numeric", "Subtype")
-
-## Merge together
-ind_df<- score_list[[ind_data]]
-dep_df<- score_list[[dep_data]]
-ind_df<- ind_df %>% dplyr::rename(indProgram=Program, indMeanScore=MeanScore) 
-dep_df<- dep_df %>% dplyr::rename(depProgram=Program, depMeanScore=MeanScore) 
-df<- merge(ind_df, dep_df, by="Sample")
-
-## Add on sample metadata
-df<- merge(df, sample_meta, by="Sample")
-
-## Run pearson corrleation for all combinations
-cor_df<- correlateProportions(df=df, dep_value_column="depMeanScore",ind_value_column="indMeanScore",
-                                dep_splitter_column="depProgram",ind_splitter_column="indProgram")
-
-## then do lm test
-  ## Determine which variables to control for
-  ## RESULTS: according to this, need to control for age/subtype (also sex, but only sig for 1, so decided not to)
-  dependent_programs<-as.character(unique(df$depProgram))
-  test_covariates<- lapply(dependent_programs, function(x){
-    message(x)
-    tmp_input_df<- df[df$depProgram==x,]
-    model_res<-lm_checkForConfounders(tmp_input_df, 
-                                      confounder_columns =  c("age_numeric","Subtype"),
-                                      dep_value_column =  "depMeanScore")
-    pvalues<- lapply(model_res, function(y){y$min_pvalue})
-    return(unlist(pvalues))
-  } ); names(test_covariates)<-dependent_programs
-  control_for<- c( "Subtype", "age_numeric")
-
-  ## Run lm for all comparisons, controling for age/sex/subtype
-  all_lm<- linearRegression_multiplePrograms(df=df, dep_value_column="depMeanScore",ind_value_column="indMeanScore",
-                                             dep_splitter_column="depProgram",ind_splitter_column="indProgram",
-                                             controlFor = control_for)
-  all_lm_res<- all_lm$model_res
-                        
-  
-## Merge pearson correlation and lm results
-  ## Add unique id to correlation/lm for merging
-  cor_df$ind_v_dep<- paste0(cor_df$ind_variable, "_vs_", cor_df$dep_variable)
-  all_lm_res$ind_v_dep<- paste0(all_lm_res$ind_variable, "_vs_", all_lm_res$dep_variable)
-  
-  ## Order the same way by unique id
-  cor_df<- cor_df[order(cor_df$ind_v_dep),]
-  all_lm_res<- all_lm_res[order(all_lm_res$ind_v_dep),]
-  sum(all_lm_res$ind_v_dep == cor_df$ind_v_dep); length(unique(all_lm_res$ind_v_dep)); length(unique(cor_df$ind_v_dep))
-  cor_lm_results<- merge(cor_df[,c("PearsonCorrelation", "ind_v_dep")],
-                         all_lm_res[,c("pvalue", "r2", "ind_v_dep")],
-                         by="ind_v_dep")
-  
-  ## Split unique id back into indepedent/dependent
-  cor_lm_results$independent_variable<- sapply(strsplit(cor_lm_results$ind_v_dep, split = "_vs_"), function(x){x[1]})
-  cor_lm_results$dependent_variable<- sapply(strsplit(cor_lm_results$ind_v_dep, split = "_vs_"), function(x){x[2]})
-
-  ## Add on cutoff for pvalue- will change shape if <0.1
-  cor_lm_results$`sig(<0.1)`<- ifelse(cor_lm_results$pvalue<=0.1, "sig", "notSig")
-
-## Plot
-ggplot(cor_lm_results, aes(x=independent_variable, y=dependent_variable, color=PearsonCorrelation, size=pvalue, shape=`sig(<0.1)`))+
-  geom_point()+
-  scale_color_gradient2(low="blue", mid="white", high="red", midpoint = 0)+
-  scale_size(trans = 'reverse', breaks=c(0, .05, .1, .25, .5, .75), labels=c(0, .05, .1, .25, .5, .75))+
-  theme_bw()+
-  theme(axis.text.x = element_text(angle=45, hjust=1),
-        axis.text=element_text(color="black", face="bold"))+
-  ylab("")+ xlab("")+
-  ggtitle(paste0(ind_data, " vs ", dep_data))
-ggsave(paste0(figure_dir_use,ind_data,".vs.", dep_data, "_modelWith",
-              paste(control_for, collapse = "."), ".png"), width=5, height=4)
 ```
 
 
