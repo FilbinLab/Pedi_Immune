@@ -64,7 +64,8 @@ program_markers<- readRDS(paste0("../01_compare_NMF/analysis/newMarkers_deNovoPe
 
 ## Read in colors to use
 program_colors<- readRDS(paste0("../../../plot_colors/Tcell.programs_rank", rank_use, "sharedBy", sharedBy, ".Rds"))
-celltype_colors<- readRDS(paste0("../../../plot_colors/Tcell.celltypes.Rds"))
+tcell_colors<- readRDS(paste0("../../../plot_colors/Tcell.celltypes.Rds"))
+cell_colors<- readRDS(paste0("../../../plot_colors/ImmuneCell.celltypes.Rds"))
 
 program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy)
 annot_name<- paste0("detailed_annot_byNMFrank", rank_use, "_mergedBy", sharedBy)
@@ -96,7 +97,7 @@ bd<- bd[bd$CellType!="Unclear",]
   bd<- bd %>% group_by(CellType) %>% mutate(PerCells=Ncells/sum(Ncells)) %>% as.data.frame()
   ggplot(bd, aes(x=CellType, y=PerCells, fill=Program))+
     geom_bar(stat="identity", position="stack")+
-    scale_fill_manual(values=colors_use)+
+    #scale_fill_manual(values=cell_colors)+
     theme_classic()+
     theme(axis.text.x = element_text(angle=45, hjust=1),
           axis.text = element_text(face="bold", color="black"),
@@ -106,9 +107,12 @@ bd<- bd[bd$CellType!="Unclear",]
   
   ## Program by cell type
   bd<- bd %>% group_by(Program) %>% mutate(PerCells=Ncells/sum(Ncells)) %>% as.data.frame()
+  bd$Program<- factor(bd$Program, levels=c("NK-like","Cytotoxic.CD4","Treg", 
+                                           "Inhibitory.CD4","Memory", "EffectorMemory", 
+                                           "Inhibitory.CD8", "Cytotoxic.CD8" ,"Stress" ))
   ggplot(bd, aes(x=Program, y=PerCells, fill=CellType))+
     geom_bar(stat="identity", position="stack")+
-    scale_fill_manual(values=celltype_colors)+
+    scale_fill_manual(values=cell_colors[names(cell_colors) %in% bd$CellType])+
     theme_classic()+
     theme(axis.text.x = element_text(angle=45, hjust=1),
           axis.text = element_text(face="bold", color="black"),
@@ -440,6 +444,7 @@ names(current_programs)<-c("Memory","Inhibitory", "Cycling", "IFN.Response", "St
                            "Predysfunctional", "Treg", "Cytotoxic.NKreceptor")
 
 ## Update seurat objects
+new_program_name<-paste0(program_name, "_reAnnot")
 tcell_seurat@meta.data[[new_program_name]]<- as.character(plyr::mapvalues(tcell_seurat@meta.data[[program_name]],
                                                                           current_programs,
                                                                           names(current_programs)))
@@ -524,6 +529,37 @@ tcell_seurat$remove<-NULL
 
 saveRDS(cd8_seurat, file=paste0(analysis_dir, "ped.adult_seurat_cd8_harmony.Rds"))
 saveRDS(tcell_seurat, file=paste0(analysis_dir, "ped.adult_seurat_tcell_harmony.Rds"))
+```
+
+## Plot program by cell type for updated annotations
+```{r}
+tcell_seurat<- readRDS(paste0(analysis_dir, "ped.adult_seurat_tcell_harmony.Rds"))
+
+annot_name<- "detailed_annot_byNMFrank8_mergedByunion"
+new_program_name<- "NMF_rank8_annot_mergedByunion_reAnnot"
+meta<-data.frame(program=tcell_seurat@meta.data[[new_program_name]],
+                 celltype=tcell_seurat@meta.data[[annot_name]],
+                 sample=tcell_seurat$sampleid,
+                 age=tcell_seurat$Age)
+
+bd<- as.data.frame(table(meta$program, meta$celltype))
+colnames(bd)<- c("Program", "CellType", "Ncells")
+bd<- bd[bd$CellType!="Unclear",]
+
+
+ ## Program by cell type
+  bd<- bd %>% group_by(Program) %>% mutate(PerCells=Ncells/sum(Ncells)) %>% as.data.frame()
+  bd$Program<- factor(bd$Program, levels=c("Cytotoxic.NKreceptor", "Predysfunctional",
+                                           "Treg", "Inhibitory", "Memory", "Effector.Memory", "Cycling", "Stress", "IFN.Response"))
+  ggplot(bd, aes(x=Program, y=PerCells, fill=CellType))+
+    geom_bar(stat="identity", position="stack")+
+    scale_fill_manual(values=cell_colors[names(cell_colors) %in% bd$CellType])+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle=45, hjust=1),
+          axis.text = element_text(face="bold", color="black"),
+          axis.title = element_text(face="bold", color="black"))+
+    ylab("Proportion of cells")+xlab("")
+  ggsave(paste0(figure_dir, "ProgramBreakdown_byCD4.CD8_reAnnot.png"), width=5, height=3)
 ```
 
 

@@ -285,7 +285,7 @@ tcell_seurat$NK1<- NULL
 ## NMF run in: /NMF/All_Tcells/NMF.Rmd
 ```{r}
 ## Read in cell assignments for rank6
-cell_assignemnts<-readRDS(paste0("../../02a_Tcells/01a_Ped/NMF/analysis/DoubletID/", integration, "/", cohort,
+cell_assignemnts<-readRDS(paste0("../../02a_Tcells/01a_Ped/01_NMF/analysis/DoubletID/", integration, "/", cohort,
                                  "/cell_assignment_rank6.Rds"))
 tcell_seurat$NMF_allTcell_rank6<- plyr::mapvalues(colnames(tcell_seurat), names(cell_assignemnts), cell_assignemnts,
                                                   warn_missing = FALSE)
@@ -328,7 +328,7 @@ mean_marker_expr_df<- do.call("rbind", mean_marker_expr_all)
   ## For all cohorts, a subset of cells in "special" program express Tcell markers, a subset express myeloid
 
 ## Integration results: all programs express t cell markers, but one program (NMF2) also expresses myeloid markers
-unclearNMF<- "3" ## 2 for pedOnly noInt, 5 for pedOnly_nomuv63 noInt, 2 for pedOnly_nomuv63 with Int
+unclearNMF<- "2" ## 2 for pedOnly noInt, 5 for pedOnly_nomuv63 noInt, 2 for pedOnly_nomuv63 with Int
 
 ## Double check that NMF2/5/3 doesn't express CD3G + expresses CSF1R
 VlnPlot(tcell_seurat, group.by="NMF_allTcell_rank6", features=c("CD3G", "CSF1R","C1QB", "C1QC"), ncol = 2)

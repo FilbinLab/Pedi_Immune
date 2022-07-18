@@ -22,7 +22,7 @@ base_dir = "/Users/jlabelle/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
 working_dir<- paste0(base_dir, 
                      "Dropbox (Partners HealthCare)/FilbinLab/",
-                     "data_analysis/Projects/Immune/git_repos/Pedi_Immune/ImmuneCellAnalysis/02a_Tcells/02_Ped.Adult/02_detailed_annot/")
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/02a_Tcells/02_Ped.Adult/02_detailed_annot/")
 
 analysis_dir_tmp<- paste0(working_dir, "/analysis/identifyCD4.CD8_byNMF/")
 figure_dir_tmp<- paste0(working_dir, "/figures/identifyCD4.CD8_byNMF/")
@@ -35,6 +35,7 @@ nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
 source(preprocessing)
 source(nmf_helper)
 
+immune_colors<- readRDS("../../../plot_colors/ImmuneCell.celltypes.Rds")
 ```
 
 ## Read in ped tcell seurat object. Contains NMF assignments (annots added in deNovoPedTcell.v.deNovoAdultTcell, based on correlation with adult T cell + correlation with ped cd4/cd8 programs)
@@ -81,10 +82,13 @@ df<- as.data.frame(table(cd4.cd8_expr$program, cd4.cd8_expr$annotate))
 colnames(df)<-c("Program", "CellType", "Ncells")
 df<-df %>% group_by(Program) %>% mutate(perCells=Ncells/sum(Ncells)) %>% as.data.frame()
 
+## Order
+df$CellType<- factor(df$CellType, levels=c(""))
 
 ## Plot
 ggplot(df, aes(x=Program, y=perCells, fill=CellType))+
   geom_bar(stat="identity", position="stack")+
+  theme_classic()+
   theme(axis.text.x = element_text(angle=45, hjust=1))+
   xlab("") + ylab("Proportion of cells")+
   geom_hline(yintercept = 0.5, linetype="dashed")

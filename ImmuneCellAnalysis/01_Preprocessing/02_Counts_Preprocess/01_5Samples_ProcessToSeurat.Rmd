@@ -31,7 +31,7 @@ nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
 source(nmf_helper)
 
 ## Read in housekeeping genes
-marker_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Marker_genes/")
+marker_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/Marker_genes/")
 hkgenes <- read.table(paste0(marker_dir, "tirosh_house_keeping.txt"), skip = 2)
 hkgenes <- as.vector(hkgenes$V1)
 ```
