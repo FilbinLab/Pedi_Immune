@@ -13,5 +13,7 @@
 **/fromO2/*
 **/plot_colors/*
 **/scCoda/*
+**/stream_result/*
+**/.ipynb_checkpoints/**
 
 .Rproj.user
