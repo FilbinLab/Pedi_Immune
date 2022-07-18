@@ -1,0 +1,113 @@
+---
+title: "Stream preprocessing"
+output: html_document
+---
+
+## Preprocess for input into stream (python)
+
+```{r}
+library(Seurat) 
+library(SeuratDisk)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/02a_Tcells/02_Ped.Adult/", 
+                     "04a_Trajectory/")
+
+analysis_dir<- paste0(working_dir, "/analysis/STREAM/")
+
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+
+
+```
+
+## Read in ped tcell seurat object. Contains NMF assignments (annots added in deNovoPedTcell.v.deNovoAdultTcell, based on correlation with adult T cell + correlation with ped cd4/cd8 programs)
+```{r}
+rank_use<-8
+sharedBy<- "union" 
+data_dir<- paste0("../03_Visualize.Reannotate_programs/analysis/Reannotate_programs/", 
+                  "rank",rank_use, "_sharedBy", sharedBy, "/" )
+
+cd4_seurat<- readRDS(paste0(data_dir, "ped.adult_seurat_cd4_harmony.Rds"))
+cd8_seurat<-readRDS(paste0(data_dir, "ped.adult_seurat_cd8_harmony.Rds"))
+
+## Remove norm/scaled data- want X to be raw data
+cd8_seurat<- DietSeurat(cd8_seurat, scale.data = FALSE)
+
+## subset to predys, cyto, cycling
+cd8_subset<- subset(cd8_seurat, Final_Annot %in% c("Predysfunctional"))
+
+SaveH5Seurat(cd4_seurat, filename = paste0(analysis_dir, "cd4.h5Seurat"))
+Convert( paste0(analysis_dir, "cd4.h5Seurat"), dest = "h5ad")
+
+SaveH5Seurat(cd8_seurat, filename = paste0(analysis_dir, "cd8.h5Seurat"))
+Convert( paste0(analysis_dir, "cd8.h5Seurat"), dest = "h5ad")
+
+SaveH5Seurat(cd8_subset, filename = paste0(analysis_dir, "cd8_subset_Cyt.Predys.h5Seurat"))
+Convert( paste0(analysis_dir, "cd8_subset_Cyt.Predys.h5Seurat"), dest = "h5ad")
+
+SaveH5Seurat(cd8_subset, filename = paste0(analysis_dir, "cd8_subset_Cyt.Predys.h5Seurat"))
+Convert( paste0(analysis_dir, "cd8_subset_Cyt.Predys.h5Seurat"), dest = "h5ad")
+
+SaveH5Seurat(cd8_subset, filename = paste0(analysis_dir, "cd8_subset_Predys.h5Seurat"))
+Convert( paste0(analysis_dir, "cd8_subset_Predys.h5Seurat"), dest = "h5ad")
+```
+
+
+## As reference- melanoma and/or nsclc CD8 cells
+```{r}
+nsclc_cd8<- readRDS("../04b_ComparisonToOtherTumor/analysis/NSCLC/cd8_seurat_nsclc.Rds")
+melanoma_cd8<- readRDS("../04b_ComparisonToOtherTumor/analysis/Melanoma/cd8_seurat_melanoma.Rds")
+
+## Remove norm/scaled data- want X to be raw data
+nsclc_cd8<- DietSeurat(nsclc_cd8, scale.data = FALSE)
+melanoma_cd8<- DietSeurat(melanoma_cd8, scale.data = FALSE)
+
+SaveH5Seurat(nsclc_cd8, filename = paste0(analysis_dir, "cd8_nsclc.h5Seurat"))
+Convert( paste0(analysis_dir, "cd8_nsclc.h5Seurat"), dest = "h5ad")
+
+SaveH5Seurat(melanoma_cd8, filename = paste0(analysis_dir, "cd8_melanoma.h5Seurat"))
+Convert( paste0(analysis_dir, "cd8_melanoma.h5Seurat"), dest = "h5ad")
+
+## cytotoxic nsclc cells
+cyto_nsclc<- subset(nsclc_cd8, majorCluster_annot=="Cytotoxic")
+
+SaveH5Seurat(cyto_nsclc, filename = paste0(analysis_dir, "cd8_nsclc_cyto.h5Seurat"))
+Convert( paste0(analysis_dir, "cd8_nsclc_cyto.h5Seurat"), dest = "h5ad")
+```
+
+## For mapping onto nsclc: merged melanoma and glioma CD8 cells
+```{r}
+cd8_seurat<- readRDS("../04b_ComparisonToOtherTumor/analysis/NSCLC.melanoma/cd8_seurat_nsclc.glioma.melanoma.Rds")
+
+## remove nsclc
+cd8_seurat<- subset(cd8_seurat, TumorType != "NSCLC")
+
+## add on annotation
+cd8_seurat$Annot<- ifelse(cd8_seurat$TumorType=="Glioma", cd8_seurat$cellAnnot, cd8_seurat$maxGeneset)
+
+## Add on age for glioma
+cd8_seurat$Tumor_Age<- ifelse(cd8_seurat$TumorType=="Glioma", ifelse(as.numeric(cd8_seurat$age_numeric)<=25, "Glioma_Ped", "Glioma_Adult"), "Melanoma")
+cd8_seurat<- DietSeurat(cd8_seurat, scale.data = FALSE)
+
+SaveH5Seurat(cd8_seurat, filename = paste0(analysis_dir, "cd8_glioma.melanoma.h5Seurat"))
+Convert( paste0(analysis_dir, "cd8_glioma.melanoma.h5Seurat"), dest = "h5ad")
+```
+
+## glioma, nsclc, and melanoma all together
+```{r}
+cd8_seurat<- readRDS("../04b_ComparisonToOtherTumor/analysis/NSCLC.melanoma/cd8_seurat_nsclc.glioma.melanoma.Rds")
+
+## edit metadata
+cd8_seurat$Tumor_Age<- ifelse(cd8_seurat$TumorType=="Glioma", 
+                              ifelse(as.numeric(cd8_seurat$age_numeric)<=25, "Glioma_Ped", "Glioma_Adult"), cd8_seurat$TumorType)
+
+
+cd8_seurat<- DietSeurat(cd8_seurat, scale.data = FALSE)
+
+SaveH5Seurat(cd8_seurat, filename = paste0(analysis_dir, "cd8_glioma.melanoma.nsclc.h5Seurat"))
+Convert( paste0(analysis_dir, "cd8_glioma.melanoma.nsclc.h5Seurat"), dest = "h5ad")
+```
+
