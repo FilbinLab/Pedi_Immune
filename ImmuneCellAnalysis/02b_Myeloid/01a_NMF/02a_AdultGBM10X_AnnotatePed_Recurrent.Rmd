@@ -107,7 +107,7 @@ plot(scores_factor_hc$hc_obj)
 dev.off()
 
 ## Save scores
-saveRDS(scores, file=paste0(analysis_dir, "scores_pedNMFrank", rank, "_adult10x.Rds"))
+saveRDS(scores, file=paste0(analysis_dir, "scores_pedNMFrank", rank_use, "_adult10x.Rds"))
 ```
 
 

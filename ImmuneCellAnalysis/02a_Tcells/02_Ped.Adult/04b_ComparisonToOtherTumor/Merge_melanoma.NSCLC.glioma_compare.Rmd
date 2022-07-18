@@ -33,6 +33,28 @@ source(nmf_helper)
 
 ```
 
+```{r}
+umap_theme<- function(p, colors){
+  p+NoLegend()+
+  scale_color_manual(values=colors)+
+  theme(legend.position = "bottom",
+        legend.text = element_text(face="bold"),
+      plot.title = element_blank(),
+      axis.text = element_text(face="bold", colour = "black"),
+      axis.title = element_text(face="bold", colour = "black"))+
+  ylab("UMAP2")+xlab("UMAP1")
+}
+
+bargraph_bd_theme<- function(){
+  theme(axis.text.x = element_text(angle=45, hjust=1, color="black"),
+        axis.text = element_text(color="black", face="bold"),
+        axis.title =  element_text(color="black", face="bold"),
+        axis.text.y = element_text(color="black"),
+        legend.position = "bottom",
+        legend.title=element_blank())
+  }
+```
+
 ## Read in seurat objects + marker genes
 ```{r}
 rank_use<-8
@@ -67,11 +89,22 @@ melanoma_cd4<- readRDS("analysis/melanoma/cd4_seurat_melanoma.Rds")
 
 ## Merge seurat objects
 ```{r}
+## Optional: downsample to minimum cells in 1 object to reduce sample size effects
+downSize<- TRUE
+
 ## CD8
   ## Check that scale is equivalent
   head(colSums(nsclc_cd8@assays$RNA@counts))/head(colSums(glioma_cd8@assays$RNA@counts))
   head(colSums(melanoma_cd8@assays$RNA@counts))/head(colSums(glioma_cd8@assays$RNA@counts))
   
+  ## Optional: downsample
+  if(downSize){
+    minSize<- min(ncol(nsclc_cd8), ncol(glioma_cd8), ncol(melanoma_cd8)) -1 
+    nsclc_cd8<- nsclc_cd8[, sample(colnames(nsclc_cd8), size =minSize, replace=F)]
+    melanoma_cd8<- melanoma_cd8[, sample(colnames(melanoma_cd8), size =minSize, replace=F)]
+    glioma_cd8<- glioma_cd8[, sample(colnames(glioma_cd8), size =minSize, replace=F)]
+  }
+
   ## Match metadata
   nsclc_cd8$cellAnnot<- nsclc_cd8$majorCluster_annot
   glioma_cd8$cellAnnot<- glioma_cd8@meta.data[[paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")]]
@@ -94,12 +127,21 @@ melanoma_cd4<- readRDS("analysis/melanoma/cd4_seurat_melanoma.Rds")
   merge_cd8<- RunFullSeurat(merge_cd8@assays$RNA@counts, RunHarmony = TRUE, samples = merge_cd8_meta$sample)
   merge_cd8<- AddMetaData(merge_cd8, merge_cd8_meta[,!colnames(merge_cd8_meta) %in% colnames(merge_cd8@meta.data)])
   
-  saveRDS(merge_cd8, file=paste0(analysis_dir, "cd8_seurat_nsclc.glioma.melanoma.Rds"))
+  filename<- ifelse(downSize,"cd8_seurat_nsclc.glioma.melanoma_downsample.Rds", "cd8_seurat_nsclc.glioma.melanoma.Rds" )
+  saveRDS(merge_cd8, file=paste0(analysis_dir, filename))
   
 ## CD4
   ## Check that scale is equivalent
   head(colSums(nsclc_cd4@assays$RNA@counts))/head(colSums(glioma_cd4@assays$RNA@counts))
   head(colSums(melanoma_cd4@assays$RNA@counts))/head(colSums(glioma_cd4@assays$RNA@counts))
+  
+  ## Optional: downsample
+  if(downSize){
+    minSize<- min(ncol(nsclc_cd4), ncol(glioma_cd4), ncol(melanoma_cd4)) -1 
+    nsclc_cd4<- nsclc_cd4[, sample(colnames(nsclc_cd4), size =minSize, replace=F)]
+    melanoma_cd4<- melanoma_cd4[, sample(colnames(melanoma_cd4), size =minSize, replace=F)]
+    glioma_cd4<- glioma_cd4[, sample(colnames(glioma_cd4), size =minSize, replace=F)]
+  }
   
   ## Match metadata
   nsclc_cd4$cellAnnot<- nsclc_cd4$majorCluster_annot
@@ -123,11 +165,17 @@ melanoma_cd4<- readRDS("analysis/melanoma/cd4_seurat_melanoma.Rds")
   merge_cd4<- RunFullSeurat(merge_cd4@assays$RNA@counts, RunHarmony = TRUE, samples = merge_cd4_meta$sample)
   merge_cd4<- AddMetaData(merge_cd4, merge_cd4_meta[,!colnames(merge_cd4_meta) %in% colnames(merge_cd4@meta.data)])
   
-  saveRDS(merge_cd4, file=paste0(analysis_dir, "cd4_seurat_nsclc.glioma.melanoma.Rds"))
+  filename<- ifelse(downSize,"cd4_seurat_nsclc.glioma.melanoma_downsample.Rds", "cd4_seurat_nsclc.glioma.melanoma.Rds" )
+  saveRDS(merge_cd4, file=paste0(analysis_dir, filename))
 ```
 
-## Add score for naive, cyto, predys, dys
+## For cd8: Add score for naive, cyto, predys, dys
 ```{r}
+downSize<-TRUE
+filename<- ifelse(downSize,"cd8_seurat_nsclc.glioma.melanoma_downsample.Rds", "cd8_seurat_nsclc.glioma.melanoma.Rds" )
+merge_cd8<- readRDS(paste0(analysis_dir, filename))
+
+
 all_markers<- list(cytotoxic= c("CX3CR1", "PRF1", "GZMA", "GZMB", "GZMH",  "FGFBP2","KLRG1", "FCGR3A"),
                    naive=c("TCF7", "CCR7", "SELL", "LEF1"),
                    predysfunctional=c("GZMK", "PDCD1", "CXCR3"),
@@ -143,19 +191,58 @@ merge_cd8$maxGeneset<- scores$max
 merge_cd8$maxGeneset_score<- scores$maxScore
 merge_cd8$maxGeneset_lowScore<- ifelse(merge_cd8$maxGeneset_score<0.2, "ScoreTooLow", merge_cd8$maxGeneset)
 
-## Plot
-DimPlot(merge_cd8, group.by = "maxGeneset_lowScore")
-ggsave(paste0(figure_dir, "CD8_UMAP_maxNature2020Score.png"), width=6, height=5)
+## Remove numbers
+merge_cd8$maxGeneset_lowScore<- gsub("[0-9]", "", merge_cd8$maxGeneset_lowScore)
+
+saveRDS(merge_cd8, file=paste0(analysis_dir, filename))
+```
+
+## Plots- CD8
+```{r}
+downSize<-FALSE
+filename<- ifelse(downSize,"cd8_seurat_nsclc.glioma.melanoma_downsample.Rds", "cd8_seurat_nsclc.glioma.melanoma.Rds" )
+merge_cd8<- readRDS(paste0(analysis_dir, filename))
+
+## Set figure directory- subfolder for downsampled object
+figure_dir_use<- ifelse(downSize, paste0(figure_dir, "Downsample/"), figure_dir)
+if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
+
+## Set colors
+program_colors<- c(cytotoxic="greenyellow", predysfunctional="lightsalmon2", naive="skyblue4", dysfunctional="red",ScoreTooLow="grey")
+tumor_colors<- c(Glioma="olivedrab", Melanoma="navy", NSCLC="violetred")
+
+## By max geneset
+p<-DimPlot(merge_cd8, group.by = "maxGeneset_lowScore")
+umap_theme(p, colors=program_colors)
+ggsave(paste0(figure_dir_use, "CD8_UMAP_maxNature2020Score.png"), width=6, height=6)
 
 ## Proportion by tumor type
 bd<- as.data.frame(table(merge_cd8$maxGeneset_lowScore, merge_cd8$TumorType))
 colnames(bd)<- c("Geneset", "TumorType", "NCells")
 bd<- bd %>% group_by(TumorType) %>% mutate(perCells=NCells/sum(NCells)) %>% as.data.frame()
 ggplot(bd, aes(x=TumorType,y=perCells, fill=Geneset))+
-  geom_bar(stat="identity")
-ggsave(paste0(figure_dir, "CD8_ProportionNature2020_byTumorType.png"), width=4, height=4)
+  geom_bar(stat="identity")+
+  theme_classic()+
+  scale_fill_manual(values=program_colors)+
+  bargraph_bd_theme()+
+  ylab("Proportion of cells")+ xlab("")+
+  guides(fill=guide_legend(nrow=2,byrow=TRUE))
+ggsave(paste0(figure_dir_use, "CD8_ProportionNature2020_byTumorType.png"), width=4, height=5)
 
-## Expressin of GOI by tumor type + max geneset
+## Proportion without ScoreTooLow
+bd<- bd[bd$Geneset!="ScoreTooLow",]
+bd<- bd %>% group_by(TumorType) %>% mutate(perCells=NCells/sum(NCells)) %>% as.data.frame()
+ggplot(bd, aes(x=TumorType,y=perCells, fill=Geneset))+
+  geom_bar(stat="identity")+
+  theme_classic()+
+  scale_fill_manual(values=program_colors[names(program_colors) %in% bd$Geneset])+
+  bargraph_bd_theme()+
+  ylab("Proportion of cells")+ xlab("")+
+  guides(fill=guide_legend(nrow=2,byrow=TRUE))
+ggsave(paste0(figure_dir_use, "CD8_ProportionNature2020_byTumorType_noScoreTooLow.png"), width=4, height=5)
+
+
+## Expression of GOI by tumor type + max geneset
 merge_cd8$maxGeneset_byTumor<- paste0(merge_cd8$maxGeneset_lowScore, "_", merge_cd8$TumorType)
 DotPlot(merge_cd8, group.by = "maxGeneset_byTumor", 
         features=c("CD8A","CD3G", 
@@ -163,66 +250,144 @@ DotPlot(merge_cd8, group.by = "maxGeneset_byTumor",
                    "PRF1", "GNLY", "GZMA", 
                    "SELPLG", "KLRB1", "PTGER2"))+
   theme(axis.text.x = element_text(angle=45, hjust=1))
-ggsave(paste0(figure_dir, "CD8_Dotplot_GOI_byNature2020MaxProgram.png"), width=8, height = 6)
+ggsave(paste0(figure_dir_use, "CD8_Dotplot_GOI_byNature2020MaxProgram.png"), width=8, height = 6)
 
-saveRDS(merge_cd8, file=paste0(analysis_dir, "cd8_seurat_nsclc.glioma.melanoma.Rds"))
+## By glioma/nsclc/melanoma
+p<-DimPlot(merge_cd8, group.by = "TumorType", label=FALSE)
+umap_theme(p, tumor_colors)
+ggsave(paste0(figure_dir_use, "CD8_UMAP_byTumorType.png"), width=6, height=6)
+
+## By cell type
+DimPlot(merge_cd8, group.by = "cellAnnot")
+ggsave(paste0(figure_dir_use, "CD8_UMAP_byProgram.png"), width=11, height=9)
+
+
+## Dotplot of inhibitory GOI by tumor type
+DotPlot(merge_cd8, group.by = "TumorType", 
+          features=c("PDCD1", "HAVCR2", "TIGIT", "CTLA4", "GZMK", "ITGAE", "PRF1", "GNLY", "KLRB1"))+
+    theme(axis.text.x = element_text(angle=45, hjust=1))+
+  ylab("")+xlab("")+
+  coord_flip()
+ggsave(paste0(figure_dir_use, "CD8_Dotplot_InhibitoryGOI_byTumorType.png"), width=4, height=5)
+
+## Dotplot of  GOI by tumor type
+DotPlot(merge_cd8, group.by = "TumorType", 
+          features=c("CD8A", "SELPLG", "PTGER2", "KLRB1"), scale=FALSE)+
+    theme(axis.text.x = element_text(angle=45, hjust=1))
+ggsave(paste0(figure_dir_use, "CD8_Dotplot_GOI_byTumorType.png"), width=3, height=4)
+
+## DEGs between cyto subsets
+cyto_seurat<- subset(merge_cd8, maxGeneset_lowScore=="cytotoxic")
+cyto_seurat<- SetIdent(cyto_seurat, value=cyto_seurat$TumorType)
+
+all_markers<- FindAllMarkers(cyto_seurat, min.pct = 0.2)
+all_markers_filtered<- all_markers[all_markers$p_val_adj<0.05 & all_markers$avg_log2FC>0,]
+
+predys_seurat<- subset(merge_cd8, maxGeneset_lowScore=="predysfunctional")
+predys_seurat<- SetIdent(predys_seurat, value=predys_seurat$TumorType)
+
+all_markers_predys<- FindAllMarkers(predys_seurat, min.pct = 0.2)
+all_markers_filtered_predys<- all_markers_predys[all_markers_predys$p_val_adj<0.05 & all_markers_predys$avg_log2FC>0,]
 ```
 
-## Basic plots
+## Plots- CD4
 ```{r}
-merge_cd8<- readRDS(paste0(analysis_dir, "cd8_seurat_nsclc.glioma.melanoma.Rds"))
-merge_cd4<- readRDS(paste0(analysis_dir, "cd4_seurat_nsclc.glioma.melanoma.Rds"))
-  
-## CD8
-  ## By glioma/nsclc/melanoma
-  DimPlot(merge_cd8, group.by = "TumorType", label=FALSE)
-  ggsave(paste0(figure_dir, "CD8_UMAP_byTumorType.png"), width=5, height=4.5)
-  
-  ## By cell type
-  DimPlot(merge_cd8, group.by = "cellAnnot")+
-    scale_color_manual(values=program_colors)
-  ggsave(paste0(figure_dir, "CD8_UMAP_byCellType.png"), width=11, height=9)
+downSize<-TRUE
+filename<- ifelse(downSize,"cd4_seurat_nsclc.glioma.melanoma_downsample.Rds", "cd4_seurat_nsclc.glioma.melanoma.Rds" )
+merge_cd4<- readRDS(paste0(analysis_dir, filename))
 
-  
-  ## Dotplot of inhibitory GOI by tumor type
-  DotPlot(merge_cd8, group.by = "TumorType", 
-            features=c("PDCD1", "HAVCR2", "TIGIT", "CTLA4", "GZMK", "ITGAE"))+
-      theme(axis.text.x = element_text(angle=45, hjust=1))
-  ggsave(paste0(figure_dir, "CD8_Dotplot_InhibitoryGOI_byTumorType.png"), width=6, height=6)
-  
-  ## Dotplot of  GOI by tumor type
-  DotPlot(merge_cd8, group.by = "TumorType", 
-            features=c("CD8A", "SELPLG", "PTGER2", "KLRB1"), scale=FALSE)+
-      theme(axis.text.x = element_text(angle=45, hjust=1))
-  ggsave(paste0(figure_dir, "CD8_Dotplot_GOI_byTumorType.png"), width=5, height=4)
- 
-  
-## CD4
-  ## By glioma/nsclc
-  DimPlot(merge_cd4, group.by = "TumorType")
-  ggsave(paste0(figure_dir, "CD4_UMAP_byTumorType.png"), width=5, height=5)
-  
-  ## By cell type
-  DimPlot(merge_cd4, group.by = "cellAnnot")+
-    scale_color_manual(values=program_colors[names(program_colors) %in% unique(merge_cd4$cellAnnot)])
-  ggsave(paste0(figure_dir, "CD4_UMAP_byCellType.png"), width=10, height=9)
-  
-  ## Dotplot of GOI
-  merge_cd4$cellAnnot_byTumor<- paste0( merge_cd4$cellAnnot, "_", merge_cd4$TumorType)
-  DotPlot(merge_cd4, group.by = "cellAnnot_byTumor", 
-            features=c("CCR7", "FOXP3", "EOMES", "ANXA1", "CD69",
-                     "CXCR1", "PRF1", "GNLY",
-                     "GZMK", "ITGAE", "PDCD1", "HAVCR2", "TIGIT", "CTLA4"))+
-      theme(axis.text.x = element_text(angle=45, hjust=1))
-  ggsave(paste0(figure_dir, "CD4_Dotplot_GOI_byCellType.png"), width=10, height=6)
-  
+## Set figure directory- subfolder for downsampled object
+figure_dir_use<- ifelse(downSize, paste0(figure_dir, "Downsample/"), figure_dir)
+if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
+
+## Set colors
+program_colors<- c(cytotoxic="greenyellow", predysfunctional="lightsalmon2", naive="skyblue4", dysfunctional="red",ScoreTooLow="grey")
+tumor_colors<- c(Glioma="olivedrab", Melanoma="navy", NSCLC="violetred")
+
+## By glioma/nsclc/melanoma
+p<-DimPlot(merge_cd4, group.by = "TumorType", label=FALSE)
+umap_theme(p, tumor_colors)
+ggsave(paste0(figure_dir_use, "CD4_UMAP_byTumorType.png"), width=6, height=6)
 
 
+## By cell type
+DimPlot(merge_cd4, group.by = "cellAnnot")
+ggsave(paste0(figure_dir_use, "CD4_UMAP_byCellType.png"), width=10, height=9)
 
+## Dotplot of inhibitory GOI by tumor type
+DotPlot(merge_cd4, group.by = "TumorType", 
+          features=c("PDCD1", "HAVCR2", "TIGIT", "CTLA4", "GZMK", "ITGAE", "PRF1", "GNLY", "KLRB1"))+
+    theme(axis.text.x = element_text(angle=45, hjust=1))+
+  ylab("")+xlab("")
+ggsave(paste0(figure_dir_use, "CD4_Dotplot_InhibitoryGOI_byTumorType.png"), width=6, height=4)
+
+## Dotplot of  GOI by tumor type
+DotPlot(merge_cd4, group.by = "TumorType", 
+          features=c("CD4", "SELPLG", "PTGER2", "KLRB1"), scale=FALSE)+
+    theme(axis.text.x = element_text(angle=45, hjust=1))
+ggsave(paste0(figure_dir_use, "CD4_Dotplot_GOI_byTumorType.png"), width=5, height=4)
+  
+```
+## Plots- CD4 and CD8
+```{r}
+downSize<-FALSE
+filename<- ifelse(downSize,"cd4_seurat_nsclc.glioma.melanoma_downsample.Rds", "cd4_seurat_nsclc.glioma.melanoma.Rds" )
+merge_cd4<- readRDS(paste0(analysis_dir, filename))
+filename<- ifelse(downSize,"cd8_seurat_nsclc.glioma.melanoma_downsample.Rds", "cd8_seurat_nsclc.glioma.melanoma.Rds" )
+merge_cd8<- readRDS(paste0(analysis_dir, filename))
+
+## merge together
+merge_cd4$detailed_annot<- "CD4"; merge_cd8$detailed_annot<- "CD8"
+merge_tcell<- merge(merge_cd4, merge_cd8)
+
+## Add on age for glioma
+merge_tcell$age_numeric<- as.numeric(merge_tcell$age_numeric)
+merge_tcell$TumorType_age<- ifelse(merge_tcell$TumorType=="Glioma",
+                               ifelse(merge_tcell$age_numeric<25, "Glioma_Ped", "Glioma_Adult"),
+                               merge_tcell$TumorType)
+
+## Set figure directory- subfolder for downsampled object
+figure_dir_use<- ifelse(downSize, paste0(figure_dir, "Downsample/"), figure_dir)
+if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
+
+## Set colors
+program_colors<- c(cytotoxic="greenyellow", predysfunctional="lightsalmon2", naive="skyblue4", dysfunctional="red",ScoreTooLow="grey")
+tumor_colors<- c(Glioma="olivedrab", Melanoma="navy", NSCLC="violetred")
+
+
+## Dotplot of inhibitory GOI by tumor type
+DotPlot(merge_tcell, group.by = "TumorType_age", 
+          features=c( "PDCD1", "HAVCR2", "TIGIT", "CTLA4", "GZMK", "ITGAE", "PRF1", "GNLY","NKG7", "KLRB1"))+
+    theme(axis.text.x = element_text(angle=45, hjust=1))+
+  ylab("")+xlab("")
+ggsave(paste0(figure_dir_use, "Tcell_Dotplot_InhibitoryGOI_byTumorType.png"), width=7, height=3)
+
+merge_tcell<-ScaleData(merge_tcell, do.scale = FALSE, do.center=TRUE, features=rownames(merge_tcell))
+DoHeatmap(merge_tcell, group.by = "TumorType_age", slot="scale",
+          features=c( "PDCD1", "HAVCR2", "TIGIT", "CTLA4", "GZMK", "ITGAE", "PRF1", "GNLY","NKG7", "KLRB1"))+
+    theme(axis.text = element_text(face="bold", color="black"))+
+    scale_fill_gradient2(low="blue", mid="white", high="red")
+ggsave(paste0(figure_dir_use, "Tcell_Heatmap_InhibitoryGOI_byTumorType.png"), width=6, height=4)
+
+## Dotplot of  GOI by tumor type
+DotPlot(merge_tcell, group.by = "TumorType", 
+          features=c("CD4","CD8", "SELPLG", "PTGER2", "KLRB1"), scale=FALSE)+
+    theme(axis.text.x = element_text(angle=45, hjust=1))
+ggsave(paste0(figure_dir_use, "Tcell_Dotplot_GOI_byTumorType.png"), width=5, height=4)
+  
 ```
 
 ## Generate new marker genes based on Nature2020 assignment (for CD8 only)
 ```{r}
+downSize<-TRUE
+filename<- ifelse(downSize,"cd8_seurat_nsclc.glioma.melanoma_downsample.Rds", "cd8_seurat_nsclc.glioma.melanoma.Rds" )
+merge_cd8<- readRDS(paste0(analysis_dir, filename))
+
+## Set figure directory- subfolder for downsampled object
+figure_dir_use<- ifelse(downSize, paste0(figure_dir, "Downsample/"), figure_dir)
+if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
+
+
 ## Split by tumor type
 cd8_list<- SplitObject(merge_cd8, split.by = "TumorType")
 
@@ -241,14 +406,17 @@ marker_list_filtered<- lapply(marker_list, function(x){
 })
 
 ## Save
-saveRDS(marker_list_filtered, file=paste0(analysis_dir, "markers_forNature2020Annot_byTumorType.Rds"))
+filename<- ifelse(downSize, "markers_forNature2020Annot_byTumorType_downSample.Rds","markers_forNature2020Annot_byTumorType.Rds")
+saveRDS(marker_list_filtered, file=paste0(analysis_dir, filename))
 ```
 
 
 ## Score all cells for glioma, melanoma, and nsclc gene sets, correlate scores (for CD8 only)
 ```{r}
 ## Read in markers generated above
-marker_list<- readRDS(paste0(analysis_dir, "markers_forNature2020Annot_byTumorType.Rds"))
+downSize<-TRUE
+filename<- ifelse(downSize, "markers_forNature2020Annot_byTumorType_downSample.Rds","markers_forNature2020Annot_byTumorType.Rds")
+marker_list<- readRDS(paste0(analysis_dir, filename))
 
 ## Subset to top 50
 marker_list<- lapply(marker_list, function(x){
@@ -292,15 +460,21 @@ pheatmap(scores_factor_cor, color = hm_colors(100),
          cluster_rows = F, cluster_cols = F, 
          annotation_names_row = F, annotation_names_col =T,
          show_rownames = T, show_colnames = F,
-         filename = paste0(figure_dir, "Cor_CD8programs_Glioma.vs.NSCLC.vs.melanoma.png"),
+         filename = paste0(figure_dir_use, "Cor_CD8programs_Glioma.vs.NSCLC.vs.melanoma.png"),
          width = 8, height = 4)
 
 ## Dendrogram of hierarchical clustering 
-jpeg(filename=paste0(figure_dir, "HC_CD8programs_Glioma.vs.NSCLC.vs.Melanoma.png"), width = 400, height = 600)
+jpeg(filename=paste0(figure_dir_use, "HC_CD8programs_Glioma.vs.NSCLC.vs.Melanoma.png"), width = 400, height = 600)
 plot(scores_factor_hc$hc_obj)
 dev.off()
 
-
+## Mean pearson correlation for each geneset
+lapply(c("cytotoxic", "dysfunctional", "predysfunctional", "naive"), function(x){
+  print(x)
+  tmp<- scores_factor_cor[grepl(paste0("_", x), colnames(scores_factor_cor)), 
+                          grepl(paste0("_", x), rownames(scores_factor_cor))]
+  print(mean(as.numeric(tmp)[as.numeric(tmp) != 1]))
   
+})
 ```
 
