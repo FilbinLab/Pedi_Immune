@@ -245,6 +245,7 @@ cb_program_norm_list<- lapply(cb_prop_list, function(cb_prop){
   return(list(cd8=res_cd8, cd4=res_cd4, myeloid=res_myeloid))
 })
 
+saveRDS(cb_program_norm_list, file=paste0(analysis_dir, "CiberSortRes_normByCellType_TCGA.CBTN.DFCI.Rds"))
 ```
 
 ## Plot overall proportions
@@ -349,8 +350,11 @@ for(cohort in names(cb_prop_list)){
 
 ```
 
+
 ## Calculate high/low for each program (based on 50/50 split)
 ```{r}
+cb_program_norm_list<- readRDS(paste0(analysis_dir, "CiberSortRes_normByCellType_TCGA.CBTN.DFCI.Rds"))
+
 ## Settings
 quant_split_thresh<- .5
 
@@ -362,7 +366,6 @@ clinical_split_list<- lapply(names(cb_program_norm_list), function(cohort){
   
   ## For each broad cell type, split samples into high/low
   broad_split<- lapply(cb_program_norm, function(program_prop){
-    
     ## Calculate quantile split for each gene set (high/low)
     programs<- as.character(unique(program_prop$Program))
     program_prop$Program<- as.character(program_prop$Program)
@@ -400,7 +403,40 @@ clinical_split_list<- lapply(names(cb_program_norm_list), function(cohort){
 })
 names(clinical_split_list)<- names(cb_program_norm_list)
 
+```
+
+## If GOI expression information exists for cohort- split high/low, merge with survival, add on
+```{r}
+## Load in mean expression of GOI for each cohort
+goi_list<- readRDS(paste0(analysis_dir, "TPM_GOI_CBTN.DFCI.TCGA.Rds"))
+quant_split_thresh<- .5
+
+## Cycle through cohorts, split into high/low for each goi
+goi_highlow<- lapply(goi_list, function(x){
+  tmp<- as.data.frame(t(x))
+  hl<- as.data.frame(apply(tmp, 2, function(y){ifelse(y>quantile(y, probs=quant_split_thresh), "High", "Low")}))
+  return(hl)
+})
+
+## Merge with clinical/survival if exists
+goi_highlow<- lapply(names(goi_highlow), function(cohort){
+  print(cohort)
+  goi<- goi_highlow[[cohort]]
+  clinical<- clinical_split_list[[cohort]]$cd4
+  goi$Sample<- rownames(goi)
+  goi<- merge(goi, clinical, by="Sample")
+  return(goi)
+})
+names(goi_highlow)<- names(goi_list)
+
+## Add to rest of clinical/program split data
+clinical_split_list$CBTN_All$GOI<- goi_highlow$CBTN_All
+clinical_split_list$DFCI$GOI<- goi_highlow$DFCI
+clinical_split_list$TCGA_IDHmutAYA$GOI<- goi_highlow$TCGA_IDHmutAYA
+```
+
 ## Save each cohort separately
+```{r}
 for(cohort in names(clinical_split_list)){
   clinical_split<- clinical_split_list[[cohort]]
   saveRDS(clinical_split, file=paste0(analysis_dir, "HighLowPropSplit_clinical_", cohort, ".Rds"))
