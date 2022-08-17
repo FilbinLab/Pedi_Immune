@@ -4,6 +4,7 @@ output: html_document
 ---
 
 ## Preprocess for input into stream (python)
+End of code: read in stream results for plotting
 
 ```{r}
 library(Seurat) 
@@ -20,7 +21,8 @@ analysis_dir<- paste0(working_dir, "/analysis/STREAM/")
 
 if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
 
-
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
 ```
 
 ## Read in ped tcell seurat object. Contains NMF assignments (annots added in deNovoPedTcell.v.deNovoAdultTcell, based on correlation with adult T cell + correlation with ped cd4/cd8 programs)
@@ -61,7 +63,8 @@ Convert( paste0(analysis_dir, "cd8_subset_Predys.h5Seurat"), dest = "h5ad")
 nsclc_cd8<- readRDS("../04b_ComparisonToOtherTumor/analysis/NSCLC/cd8_seurat_nsclc.Rds")
 melanoma_cd8<- readRDS("../04b_ComparisonToOtherTumor/analysis/Melanoma/cd8_seurat_melanoma.Rds")
 
-## Remove norm/scaled data- want X to be raw data
+
+
 nsclc_cd8<- DietSeurat(nsclc_cd8, scale.data = FALSE)
 melanoma_cd8<- DietSeurat(melanoma_cd8, scale.data = FALSE)
 
@@ -76,6 +79,34 @@ cyto_nsclc<- subset(nsclc_cd8, majorCluster_annot=="Cytotoxic")
 
 SaveH5Seurat(cyto_nsclc, filename = paste0(analysis_dir, "cd8_nsclc_cyto.h5Seurat"))
 Convert( paste0(analysis_dir, "cd8_nsclc_cyto.h5Seurat"), dest = "h5ad")
+```
+
+
+```{r}
+cd8_seurat<- readRDS("../04b_ComparisonToOtherTumor/analysis/NSCLC.melanoma/cd8_seurat_nsclc.glioma.melanoma.Rds")
+
+## Add on metadata
+cd8_seurat$Age<- ifelse(cd8_seurat$TumorType=="Glioma", ifelse(cd8_seurat$age_numeric<25, "Ped", "Adult"), "Adult")
+cd8_seurat$TumorType_Age<- ifelse(cd8_seurat$TumorType=="Glioma", paste0("Glioma_", cd8_seurat$Age), cd8_seurat$TumorType)
+cd8_seurat$maxGeneset<- gsub("[0-9]", "", cd8_seurat$maxGeneset)
+cd8_seurat$CytoDysScore<- cd8_seurat$cytotoxic1-cd8_seurat$dysfunctional4
+
+## Split  by tumor type
+cd8_list<- SplitObject(cd8_seurat, split.by="TumorType")
+
+
+## Merge melanoma/cytotoxic together
+gm_cd8s<- merge(cd8_list$Glioma, cd8_list$Melanoma)
+gm_cd8_meta<- cd8@meta.data
+gm_cd8<- RunFullSeurat(gm_cd8@assays$RNA@counts, RunHarmony = FALSE, samples=gm_cd8$sample)
+gm_cd8<- AddMetaData(gm_cd8, gm_cd8_meta[,!colnames(gm_cd8_meta)  %in% colnames(gm_cd8@meta.data)])
+
+## Remove norm/scaled data- want X to be raw data
+gm_cd8<- DietSeurat(gm_cd8, scale.data=FALSE)
+nsclc_cd8<- DietSeurat(cd8_list$NSCLC, scale.data=FALSE)
+
+SaveH5Seurat(cd8_seurat, filename = paste0(analysis_dir, "cd8_glioma.melanoma.h5Seurat"))
+Convert( paste0(analysis_dir, "cd8_glioma.melanoma.h5Seurat"), dest = "h5ad")
 ```
 
 ## For mapping onto nsclc: merged melanoma and glioma CD8 cells
@@ -109,5 +140,87 @@ cd8_seurat<- DietSeurat(cd8_seurat, scale.data = FALSE)
 
 SaveH5Seurat(cd8_seurat, filename = paste0(analysis_dir, "cd8_glioma.melanoma.nsclc.h5Seurat"))
 Convert( paste0(analysis_dir, "cd8_glioma.melanoma.nsclc.h5Seurat"), dest = "h5ad")
+```
+
+## Downsampled glioma, nsclc, and melanoma
+```{r}
+cd8_seurat<- readRDS("../04b_ComparisonToOtherTumor/analysis/NSCLC.melanoma/cd8_seurat_nsclc.glioma.melanoma.Rds")
+cd8_seurat$Age<- ifelse(cd8_seurat$TumorType=="Glioma", ifelse(cd8_seurat$age_numeric<25, "Ped", "Adult"), "Adult")
+cd8_seurat$TumorType_Age<- ifelse(cd8_seurat$TumorType=="Glioma", paste0("Glioma_", cd8_seurat$Age), cd8_seurat$TumorType)
+
+## Split  by tumor type
+cd8_list<- SplitObject(cd8_seurat, split.by="TumorType")
+
+## Downsample all to same size
+nDs<- min(unlist(lapply(cd8_list, ncol)))
+cd8_list<- lapply(cd8_list, function(x){
+  x[, sample(colnames(x), size =nDs, replace=F)]
+})
+
+
+## merge melanoma/glioma
+gm_ss<- merge(cd8_list$Glioma, cd8_list$Melanoma)
+gm_ss$Annot<- ifelse(gm_ss$TumorType=="Glioma", gm_ss$cellAnnot, gm_ss$maxGeneset)
+gm_ss_meta<- gm_ss@meta.data
+gm_ss<- RunFullSeurat(gm_ss@assays$RNA@counts, RunHarmony = FALSE, samples=gm_ss$sample)
+gm_ss<- AddMetaData(gm_ss, gm_ss_meta[,!colnames(gm_ss_meta)  %in% colnames(gm_ss@meta.data)])
+
+
+## Remove scaled data
+nsclc_ss<- DietSeurat(cd8_list$NSCLC, scale.data = FALSE)
+melanoma_glioma_ss<- DietSeurat(gm_ss, scale.data = FALSE)
+
+## save
+SaveH5Seurat(nsclc_ss, filename = paste0(analysis_dir, "cd8_nsclc_downsample.h5Seurat"))
+Convert( paste0(analysis_dir, "cd8_nsclc_downsample.h5Seurat"), dest = "h5ad")
+
+SaveH5Seurat(melanoma_glioma_ss, filename = paste0(analysis_dir, "cd8_melanoma.glioma_downsample.h5Seurat"))
+Convert( paste0(analysis_dir, "cd8_melanoma.glioma_downsample.h5Seurat"), dest = "h5ad")
+```
+
+## Read in stream results for some quick plots
+Exploratory for now
+May move this to its own file if too much plotting
+```{r}
+## read in adata.obs from stream results
+stream_res<- read.csv("stream_result_mappedNSCLC.Glioma.Melanoma.csv", row.names = "X")
+
+## Read in seurat
+cd8_seurat<- readRDS("../04b_ComparisonToOtherTumor/analysis/NSCLC.melanoma/cd8_seurat_nsclc.glioma.melanoma.Rds")
+
+## Add stream res to seurat
+rownames(stream_res)<- gsub("-ref", "", gsub("-new", "", rownames(stream_res)))
+cd8_seurat<- AddMetaData(cd8_seurat, stream_res[,!colnames(stream_res) %in% colnames(cd8_seurat@meta.data)])
+
+## Annotate stream branches
+branch_annot<- unique(cd8_seurat$branch_id_alias)
+names(branch_annot)<- c("predysfunctional", "cytotoxic_1", "Memory", "cytotoxic_2", "cytotoxic_3", "dysfunctional", "predysfunctional_2")
+cd8_seurat$branch_annot<- plyr::mapvalues(cd8_seurat$branch_id_alias, branch_annot, names(branch_annot))
+
+## Plot proportion of each branch by tumor type
+  ## Number of each branch by subtype
+  df<- as.data.frame(table(stream_res$branch_id_alias, stream_res$Tumor_Age))
+  df$Var1<- gsub("\\(", "", gsub(")", "", gsub("\\'", "", gsub(", ", "_", df$Var1))))
+  colnames(df)<-c("Branch", "TumorType", "NumberOfCells")
+  
+  ## proportion by subtype
+  df<- df %>% group_by(TumorType) %>% mutate(perCells=NumberOfCells/sum(NumberOfCells)) %>% as.data.frame()
+  
+  ## Plot
+  ggplot(df, aes(x=TumorType, y=perCells, fill=Branch))+
+    geom_bar(stat="identity")
+  
+## Plot GOI by branch assignment
+  adult<- DotPlot(subset(cd8_seurat, Tumor_Age=="Glioma_Adult"), group.by = "branch_annot", 
+                  features=c("CCR7", "GZMB", "PRF1", "GNLY", "PDCD1", "CTLA4", "KLRB1", "PTGER2", "SELPLG"))+
+    scale_color_gradient2(low="blue", mid="white", high="red")+
+    theme(axis.text.x = element_text(angle=45, hjust=1))
+  
+  ped<- DotPlot(subset(cd8_seurat, Tumor_Age=="Glioma_Ped"), group.by = "branch_annot", 
+                features=c("CCR7", "GZMB", "PRF1", "GNLY", "PDCD1", "CTLA4", "KLRB1", "PTGER2", "SELPLG"))+
+  scale_color_gradient2(low="blue", mid="white", high="red")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))
+  
+  adult+ped
 ```
 
