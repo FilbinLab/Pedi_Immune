@@ -82,7 +82,7 @@ all_scores<- readRDS(paste0(analysis_dir, "Score_for_ped.adultPrograms_options.R
 option_use<- "KeepAll"
 scores<- all_scores[[option_use]]
 
-colors_use<-c("red","olivedrab4", "navy","turquoise3",  "magenta", "orange")
+colors_use<-c("purple","red", "navy","turquoise3",  "magenta", "olivedrab")
 names(colors_use)<- c("IFN_TAM", "Inflammatory", "Hypoxic_TAM", "Monocytes", "NMF3", "Microglia")
 
 ## Add to seurat object
