@@ -1,0 +1,759 @@
+---
+title: "DeNovoNMF.Adult"
+output: html_document
+---
+
+## Purpose:
+Run de novo NMF for adult myeloid cells- can either do separately for IDHmut/GBM, or on merged dataset. Assess which approach makes sense to move using forward
+
+## Approach:
+Run NMF on MERGED idhmut/gbm adult myeloid cells ("option 1")+ run NMF SEPARATELY for IDHmut/GBM ("option 2"). Correlate these programs, compare to how well they represent diversity based on UMAP to help determine which to use moving forward.
+
+## Results:
+Two options give relatively similar, but not identical, results. Option 1 (merged) is slightly more comparable to cluster proportions, etc. It's also a more straightforward approach. Lastly, cells don't cluster distinctly by idhmut/gbm. So used this option moving forward. 
+
+
+```{r}
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/02b_Myeloid/01b_Ped.Adult.NMF/")
+
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+
+
+analysis_dir<- "analysis/AdultCohorts_DeNovoNMF/"
+figure_dir<- "figures/AdultCohorts_DeNovoNMF/"
+data_dir<- "../../01_Preprocessing/03_PreprocessAdultDatasets/analysis/Preprocess_AdultMyeloid/"
+
+for(i in c(analysis_dir, figure_dir)){
+  if(!dir.exists(i)){dir.create(i, recursive = TRUE)}
+}
+
+
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+
+
+user.path <- "/Users/jlabelle/"
+source(paste0(user.path, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/", "/Scripts/plotutils.R"))
+source(paste0(user.path, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/", "/Scripts/seurat3utils.R"))
+source(paste0(user.path, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/", "/Scripts/color.R"))
+
+library(NMF)
+#library(ggplot2)
+#library(cowplot)
+#library(Seurat)
+#library(dplyr)
+#library(Matrix)
+#library(GSA)
+library(reticulate) 
+```
+
+
+## Three major analyses performed here:
+1. Merge Adult GBM/IDHmut count matrices --> run NMF
+2. Run Adult GBM / Adult IDHmut NMF separately --> correlate/merge programs
+3. Compare final programs to microglia/macrophages and granulocyte programs
+
+Then compare how well these 2 approaches align
+Will compare to ped NMF programs later
+
+
+## Load in myeloid objects- adult GBM, adult IDHmut
+```{r}
+## GBM (Neftel) adult
+gbm_myeloid_seurat<- readRDS(paste0(data_dir, "GBM.Neftel_myeloid_seurat.Rds"))
+
+## IDHmut adult
+idhmut_myeloid_seurat<-readRDS(paste0(data_dir, "IDHmutScience2018_myeloid_seurat.Rds"))
+
+## Merged idhmut/gbm 
+load(paste0(data_dir, "GBMNeftel_IDHmut2018_myeloid_merged_seurat.Robj"))
+
+```
+
+## NMF settings
+```{r}
+tests <- c("wilcox", "t", "roc", "MAST", "bimod")
+test <- tests[2]
+
+# Vector of ranks for which to calculate NMF.
+rank <- 5:7
+
+
+# Paths to Rdata objects to save.
+Rda.NMF.path <- analysis_dir  # NMF analysis
+
+```
+
+
+# Analysis 1: NMF on IDHmut/GBM simultaneously
+
+## Run NMF on merged dataset
+```{r}
+figure_dir_tmp<- paste0(figure_dir, "MergedNMF_GBM.Neftel_IDHmutScience2018/")
+if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp)}
+name.project<- "MergedNMF_GBM.Neftel_IDHmutScience2018"
+
+# Load Seurat object with integrated data, and then select subset of cell. (all cells in this case)
+gcdata<- gbm_idhmut_myeloid_seurat
+gcdata$annotate_coarse<- "Myeloid"
+gcdata<-SetIdent(gcdata, value = gcdata$annotate_coarse)
+
+# Identify variable genes within this cell subset.
+var.genes <- SelectIntegrationFeatures(SplitObject(gcdata, split.by = "sampleid"), nfeatures = 2000, verbose = TRUE,
+                                       fvf.nfeatures = 2000, selection.method = "vst")
+VariableFeatures(gcdata) <- var.genes
+
+
+# Perform 10 NMF runs for each value of rank r.
+x <- as.matrix(gcdata[['RNA']][VariableFeatures(gcdata), ])
+x <- x[which(rowSums(x) > 0), ]  # remove any rows filled with 0 (just in case these exist)
+estim.r <- nmf(x, rank = rank, method = "brunet", nrun = 10, seed = 123456, .options = "tvP")
+
+png(paste0(figure_dir_tmp, name.project, "_NMF_plot_rank.png"), width = 2000, height = 1000, res = 100)
+plot(estim.r)
+dev.off()
+
+
+# Iterate over different ranks and look at clustering.
+for (i in seq(rank)) {
+  r <- rank[i]
+  
+  # Plot coefficient values of metagenes for each cell.
+  png(paste0(figure_dir_tmp, name.project, "_NMF_coefmap_rank", r, ".png"), width = 2000, height = 1000, res = 100)
+  coefmap(estim.r$fit[[i]], Colv=T)
+  dev.off()
+
+  # Show genes contributing the most to each metagene (factor). 
+  # Remember, this is limited to the variable genes if that was the input to NMF.
+  for (j in seq(r)) {
+    top.features <- names(sort(estim.r$fit[[i]]@fit@W[, j], decreasing = T)[1:10])
+    print(paste(top.features, collapse = " "))
+  }
+  s <- extractFeatures(estim.r$fit[[i]], 10L)
+  for (j in seq(r)) {
+    top.features <- rownames(estim.r$fit[[i]]@fit@W)[s[[j]]]
+    print(paste(top.features, collapse = " "))
+  }
+
+  # Plot NMF residuals.
+  png(paste0(figure_dir_tmp, name.project, "_NMF_residuals_rank", r, ".png"), width = 2000, height = 1000, res = 100)
+  plot(estim.r$fit[[i]])
+  dev.off()
+
+  # Check coefficient matrix has cell names in same order as Seurat object gcdata.
+  H <- estim.r$fit[[i]]@fit@H
+  all.equal(as.integer(as.character(predict(estim.r$fit[[i]], what = "samples"))), as.integer(apply(H, 2, which.max)))
+  all.equal(colnames(H), colnames(gcdata))
+  all.equal(rownames(estim.r$fit[[i]]@fit@W), VariableFeatures(gcdata))
+  
+  # Cluster cells based on maximum coefficient for metagene.
+  gcdata[[paste0("NMF_rank", r)]] <- predict(estim.r$fit[[i]], what = "samples")
+  Idents(gcdata) <- paste0("NMF_rank", r)
+
+  # UMAP visualization and CD4 and CD8 expression across clusters and find DE genes.
+  DimPlot(gcdata, reduction = "umap", cols = material.heat(n_distinct(Idents(gcdata))), label = T)
+  ggsave(paste0(figure_dir_tmp, name.project, "_UMAP_NMF_rank", r, ".png"), width = 6, height = 6)
+  VlnPlot(gcdata, features = c("CD4", "CD8A"), cols = material.heat(n_distinct(Idents(gcdata))), 
+          ncol = 1, pt.size = 0.5) 
+  ggsave(paste0(figure_dir_tmp, name.project, "_vln_NMF_rank", r, ".png"), width = 8, height = 8)
+  
+  # Find differentially expressed genes for each cluster.
+  gcdata.markers <- FindAllMarkers(gcdata, min.pct = 0.1, logfc.threshold = 0.5, max.cells.per.ident = 1500, test.use = test, return.thresh = 0.1 / nrow(gcdata), verbose = T)
+  top10genes <- gcdata.markers %>% filter(avg_log2FC > 0) %>% group_by(cluster) %>% top_n(10, avg_log2FC)
+  top100genes <- gcdata.markers %>% filter(avg_log2FC > 0) %>% group_by(cluster) %>% top_n(100, avg_log2FC)
+  # Write cluster markers to csv file.
+  write.csv(top100genes, file = paste0(analysis_dir, name.project, "_top_DE_genes_NMF_rank", r, ".csv"))
+  gcdata <- ScaleData(gcdata, features = c(top10genes$gene), do.center = T, do.scale = F)
+  DoHeatmap(gcdata, features = top10genes$gene) + scale_fill_distiller(palette = "RdYlBu")
+  ggsave(paste0(figure_dir_tmp, name.project, "_DE_genes_expression_rank", r, ".png"), width = 18, height = 24)
+}
+
+## Plot my own heatmap of top NMF genes
+adult_rank6<- read.csv(paste0(analysis_dir, name.project, "_top_DE_genes_NMF_rank6.csv"))
+adult_rank6_topGenes<- adult_rank6 %>% group_by(cluster) %>% top_n(avg_log2FC, n=10) %>% as.data.frame()
+adult_rank6_topGenes<- adult_rank6_topGenes[order(adult_rank6_topGenes$cluster),]
+
+DoHeatmap(gcdata, features=adult_rank6_topGenes$gene, group.by = "NMF_rank6" )+
+  theme(axis.text.y = element_text(color="black", face="bold"))+
+  scale_fill_gradient2(low="magenta", mid="black", high="yellow", midpoint=0)
+ggsave(paste0(figure_dir_tmp, "DeNovoNMF_topgenes_rank6.png"), width=6, height=10)
+```
+
+
+
+
+
+## Analysis 2: run NMF on GBM/IDHmut separately, then correlate scores
+
+## Run de novo NMF (using same methods as in Orr's script)
+## GBM adult
+```{r}
+figure_dir_tmp<- paste0(figure_dir, "GBM_Neftel/")
+if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp)}
+name.project<- "GBM_Adult_Myeloid_Neftel"
+
+# Load Seurat object with integrated data, and then select subset of cell. (all cells in this case)
+gcdata<- gbm_myeloid_seurat
+gcdata$annotate_coarse<- "Myeloid"
+gcdata<-SetIdent(gcdata, value = gcdata$annotate_coarse)
+
+# Identify variable genes within this cell subset.
+var.genes <- SelectIntegrationFeatures(SplitObject(gcdata, split.by = "sampleid"), nfeatures = 2000, verbose = TRUE,
+                                       fvf.nfeatures = 2000, selection.method = "vst")
+VariableFeatures(gcdata) <- var.genes
+
+
+# Perform 10 NMF runs for each value of rank r.
+x <- as.matrix(gcdata[['RNA']][VariableFeatures(gcdata), ])
+x <- x[which(rowSums(x) > 0), ]  # remove any rows filled with 0 (just in case these exist)
+estim.r <- nmf(x, rank = rank, method = "brunet", nrun = 10, seed = 123456, .options = "tvP")
+
+png(paste0(figure_dir_tmp, name.project, "_NMF_plot_rank.png"), width = 2000, height = 1000, res = 100)
+plot(estim.r)
+dev.off()
+
+
+# Iterate over different ranks and look at clustering.
+for (i in seq(rank)) {
+  r <- rank[i]
+  
+  # Plot coefficient values of metagenes for each cell.
+  png(paste0(figure_dir_tmp, name.project, "_NMF_coefmap_rank", r, ".png"), width = 2000, height = 1000, res = 100)
+  coefmap(estim.r$fit[[i]], Colv=T)
+  dev.off()
+
+  # Show genes contributing the most to each metagene (factor). 
+  # Remember, this is limited to the variable genes if that was the input to NMF.
+  for (j in seq(r)) {
+    top.features <- names(sort(estim.r$fit[[i]]@fit@W[, j], decreasing = T)[1:10])
+    print(paste(top.features, collapse = " "))
+  }
+  s <- extractFeatures(estim.r$fit[[i]], 10L)
+  for (j in seq(r)) {
+    top.features <- rownames(estim.r$fit[[i]]@fit@W)[s[[j]]]
+    print(paste(top.features, collapse = " "))
+  }
+
+  # Plot NMF residuals.
+  png(paste0(figure_dir_tmp, name.project, "_NMF_residuals_rank", r, ".png"), width = 2000, height = 1000, res = 100)
+  plot(estim.r$fit[[i]])
+  dev.off()
+
+  # Check coefficient matrix has cell names in same order as Seurat object gcdata.
+  H <- estim.r$fit[[i]]@fit@H
+  all.equal(as.integer(as.character(predict(estim.r$fit[[i]], what = "samples"))), as.integer(apply(H, 2, which.max)))
+  all.equal(colnames(H), colnames(gcdata))
+  all.equal(rownames(estim.r$fit[[i]]@fit@W), VariableFeatures(gcdata))
+  
+  # Cluster cells based on maximum coefficient for metagene.
+  gcdata[[paste0("NMF_rank", r)]] <- predict(estim.r$fit[[i]], what = "samples")
+  Idents(gcdata) <- paste0("NMF_rank", r)
+
+  # UMAP visualization and CD4 and CD8 expression across clusters and find DE genes.
+  DimPlot(gcdata, reduction = "umap", cols = material.heat(n_distinct(Idents(gcdata))), label = T)
+  ggsave(paste0(figure_dir_tmp, name.project, "_UMAP_NMF_rank", r, ".png"), width = 6, height = 6)
+  VlnPlot(gcdata, features = c("CD4", "CD8A"), cols = material.heat(n_distinct(Idents(gcdata))), 
+          ncol = 1, pt.size = 0.5) 
+  ggsave(paste0(figure_dir_tmp, name.project, "_vln_NMF_rank", r, ".png"), width = 8, height = 8)
+  
+  # Find differentially expressed genes for each cluster.
+  gcdata.markers <- FindAllMarkers(gcdata, min.pct = 0.1, logfc.threshold = 0.5, max.cells.per.ident = 1500, test.use = test, return.thresh = 0.1 / nrow(gcdata), verbose = T)
+  top10genes <- gcdata.markers %>% filter(avg_log2FC > 0) %>% group_by(cluster) %>% top_n(10, avg_log2FC)
+  top100genes <- gcdata.markers %>% filter(avg_log2FC > 0) %>% group_by(cluster) %>% top_n(100, avg_log2FC)
+  # Write cluster markers to csv file.
+  write.csv(top100genes, file = paste0(analysis_dir, name.project, "_top_DE_genes_NMF_rank", r, ".csv"))
+  gcdata <- ScaleData(gcdata, features = c(top10genes$gene), do.center = T, do.scale = F)
+  DoHeatmap(gcdata, features = top10genes$gene) + scale_fill_distiller(palette = "RdYlBu")
+  ggsave(paste0(figure_dir_tmp, name.project, "_DE_genes_expression_rank", r, ".png"), width = 18, height = 24)
+}
+
+## Plot my own heatmap of top NMF genes
+adult_rank6<- read.csv(paste0(analysis_dir, name.project, "_top_DE_genes_NMF_rank6.csv"))
+adult_rank6_topGenes<- adult_rank6 %>% group_by(cluster) %>% top_n(avg_log2FC, n=10) %>% as.data.frame()
+adult_rank6_topGenes<- adult_rank6_topGenes[order(adult_rank6_topGenes$cluster),]
+
+DoHeatmap(gcdata, features=adult_rank6_topGenes$gene, group.by = "NMF_rank6" )+
+  theme(axis.text.y = element_text(color="black", face="bold"))+
+  scale_fill_gradient2(low="magenta", mid="black", high="yellow", midpoint=0)
+ggsave(paste0(figure_dir_tmp, "DeNovoNMF_topgenes_rank6.png"), width=6, height=10)
+```
+
+
+## Run de novo NMF (using same methods as in Orr's script)
+## IDHmut adult
+```{r}
+rank<- 4:5 ## need to rerun with lower rank- seems to not have a ton of diversity
+
+figure_dir_tmp<- paste0(figure_dir, "IDHmut_Science2018/")
+if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp)}
+name.project<- "IDHmut_Science2018"
+
+# Load Seurat object with integrated data, and then select subset of cell. (all cells in this case)
+gcdata<- idhmut_myeloid_seurat
+gcdata$annotate_coarse<- "Myeloid"
+gcdata<-SetIdent(gcdata, value = gcdata$annotate_coarse)
+
+# Identify variable genes within this cell subset.
+var.genes <- SelectIntegrationFeatures(SplitObject(gcdata, split.by = "sampleid"), nfeatures = 2000, verbose = TRUE,
+                                       fvf.nfeatures = 2000, selection.method = "vst")
+VariableFeatures(gcdata) <- var.genes
+
+
+# Perform 10 NMF runs for each value of rank r.
+x <- as.matrix(gcdata[['RNA']][VariableFeatures(gcdata), ])
+x <- x[which(rowSums(x) > 0), ]  # remove any rows filled with 0 (just in case these exist)
+estim.r <- nmf(x, rank = rank, method = "brunet", nrun = 10, seed = 123456, .options = "tvP")
+
+png(paste0(figure_dir_tmp, name.project, "_NMF_plot_rank.png"), width = 2000, height = 1000, res = 100)
+plot(estim.r)
+dev.off()
+
+
+# Iterate over different ranks and look at clustering.
+for (i in seq(rank)) {
+  r <- rank[i]
+  
+  # Plot coefficient values of metagenes for each cell.
+  png(paste0(figure_dir_tmp, name.project, "_NMF_coefmap_rank", r, ".png"), width = 2000, height = 1000, res = 100)
+  coefmap(estim.r$fit[[i]], Colv=T)
+  dev.off()
+
+  # Show genes contributing the most to each metagene (factor). 
+  # Remember, this is limited to the variable genes if that was the input to NMF.
+  for (j in seq(r)) {
+    top.features <- names(sort(estim.r$fit[[i]]@fit@W[, j], decreasing = T)[1:10])
+    print(paste(top.features, collapse = " "))
+  }
+  s <- extractFeatures(estim.r$fit[[i]], 10L)
+  for (j in seq(r)) {
+    top.features <- rownames(estim.r$fit[[i]]@fit@W)[s[[j]]]
+    print(paste(top.features, collapse = " "))
+  }
+
+  # Plot NMF residuals.
+  png(paste0(figure_dir_tmp, name.project, "_NMF_residuals_rank", r, ".png"), width = 2000, height = 1000, res = 100)
+  plot(estim.r$fit[[i]])
+  dev.off()
+
+  # Check coefficient matrix has cell names in same order as Seurat object gcdata.
+  H <- estim.r$fit[[i]]@fit@H
+  all.equal(as.integer(as.character(predict(estim.r$fit[[i]], what = "samples"))), as.integer(apply(H, 2, which.max)))
+  all.equal(colnames(H), colnames(gcdata))
+  all.equal(rownames(estim.r$fit[[i]]@fit@W), VariableFeatures(gcdata))
+  
+  # Cluster cells based on maximum coefficient for metagene.
+  gcdata[[paste0("NMF_rank", r)]] <- predict(estim.r$fit[[i]], what = "samples")
+  Idents(gcdata) <- paste0("NMF_rank", r)
+
+  # UMAP visualization and CD4 and CD8 expression across clusters and find DE genes.
+  DimPlot(gcdata, reduction = "umap", cols = material.heat(n_distinct(Idents(gcdata))), label = T)
+  ggsave(paste0(figure_dir_tmp, name.project, "_UMAP_NMF_rank", r, ".png"), width = 6, height = 6)
+  VlnPlot(gcdata, features = c("CD4", "CD8A"), cols = material.heat(n_distinct(Idents(gcdata))), 
+          ncol = 1, pt.size = 0.5) 
+  ggsave(paste0(figure_dir_tmp, name.project, "_vln_NMF_rank", r, ".png"), width = 8, height = 8)
+  
+  # Find differentially expressed genes for each cluster.
+  gcdata.markers <- FindAllMarkers(gcdata, min.pct = 0.1, logfc.threshold = 0.5, max.cells.per.ident = 1500, test.use = test, 
+                                   return.thresh = 0.1/ nrow(gcdata), verbose = T)
+  top10genes <- gcdata.markers %>% filter(avg_log2FC > 0) %>% group_by(cluster) %>% top_n(10, avg_log2FC)
+  top100genes <- gcdata.markers %>% filter(avg_log2FC > 0) %>% group_by(cluster) %>% top_n(100, avg_log2FC)
+  # Write cluster markers to csv file.
+  write.csv(top100genes, file = paste0(analysis_dir, name.project, "_top_DE_genes_NMF_rank", r, ".csv"))
+  gcdata <- ScaleData(gcdata, features = c(top10genes$gene), do.center = T, do.scale = F)
+  DoHeatmap(gcdata, features = top10genes$gene) + scale_fill_distiller(palette = "RdYlBu")
+  ggsave(paste0(figure_dir_tmp, name.project, "_DE_genes_expression_rank", r, ".png"), width = 18, height = 24)
+}
+
+## Plot my own heatmap of top NMF genes
+adult_rank6<- read.csv(paste0(analysis_dir, name.project, "_top_DE_genes_NMF_rank5.csv"))
+adult_rank6_topGenes<- adult_rank6 %>% group_by(cluster) %>% top_n(avg_log2FC, n=10) %>% as.data.frame()
+adult_rank6_topGenes<- adult_rank6_topGenes[order(adult_rank6_topGenes$cluster),]
+
+DoHeatmap(gcdata, features=adult_rank6_topGenes$gene, group.by = "NMF_rank5" )+
+  theme(axis.text.y = element_text(color="black", face="bold"))+
+  scale_fill_gradient2(low="magenta", mid="black", high="yellow", midpoint=0)
+ggsave(paste0(figure_dir_tmp, "DeNovoNMF_topgenes_rank5.png"), width=6, height=10)
+```
+
+
+## Correlate scores between idhmut/gbm
+
+## Load in de novo NMF marker genes for both
+```{r}
+GBM_NMF<- read.csv(paste0("analysis/Adult_DeNovoNMF/", "GBM_Adult_Myeloid_Neftel_top_DE_genes_NMF_rank6.csv"))
+IDHmut_NMF<- read.csv(paste0("analysis/Adult_DeNovoNMF/", "IDHmut_Science2018_top_DE_genes_NMF_rank6.csv"))
+
+GBM_NMF<- split(GBM_NMF, f=GBM_NMF$cluster); GBM_NMF<- lapply(GBM_NMF, function(x){x$gene})
+names(GBM_NMF)<- paste0("GBM_", names(GBM_NMF))
+
+IDHmut_NMF<- split(IDHmut_NMF, f=IDHmut_NMF$cluster); IDHmut_NMF<- lapply(IDHmut_NMF, function(x){x$gene})
+names(IDHmut_NMF)<- paste0("IDHmut_", names(IDHmut_NMF))
+
+## Remove any programs with < 10 genes (optional)
+all_nmf<- c(GBM_NMF, IDHmut_NMF)
+nmf_lengths<- unlist(lapply(all_nmf, length))
+all_nmf<- all_nmf[nmf_lengths>=10]
+```
+
+## Load in merged seurat object (NeftelGBM_Myeloid_vs_ped.Rmd)
+```{r}
+load(paste0(analysis_dir, "GBMNeftel_IDHmut2018_myeloid_merged_seurat.Robj"))
+cm_list<- NormCenter(gbm_idhmut_myeloid_seurat@assays$RNA@counts)
+cm_mean<- rowMeans(log2(cm_list$raw_data + 1))
+```
+
+## Score all cells for all NMF programs
+```{r}
+all_scores<-as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, all_nmf)))
+```
+
+## Correlate NMF program scores
+```{r}
+## NMF factor correlation based on cell score 
+scores_factor_hc = clusterNmfFactors(all_scores)
+scores_factor_cor = scores_factor_hc$cor_coef[scores_factor_hc$hc_obj$order, scores_factor_hc$hc_obj$order]
+
+## Heatmap of correlations
+hm_colors = rev((brewer.pal(n=9, name="RdBu")))
+hm_colors = colorRampPalette(colors = hm_colors)
+pheatmap(scores_factor_cor, color = hm_colors(100), 
+         cluster_rows = F, cluster_cols = F, 
+         annotation_names_row = F, annotation_names_col =T,
+         show_rownames = T, show_colnames = F,
+         filename = paste0(figure_dir, "Cor_GBM.Neftel_IDHmutrank5_deNovoNMF_RemoveLowGenePrograms.png"),
+         width = 8, height = 4)
+
+num_metagenes = length(all_nmf)
+tmp = all_scores[,1:num_metagenes]
+pairwise_cor = cor(tmp[,1:num_metagenes])
+pairwise_dist = 1 - pairwise_cor
+hc = hclust(dist(pairwise_dist), method = "ward.D2")
+
+jpeg(paste0(figure_dir, "Dendrogram_Cor_GBM.Neftel_IDHmutrank5_deNovoNMF_RemoveLowGenePrograms", ".png"), width = 1200, height = 1800, res = 300)
+plot(hc)
+dev.off()
+
+
+## Merge NMF programs based on heatmap
+merged_nmf<- list(Shared_NMF1=c("GBM_3", "IDHmut_3"), ## 17 genes shared
+                  Shared_NMF2=c("GBM_2", "IDHmut_1"), ## 10 genes shared
+                  GBM_NMF1=c("GBM_1"),
+                  #IDHmut_NMF1=c("IDHmut_6"),
+                  Shared_NMF3=c("GBM_6", "IDHmut_4"), ## 4 genes shared
+                  Shared_NMF4=c("GBM_4", "IDHmut_5", "GBM_5")) ## 6/12 genes shared (with GBM_4)
+  ## alt- don't merge gbm4/5
+  merged_nmf<- list(Shared_NMF1=c("GBM_3", "IDHmut_3"), ## 17 genes shared
+                    Shared_NMF2=c("GBM_2", "IDHmut_1"), ## 10 genes shared
+                    GBM_NMF1=c("GBM_1"),
+                    Shared_NMF3=c("GBM_6", "IDHmut_4"), ## 4 genes shared
+                    Shared_NMF4=c("GBM_4", "IDHmut_5"), ## 12 genes shared
+                    GBM_NMF2=c("GBM_5")) 
+  
+  ## alt- idhmut rank5 (instead of rank6)
+  merged_nmf<- list(Shared_NMF1=c("GBM_3", "IDHmut_5"), ## 17 genes shared
+                    Shared_NMF2=c("GBM_2", "IDHmut_1"), ## 10 genes shared
+                    GBM_NMF1=c("GBM_1"),
+                    #IDHmut_NMF1=c("IDHmut_6"),
+                    Shared_NMF3=c("GBM_6", "IDHmut_2"), ## 4 genes shared
+                    Shared_NMF4=c("GBM_4", "IDHmut_3", "GBM5")) ## 12 genes shared
+                 
+merged_gene_list<- lapply(merged_nmf, function(x){
+  print(x)
+  original_gene_list<- all_nmf[names(all_nmf) %in% x]
+  if(length(x)!=1){
+   if(length(x)>2){
+       tmp<- lapply(original_gene_list[2:length(original_gene_list)], function(y){
+        print(length(intersect(original_gene_list[[1]], y)))
+       })
+   } else{
+       tmp<- lapply(list(original_gene_list[[2:length(original_gene_list)]]), function(y){
+        print(length(intersect(original_gene_list[[1]], y)))})
+       }
+
+  }
+  original_gene_list<- unique(unname(unlist(original_gene_list)))
+  return(original_gene_list)
+})
+names(merged_gene_list)<- names(merged_nmf)
+
+## convert to df for exporting as csv
+merged_gene_df<- data.frame(gene= unlist(merged_gene_list),
+                            program=rep(names(merged_gene_list), lapply(merged_gene_list, length)))
+
+save(merged_gene_list, file=paste0(analysis_dir, "IDHmutrank6_GBMrank6_mergedDeNovoNMF_geneList_RemoveLowGenePrograms.Robj"))
+write.csv(merged_gene_df, file=paste0(analysis_dir, "IDHmutrank6_GBMrank6_mergedDeNovoNMF_geneList_RemoveLowGenePrograms.csv"), row.names = FALSE)
+```
+
+## Rescore for merged programs. Add to seurat object, plot
+```{r}
+## rescore for merged programs
+merged_scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, merged_gene_list)))
+merged_scores$Max_MergedProgram<- apply(merged_scores, 1,function(x){names(x)[which.max(x)]})
+merged_scores$Max_MergedScore<- apply(merged_scores[,colnames(merged_scores) != "Max_MergedProgram"], 1,function(x){x[which.max(x)]})
+
+## Add to seurat object
+sum(rownames(merged_scores)==colnames(gbm_idhmut_myeloid_seurat)); nrow(merged_scores); ncol(gbm_idhmut_myeloid_seurat)
+gbm_idhmut_myeloid_seurat<- AddMetaData(gbm_idhmut_myeloid_seurat, merged_scores)
+
+## Plot
+plot_colors<- c("red", "blue",  "orange","violetred" ,"cyan","green")
+names(plot_colors)<- unique(gbm_idhmut_myeloid_seurat$Max_MergedProgram)
+
+p1<- DimPlot(gbm_idhmut_myeloid_seurat, group.by="Max_MergedProgram")+
+  scale_color_manual(values=plot_colors)
+gbm_idhmut_myeloid_seurat$Max_MergedProgram_HighScore<- ifelse(gbm_idhmut_myeloid_seurat$Max_MergedScore>0.5, 
+                                                               gbm_idhmut_myeloid_seurat$Max_MergedProgram,
+                                                               "LowScore")
+p2<- DimPlot(gbm_idhmut_myeloid_seurat, group.by="Max_MergedProgram_HighScore")+
+  scale_color_manual(values=c(plot_colors, LowScore="grey"))
+p1+p2
+ggsave(paste0(figure_dir, "ScoreForMergedNMF_GBM4.5NotMerged_RemoveLowGenePrograms_rank6Both.png"), width=12, height=6)
+```
+
+## Compare analysis #1 and analysis #2: 
+1. score cells for all, correlate programs
+2. compare cell-wise annotations between 2 analyses
+
+## load in data and preprocess
+```{r}
+## load in data- merged seurat object, nmf gene lists
+load(paste0(analysis_dir, "GBMNeftel_IDHmut2018_myeloid_merged_seurat.Robj"))
+load(paste0(analysis_dir, "IDHmutrank6_GBMrank6_mergedDeNovoNMF_geneList_RemoveLowGenePrograms.Robj"))
+option2_nmf<- merged_gene_list; rm(merged_gene_list)
+
+option1_nmf<- read.csv(paste0(analysis_dir, "MergedNMF_GBM.Neftel_IDHmutScience2018", "_top_DE_genes_NMF_rank6.csv"))
+option1_nmf<- split(option1_nmf, f=option1_nmf$cluster)
+option1_nmf<- lapply(option1_nmf, function(x){x$gene})
+
+## rename nmf to reflect analyses
+names(option1_nmf)<- paste0("Option1_NMF", names(option1_nmf))
+names(option2_nmf)<- paste0("Option2_", names(option2_nmf))
+
+## norm/center merged dataset
+cm_list<- NormCenter(gbm_idhmut_myeloid_seurat@assays$RNA@counts)
+cm_mean<- rowMeans(log2(cm_list$raw_data + 1))
+
+## combine gene lists
+option1.2_nmf<- c(option1_nmf, option2_nmf)
+```
+
+## analysis 1: score and correlate
+```{r}
+all_scores<-as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, option1.2_nmf)))
+
+## NMF factor correlation based on cell score 
+scores_factor_hc = clusterNmfFactors(all_scores)
+scores_factor_cor = scores_factor_hc$cor_coef[scores_factor_hc$hc_obj$order, scores_factor_hc$hc_obj$order]
+
+## Heatmap of correlations
+hm_colors = rev((brewer.pal(n=9, name="RdBu")))
+hm_colors = colorRampPalette(colors = hm_colors)
+pheatmap(scores_factor_cor, color = hm_colors(100), 
+         cluster_rows = F, cluster_cols = F, 
+         annotation_names_row = F, annotation_names_col =T,
+         show_rownames = T, show_colnames = F,
+         filename = paste0(figure_dir, "Cor_NMFRunTogether_NMFRunSeparately.png"),
+         width = 8, height = 4)
+
+num_metagenes = length(option1.2_nmf)
+tmp = all_scores[,1:num_metagenes]
+pairwise_cor = cor(tmp[,1:num_metagenes])
+pairwise_dist = 1 - pairwise_cor
+hc = hclust(dist(pairwise_dist), method = "ward.D2")
+
+jpeg(paste0(figure_dir, "Dendrogram_Cor_NMFRunTogether_NMFRunSeparately", ".png"), width = 1200, height = 1800, res = 300)
+plot(hc)
+dev.off()
+
+## merge and see how many genes match
+merged_nmf<- list(NMF1=c("Option1_NMF3", "Option2_Shared_NMF3"),
+                  NMF2=c("Option1_NMF5", "Option2_Shared_NMF4"),
+                  Option1_NMF6=c("Option1_NMF6"),
+                  NMF3=c("Option1_NMF2", "Option2_GBM_NMF1"),
+                  NMF4=c("Option1_NMF4", "Option2_Shared_NMF2"),
+                  Option2_GBM_NMF2="Option2_GBM_NMF2",
+                  NMF5=c("Option1_NMF1", "Option2_Shared_NMF1")
+)
+all_nmf<- option1.2_nmf                 
+merged_gene_list<- lapply(merged_nmf, function(x){
+  print(x)
+  original_gene_list<- all_nmf[names(all_nmf) %in% x]
+  if(length(x)!=1){
+   if(length(x)>2){
+       tmp<- lapply(original_gene_list[2:length(original_gene_list)], function(y){
+        print(length(intersect(original_gene_list[[1]], y)))
+       })
+   } else{
+       tmp<- lapply(list(original_gene_list[[2:length(original_gene_list)]]), function(y){
+        print(length(intersect(original_gene_list[[1]], y)))})
+       }
+
+  }
+  original_gene_list<- unique(unname(unlist(original_gene_list)))
+  return(original_gene_list)
+})
+names(merged_gene_list)<- names(merged_nmf)
+
+```
+
+## analysis 2: how do cell annotations compare in option 1 vs option 2?
+```{r}
+## Split scores into option1/2, identify max program in each cell
+scores_option1<- all_scores[,grep("Option1", colnames(all_scores))]
+scores_option2<- all_scores[,grep("Option2", colnames(all_scores))]
+
+scores_option1$Option1_Max<- apply(scores_option1, 1, function(x){names(x)[which.max(x)]})
+scores_option2$Option2_Max<- apply(scores_option2, 1, function(x){names(x)[which.max(x)]})
+
+## Add to seurat object
+gbm_idhmut_myeloid_seurat<- AddMetaData(gbm_idhmut_myeloid_seurat, scores_option1)
+gbm_idhmut_myeloid_seurat<- AddMetaData(gbm_idhmut_myeloid_seurat, scores_option2)
+
+## set colors based on correlation above (so that colors are semi-comparable between option 1/2)
+plot_colors<-c("red", "blue", "orange", "purple", "violetred", "green", "cyan")
+plot_colors_named<- unlist(lapply(1:length(merged_nmf), function(x){
+  nmf_list<- merged_nmf[[x]]
+  color_use<- rep(plot_colors[x], length(nmf_list))
+  names(color_use)<- unlist(nmf_list)
+  return(color_use)
+}))
+
+## Compare on UMAP
+p1<- DimPlot(gbm_idhmut_myeloid_seurat, group.by = "Option1_Max", cols = plot_colors_named)
+p2<- DimPlot(gbm_idhmut_myeloid_seurat, group.by = "Option2_Max", cols=plot_colors_named)
+p1+p2
+ggsave(paste0(figure_dir, "NMFRunTogther_NMFRunSeparately_MaxProgram_ColoredbyCorrelation.png"), width=12, height=5)
+
+## try to quantify how well they match: for each option 1 cell, what were they scored as in option 2? 
+## colored by "merged" program based on correlation
+scores_option1$Cell<- rownames(scores_option1); scores_option2$Cell<- rownames(scores_option2)
+max_scores<- cbind(scores_option1[,c("Option1_Max", "Cell")], scores_option2[,c("Option2_Max", "Cell")])
+max_scores<- max_scores[,colnames(max_scores) != "Cell"]
+
+max_scores_df<- as.data.frame(table(max_scores$Option1_Max, max_scores$Option2_Max))
+colnames(max_scores_df)<-c("MaxOption1", "MaxOption2", "NCells")
+
+label_colors<- plot_colors_named[grep("Option1", names(plot_colors_named))]
+label_colors<- label_colors[order(names(label_colors))]
+
+ggplot(max_scores_df, aes(x=MaxOption1, y=NCells, fill=MaxOption2))+
+  geom_bar(position="stack", stat="identity")+
+  scale_fill_manual(values=plot_colors_named)+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, colour = label_colors))
+ggsave(paste0(figure_dir, "NMFRunTogether_NMFRunSeparately_ChangeInMaxProgram_ColoredByCorrelation.png"), width=6, height=5)
+
+```
+
+## analysis 3: which way is "better"? One way to get at this- which better recapitulates the pattern seen in the UMAP
+## that is: some gbm/idhmut overlap, some gbm-specific programs, but no idhmut-specific programs
+```{r}
+## df of breakdown by sample (separately for option 1/2)
+option1_bd<- as.data.frame(table(gbm_idhmut_myeloid_seurat$TumorType, gbm_idhmut_myeloid_seurat$Option1_Max))
+option2_bd<- as.data.frame(table(gbm_idhmut_myeloid_seurat$TumorType, gbm_idhmut_myeloid_seurat$Option2_Max))
+option1_bd$Analysis<-"NMF_Together"; option2_bd$Analysis<- "NMF_Separately"
+
+option1.2_bd<- rbind(option1_bd, option2_bd)
+colnames(option1.2_bd)<- c("TumorType", "NMF_Program", "NCells", "Analysis")
+
+## Convert NCells to proportion, by program
+option1.2_bd <- option1.2_bd %>% group_by(NMF_Program) %>% mutate(PerCells=NCells/sum(NCells)) %>% as.data.frame()
+
+ggplot(option1.2_bd, aes(x=NMF_Program, y=PerCells, fill=TumorType ))+
+  geom_bar(position="stack", stat="identity")+
+  facet_grid(cols=vars(Analysis), space="free_x", scale="free_x")+
+  geom_hline(yintercept = .5)+
+  xlab("")+ylab("Percentage of cells")+
+  theme(axis.text.x = element_text(angle=45, hjust=1, color="black", face="bold"))
+ggsave(paste0(figure_dir, "NMFRunTogether_NMFRunSeparately_ByTumorType.png"), width=10, height=5)
+```
+
+# Option 1- score, see breakdown by subtype
+```{r}
+all_scores<-as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, option1_nmf)))
+all_scores$MaxProgram<- apply(all_scores, 1, function(x){names(x)[which.max(x)]})
+
+gbm_idhmut_myeloid_seurat<- AddMetaData(gbm_idhmut_myeloid_seurat, all_scores)
+type_bd<- as.data.frame(table(gbm_idhmut_myeloid_seurat$MaxProgram, gbm_idhmut_myeloid_seurat$TumorType))
+ggplot(type_bd, aes(x=Var1, y=Freq, fill=Var2))+
+  geom_bar(stat="identity", position="stack")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))
+```
+
+## Compare final programs to microglia/macrophages and granulocyte programs
+```{r}
+## Load in nmf markers and merged seurat object
+name.project<- "MergedNMF_GBM.Neftel_IDHmutScience2018"
+adult_rank6<- read.csv(paste0(analysis_dir, name.project, "_top_DE_genes_NMF_rank6.csv"))
+load(paste0(analysis_dir, "GBMNeftel_IDHmut2018_myeloid_merged_seurat.Robj"))
+adult_rank6<- split(adult_rank6, f=adult_rank6$cluster)
+adult_rank6<- lapply(adult_rank6, function(x){x$gene})
+
+## rename adult nmf programs based on ped correlation
+nmf_adult<- names(adult_rank6)
+names(nmf_adult)<- c("MES_Monocytes", "Adult_NMF2", "Stress_Response", "Adult_NMF4", "Inflammatory", "Adult_NMF6")
+names(adult_rank6)<- plyr::mapvalues(names(adult_rank6), nmf_adult, names(nmf_adult))
+
+## center/mean myeloid cell counts
+cm_list<- NormCenter(gbm_idhmut_myeloid_seurat@assays$RNA@counts)
+cm_mean<- rowMeans(log2(cm_list$raw_data + 1))
+
+## Load in macrophage/microglia markers
+gene_set_dir<- "../../../../Marker_genes/"
+microglia_genes = read.table(paste0(gene_set_dir, "Microglia_markers.txt"))
+macrophage_genes = read.table(paste0(gene_set_dir, "Macrophage_markers.txt"))
+
+## load in granulocyte genes (all genesets downloaded from PanglaoDB)
+pangloDB_genes<- read.csv(paste0(gene_set_dir, "PanglaoDB_markers_All.tsv"), sep="\t")
+
+mm.gran_genes<- list(neutrophils=pangloDB_genes[pangloDB_genes$cell.type=="Neutrophils", "official.gene.symbol"],
+                     basophils=pangloDB_genes[pangloDB_genes$cell.type=="Basophils", "official.gene.symbol"],
+                     eosinophils=pangloDB_genes[pangloDB_genes$cell.type=="Eosinophils", "official.gene.symbol"],
+                     macrophages=macrophage_genes$V1,
+                     microglia=microglia_genes$V1)
+
+## Score myeloid cells for mm/granulocyte genes
+mm.gran_score<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, mm.gran_genes)))
+
+## score myeloid cells for nmf programs
+nmf_score<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, adult_rank6)))
+
+## add scores together
+all_scores<- cbind(mm.gran_score, nmf_score)
+
+## NMF factor correlation based on cell score 
+scores_factor_hc = clusterNmfFactors(all_scores)
+scores_factor_cor = scores_factor_hc$cor_coef[scores_factor_hc$hc_obj$order, scores_factor_hc$hc_obj$order]
+
+## Heatmap of correlations
+hm_colors = rev((brewer.pal(n=9, name="RdBu")))
+hm_colors = colorRampPalette(colors = hm_colors)
+pheatmap(scores_factor_cor, color = hm_colors(100), 
+         cluster_rows = F, cluster_cols = F, 
+         annotation_names_row = F, annotation_names_col =T,
+         show_rownames = T, show_colnames = F,
+         filename = paste0(figure_dir, "Cor_NMFRunTogether_Macrophage.Microglia.Granulocytes.png"),
+         width = 8, height = 4)
+
+num_metagenes = length(option1.2_nmf)
+tmp = all_scores[,1:num_metagenes]
+pairwise_cor = cor(tmp[,1:num_metagenes])
+pairwise_dist = 1 - pairwise_cor
+hc = hclust(dist(pairwise_dist), method = "ward.D2")
+
+jpeg(paste0(figure_dir, "Dendrogram_Cor_NMFRunTogether_NMFRunSeparately", ".png"), width = 1200, height = 1800, res = 300)
+plot(hc)
+dev.off()
+
+
+```
+
