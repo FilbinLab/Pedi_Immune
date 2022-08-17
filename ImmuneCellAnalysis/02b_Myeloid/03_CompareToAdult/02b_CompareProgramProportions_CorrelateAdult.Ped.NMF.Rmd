@@ -42,9 +42,9 @@ source(nmf_helper)
 
 ## Read in seurat objects + marker genes
 ```{r}
-cohort<- "pedOnly_nomuv63.withmuv91"
+cohort<- "pedOnly_nomuv63"
 ped_rank<-6 ## rank to use for ped
-adult_rank<- 5
+adult_rank<- 7
 
 figure_dir<- paste0(figure_dir_tmp, cohort, "/"); analysis_dir<- paste0(analysis_dir_tmp, cohort, "/")
 data_dir<- paste0(data_dir_tmp, cohort, "/")
@@ -56,7 +56,7 @@ ped_seurat<-readRDS(paste0(data_dir, "myeloid_seurat_noDC.B.Rds"))
 ## adult (GBM and IDHmut; smartseq2)
 load(paste0("../../01_Preprocessing/03_PreprocessAdultDatasets/", 
                                 "analysis/Preprocess_AdultMyeloid/", "GBMNeftel_IDHmut2018_myeloid_merged_seurat.Robj"))
-adult_seurat<- gbm_idhmut_myeloid_seurat; rm(gbm_idhmut_myeloid_seurat)
+#adult_seurat<- gbm_idhmut_myeloid_seurat; rm(gbm_idhmut_myeloid_seurat)
 
 ## ped marker genes
 ped_markers<- read.csv(paste0("../01a_NMF/analysis/de.novoNMF/", cohort,  "/top_DE_genes_10Xannotated_NMF_rank", ped_rank, ".csv"))
@@ -115,4 +115,42 @@ plot(scores_factor_hc$hc_obj)
 dev.off()
 ```
 
+
+## Gene overlap between ped/adult
+```{r}
+library(ggVennDiagram)
+
+cohort<- "pedOnly_nomuv63"
+ped_rank<-6 ## rank to use for ped
+adult_rank<- 5
+
+## ped marker genes
+ped_markers<- read.csv(paste0("../01a_NMF/analysis/de.novoNMF/", cohort,  "/top_DE_genes_10Xannotated_NMF_rank", ped_rank, ".csv"))
+ped_markers<- ped_markers[,!grepl("X", colnames(ped_markers))]
+
+
+## adult marker genes- for NMF run simultaneously for gbm/idhmut
+adult_markers<- read.csv(paste0("../01b_Ped.Adult.NMF/analysis/AdultCohorts_DeNovoNMF/MergedNMF_GBM.Neftel_IDHmutScience2018_top_DE_genes_NMF_rank", 
+                                adult_rank, ".csv"))
+adult_markers<- adult_markers[,!grepl("X", colnames(adult_markers))]
+
+## create marker list
+ped_marker_list<- split(ped_markers, f=ped_markers$cluster); ped_marker_list<- lapply(ped_marker_list, function(x){x$gene})
+adult_marker_list<- split(adult_markers, f=adult_markers$cluster); adult_marker_list<- lapply(adult_marker_list, function(x){x$gene})
+names(adult_marker_list)<- paste0("Adult_NMF", names(adult_marker_list))
+
+## For each ped program: venn diagram with adult program with highest gene overlap
+nGenesAdult<- unlist(lapply(adult_marker_list, length))
+all_plots<- lapply(names(ped_marker_list), function(x){
+  ped_markers<- ped_marker_list[[x]]
+  inAdult<- sapply(adult_marker_list, function(x){sum(x %in% ped_markers)})/nGenesAdult
+  maxPropAdult<- names(inAdult)[which.max(inAdult)]
+  ggVennDiagram(list(ped=ped_markers, adult=adult_marker_list[[maxPropAdult]]))+
+    scale_fill_gradient(low="white", high="red")+
+    scale_color_manual(values = rep("black", 3))+
+    ggtitle(paste0("Ped: ", x, "\nMax adult: ", maxPropAdult))
+})
+cowplot::plot_grid(plotlist=all_plots)
+ggsave(paste0(figure_dir, "Venn_PedRank", ped_rank, "_withMaxOverlapAdultRank", adult_rank, ".png"), width=9, height=6)
+```
 
