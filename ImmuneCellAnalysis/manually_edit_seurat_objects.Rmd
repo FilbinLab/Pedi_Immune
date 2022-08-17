@@ -1,0 +1,20 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+Various manual edits to annotations for seurat objects made here. Rather than edit individual scripts, these minor edits are made here and files saved. Then figures regenerated using corrected annotations.
+
+```{r}
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/")
+
+
+```
+
+To be corrected:
+BT1478 not BCOR
+NMF annotations- stress response --> microglia; inhibitory --> "activated EM" maybe?
