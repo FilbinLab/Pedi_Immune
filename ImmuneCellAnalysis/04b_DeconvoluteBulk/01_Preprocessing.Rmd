@@ -287,3 +287,28 @@ write.table(tpm, file = paste0(analysis_dir_use, "TCGA_IDHmut.AYA_cm.txt"), quot
 
 ```
 
+## Mean expression of GOI in bulk data
+```{r}
+data_dir<- "/Users/jlabelle/Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/PublishedDatasets/BulkRNAseq/"
+
+goi<- c("KLRB1", "PTGER2", "SELPLG", "GNLY", "PDCD1")
+
+goi_list<- list()
+
+## CBTN: HGG+DIPG, WT and K27M available
+tpm<- readRDS(paste0(data_dir, "CBTN/tpm_allSamples_processed.Rds"))
+goi_list[["CBTN_All"]]<- tpm[goi,]
+
+## DFCI (HGG, Frank/Mimi)
+load(paste0(data_dir, "HGG_FrankMimi/HGGPed_tpm.Robj"))
+tpm<- HGGPed_tpm; rm(HGGPed_tpm)
+goi_list[["DFCI"]]<- tpm[goi,]
+
+## TCGA: IDHmut AYA
+load(paste0(data_dir, "TCGA/AllTCGACohorts_CountsFPKMTPM_TCGAIDs_SurvivalMatched.Robj"))
+tpm<- all_cm$tpm$idh1_YA_tpm; rm(all_cm)
+goi_list[["TCGA_IDHmutAYA"]]<- tpm[goi,]
+
+saveRDS(goi_list, file=paste0(analysis_dir, "TPM_GOI_CBTN.DFCI.TCGA.Rds"))
+```
+
