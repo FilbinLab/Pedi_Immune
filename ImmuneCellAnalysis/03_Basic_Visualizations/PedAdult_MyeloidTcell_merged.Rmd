@@ -1,0 +1,139 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+## Purpose:
+Nice plots (mainly UMAP) of immune cells- myeloid/tcell together and separate, by cell type, by sample, subtype, etc
+
+## Approach:
+Cell type annotations for tcells (CD4/CD8) based on "NMF approach"- briefly, run tcell nmf --> identify programs --> split seurat by program --> identify cd4/cd8 cluster-wise for each program. This analysis performed for ped/adult simultaneously. This analysis performed in 02a_Tcells/02_Ped.Adult/02_detailed_annot/IdentifyCD4.CD8_byNMF.Rmd
+
+
+```{r}
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/03_Basic_Visualizations/")
+
+library(Seurat)
+library(ggplot2)
+library(ggpubr)
+library(randomcoloR)
+
+
+figure_dir_tmp<- "figures/PedAdult.MyeloidTcell/"; if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp)}
+tcell_data_dir<- "../02a_Tcells/02_Ped.Adult/03_Visualize.Reannotate_programs/analysis/Reannotate_programs/"
+myeloid_data_dir<- "../02b_Myeloid/03_CompareToAdult/analysis/Merge_AssessIntegration/"
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+```
+
+## Read in processed seurat objects
+```{r}
+rank_use<- "8"; sharedBy="union"; cohort<- "pedOnly_nomuv63"; adultWithMUV<- FALSE
+tcell_data_dir<- paste0(tcell_data_dir, "rank", rank_use, "_sharedBy", sharedBy, "/")
+myeloid_data_dir<- paste0(myeloid_data_dir, cohort, "/adult_WithMUV.", adultWithMUV, "/" )
+
+figure_dir<- paste0(figure_dir_tmp, cohort, "/")
+if(!dir.exists(figure_dir)){dir.create(figure_dir)}
+
+
+## Read in seurat objects
+myeloid_seurat<- readRDS(paste0(myeloid_data_dir, "myeloid_seurat_Ped.AdultGBM.IDHMut_merged.Rds"))
+tcell_seurat<- readRDS(paste0(tcell_data_dir, "ped.adult_seurat_tcell_harmony.Rds"))
+
+
+## Read in colors
+immune_colors<- readRDS("../plot_colors/ImmuneCell.celltypes.Rds")
+subtype_colors<-  readRDS("../plot_colors/Subtype.Rds")
+```
+
+## Plotting themes
+```{r}
+umap_theme<- function(p, colors=immune_colors){
+  p+NoLegend()+
+  scale_color_manual(values=colors[names(colors) %in% unique(seurat_plot$plotting)])+
+  theme(legend.position = "bottom",
+        legend.text = element_text(face="bold"),
+      plot.title = element_blank(),
+      axis.text = element_text(face="bold", colour = "black"),
+      axis.title = element_text(face="bold", colour = "black"))+
+  ylab("UMAP2")+xlab("UMAP1")
+}
+
+
+
+
+```
+
+## Additions to seurat objects for nicer plotting
+```{r}
+tcell_seurat$NiceSubtype_Merge<-gsub("-H3G34R/V", "", gsub("-HistoneWT", "", gsub("-H3K27M", "", gsub("-BCOR", "", tcell_seurat$NiceSubtype))))
+tcell_seurat$detailed_annot_withCycling_byNMF<- ifelse(tcell_seurat$detailed_annot_withCycling=="Cycling", "Cycling", 
+                                                       tcell_seurat$detailed_annot_byNMFrank8_mergedByunion)
+
+
+```
+
+
+## Merge myeloid/tcell together
+```{r}
+library(harmony)
+
+## Add on broad annotation
+myeloid_seurat$broad_annot<- "Myeloid"
+tcell_seurat$broad_annot<- "Tcell"
+
+## Merge
+myeloid_seurat$sample<- myeloid_seurat$sampleid
+immune_seurat<- merge(myeloid_seurat, tcell_seurat)
+immune_meta<- immune_seurat@meta.data
+
+## Rerun processing
+immune_seurat<- RunFullSeurat(immune_seurat@assays$RNA@counts, samples=immune_meta$sample, RunHarmony = TRUE)
+immune_seurat<- AddMetaData(immune_seurat, immune_meta[,!colnames(immune_meta) %in% colnames(immune_seurat@meta.data)])
+```
+
+
+## Plot by broad annotation and age
+```{r}
+## By T cell/Myeloid
+seurat_plot<- immune_seurat
+seurat_plot$plotting<- seurat_plot$broad_annot
+DimPlot(seurat_plot, group.by = "plotting", label = TRUE, label.size = 10) %>% umap_theme()
+ggsave(paste0(figure_dir, "TCellMyeloid.png"), width=6, height=5.5)
+
+## With CD4/CD8 distinction
+immune_seurat$Final_detailed_annot<- ifelse(immune_seurat$broad_annot=="Myeloid", "Myeloid", immune_seurat$Final_detailed_annot)
+seurat_plot<- subset(immune_seurat, Final_detailed_annot != "Unclear")
+seurat_plot$plotting<- seurat_plot$Final_detailed_annot
+
+DimPlot(seurat_plot, group.by = "plotting", label=TRUE, label.size = 8) %>% umap_theme()
+ggsave(paste0(figure_dir, "CD4CD8Myeloid.png"), width=6, height=5.5)
+
+
+## By age
+seurat_plot<- immune_seurat
+seurat_plot$plotting<- seurat_plot$Age
+DimPlot(seurat_plot, group.by = "plotting", label=FALSE, label.size = 8) %>% umap_theme(colors=c(Ped="red", Adult="navy"))
+ggsave(paste0(figure_dir, "byAge.png"), width=6, height=5.5)
+
+## By dataset
+seurat_plot<- immune_seurat
+seurat_plot$dataset<- ifelse(seurat_plot$broad_annot=="Tcell", paste0("Tcell_", seurat_plot$Age),
+                               ifelse(seurat_plot$Age=="Ped", "Myeloid_Ped",
+                                      paste0("Myeloid_Adult.", seurat_plot$NiceSubtype)))
+seurat_plot$plotting<- seurat_plot$dataset
+DimPlot(seurat_plot, group.by = "plotting", label=FALSE, label.size = 8) %>%
+  umap_theme(colors=c(Myeloid_Ped="red", Myeloid_Adult.GBM="navy", Myeloid_Adult.IDHmut="cyan",
+                      Tcell_Adult="skyblue", Tcell_Ped="firebrick"))
+  
+ggsave(paste0(figure_dir, "byDataset.png"), width=6, height=5.5)
+```
+
+
