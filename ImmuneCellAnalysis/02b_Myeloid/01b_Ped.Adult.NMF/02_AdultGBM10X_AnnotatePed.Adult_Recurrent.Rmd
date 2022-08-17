@@ -1,0 +1,243 @@
+---
+title: "AdultGBM10X_AnnotatePed.Rmd"
+output: html_document
+date: "11/11/2021"
+---
+
+## Purpose:
+Use adult GBM 10X dataset to help annotate merged Ped/Adult Myeloid NMF programs
+
+## Approach:
+Score ped and adult myeloid cells for both adult GBM 10x programs + ped/adult merged NMF programs, correlate to help annotate ped/adult merged NMF programs
+
+
+## Settings/input as of 4/4/22:
+integration=""
+cohort=pedOnly_nomuv63
+rank=6
+
+```{r}
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/02b_Myeloid/01b_Ped.Adult.NMF/")
+data_dir_tmp<- "../../01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/"
+
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+
+integration<- "" ## HarmonyInt/ or ""
+figure_dir_tmp<- paste0("figures/GBM.10X_AnnotatePedAdult_recurrent/", integration)
+analysis_dir_tmp<- paste0("analysis/GBM.10X_AnnotatePedAdult_recurrent/", integration)
+
+for(i in c(figure_dir_tmp, analysis_dir_tmp)){
+  if(!dir.exists(i)){dir.create(i, recursive = TRUE)}
+}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(nmf_helper)
+```
+
+## Read in merged ped/adult seurat object. Merged in Merge_AssessIntegration.Rmd
+```{r}
+cohort<-"pedOnly_nomuv63"
+adult_withMUV<- FALSE
+
+analysis_dir<- paste0(analysis_dir_tmp, cohort, "/", "AdultWithMUV.", adult_withMUV, "/")
+figure_dir<- paste0(figure_dir_tmp, cohort, "/","AdultWithMUV.", adult_withMUV, "/")
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+
+myeloid_seurat<-readRDS(paste0("../03_CompareToAdult/analysis/Merge_AssessIntegration/",
+                               cohort,"/adult_withMUV.FALSE/myeloid_seurat_Ped.AdultGBM.IDHMut_merged.Rds" ))
+
+## Center/mean ped.adult myeloid
+pedAdult_cm_list<- NormCenter(myeloid_seurat@assays$RNA@counts)
+pedAdult_cm_mean<- rowMeans(log2(myeloid_seurat@assays$RNA@counts + 1))
+```
+
+## load in marker genes
+```{r}
+rank_use<- 11
+
+## load in ped/adult marker genes
+markers<- read.csv(paste0("analysis/Ped.Adult_NMF/", cohort, "/", "AdultWithMUV.", adult_withMUV, "/", "top_DE_genes_NMF_rank", rank_use, ".csv"))
+marker_list<- split(markers, f=markers$cluster)
+marker_list<- lapply(marker_list, function(x){x$gene})
+
+## adult 10x recurrent programs
+adult_markers_top100<- readRDS(paste0("../../01_Preprocessing/03_PreprocessAdultDatasets/analysis/", 
+                                      "Preprocess_AdultMyeloid/", 
+                                      "GBM.10X_recurrent_myeloid_markers_top100.Rds"))
+adult_myeloid_markers<- split(adult_markers_top100, f=adult_markers_top100$cluster)
+adult_myeloid_markers<- lapply(adult_myeloid_markers, function(x){x$gene})
+names(adult_myeloid_markers)<- paste0("Adult_", names(adult_myeloid_markers))
+
+markers_use<- marker_list
+analysis_name<- "mergedPedAdult"
+
+
+```
+
+
+
+
+
+## score for both pedAdultMerged markers /adult 10x
+## Correlate
+```{r}
+## score
+scores<- as.data.frame(t(scoreNmfGenes(pedAdult_cm_list$center_data, pedAdult_cm_mean,  
+                                                   c(adult_myeloid_markers, markers_use))))
+
+
+## NMF factor correlation based on cell score 
+scores_factor_hc = clusterNmfFactors(scores)
+scores_factor_cor = scores_factor_hc$cor_coef[scores_factor_hc$hc_obj$order, scores_factor_hc$hc_obj$order]
+
+## Heatmap of correlations
+hm_colors = rev((brewer.pal(n=9, name="RdBu")))
+hm_colors = colorRampPalette(colors = hm_colors)
+pheatmap(scores_factor_cor, color = hm_colors(100), 
+         cluster_rows = F, cluster_cols = F, 
+         annotation_names_row = F, annotation_names_col =T,
+         show_rownames = T, show_colnames = F,
+         filename = paste0(figure_dir, "Cor_PedAdultNMFrank", rank_use, "_AdultCellTypes.png"),
+         width = 8, height = 4)
+
+## Dendrogram of hierarchical clustering 
+jpeg(filename=paste0(figure_dir, "HC_PedAdultNMFrank", rank_use, "_AdultCellTypes.png"), width = 400, height = 600)
+plot(scores_factor_hc$hc_obj)
+dev.off()
+
+## Save scores
+saveRDS(scores, file=paste0(analysis_dir, "scores_pedAdultNMFrank", rank_use, "_adult10x.Rds"))
+```
+
+
+## Plot max 10X program
+```{r}
+## Subset to just adult programs, assign max program
+rank<-10
+scores<- readRDS(paste0(analysis_dir, "scores_pedAdultNMFrank", rank_use, "_adult10x.Rds"))
+scores<- scores[,grepl("Adult_", colnames(scores))]
+scores$MaxProgram<- apply(scores, 1, function(x){names(x)[which.max(x)]})
+scores$MaxScore<- apply(scores[,colnames(scores) != "MaxProgram"], 1, function(x){x[which.max(x)]})
+
+## add to seurat object
+sum(rownames(scores)==colnames(myeloid_seurat)); nrow(scores); ncol(myeloid_seurat)
+myeloid_seurat$Max10XProgram<- scores$MaxProgram; myeloid_seurat$Max10XScore<-scores$MaxScore
+
+## Plot, highlighting prol_tam
+myeloid_seurat$prol_tam<- ifelse(myeloid_seurat$Max10XProgram=="Adult_prol_TAM",
+                                 ifelse(myeloid_seurat$Max10XScore>0.5, "highScore_prolTAM", "lowScore_prolTAM"), "Other")
+p1<- DimPlot(myeloid_seurat, group.by="Max10XProgram")
+p2<- DimPlot(myeloid_seurat, group.by = "prol_tam", cols = c(highScore_prolTAM="red", lowScore_prolTAM="blue", Other="grey"))
+p1+p2
+ggsave(paste0(figure_dir, "Max10XProgram_ProlTAM.png"), width=12, height=5.5)
+
+myeloid_seurat$tmp<- ifelse(myeloid_seurat$prol_tam=="highScore_prolTAM", "prol_TAM", "Other")
+DimPlot(myeloid_seurat, group.by="tmp", cols=c(prol_TAM="red", Other="grey"), label=TRUE, label.size = 6)+
+  ggtitle("")+NoLegend()
+ggsave(paste0(figure_dir, "UMAP_prolTAM.png"), width=6, height=5.5)
+
+## Seems to be prol_tam cluster-may use these annotations downstream. save myeloid seurat object with this distinction.
+saveRDS(myeloid_seurat, paste0(data_dir, "myeloid_seurat_noDC.B.Rds"))
+```
+
+
+## Rename ped gene lists/seurat annotations based on correlation
+```{r}
+annot_rank_list<- list(
+  rank6=c("Monocytes", "Mo_TAM", "NMF3", "Mg_TAM", "IFN_TAM", "Inflammatory"),
+  rank7=c("NMF1", "Monocytes", "prol_TAM", "Mo_TAM", "IFN_TAM", "NMF6", "Mg_TAM"),
+  rank10=c("Monocytes", "IFN_TAM", "SEPP1_TAM", "MgTAM.4", "NMF5", "Mo_TAM", "prol_TAM", "Transitory_Mo_TAM", "MgTAM.9", "MgTAM.10")
+)
+annot_rank_list<- lapply(annot_rank_list, function(x){
+  names(x)<- paste0("NMF", 1:length(x))
+  return(x)
+})
+
+  
+
+saveRDS(annot_rank_list, file=paste0(analysis_dir, "PedAdultMergedNMF_RenamedByGBM10XCorrelation.Rds"))
+
+```
+
+## After determining annotations based on correlation with adult 10x programs, rename NMF programs here
+## Changed to using recurrent programs instead of primary on 1/24/22
+```{r}
+rank_use<-10
+ND.R<- "_recurrent" ## "_recurrent" to use annotations based on correlation with recurrent 10X programs, "" to use primary tumor programs
+cohort<- "pedOnly_nomuv63"
+
+## read in scores + markers  to be renamed
+scores<- readRDS(paste0(analysis_dir, "scores_pedAdultNMFrank", rank_use, "_adult10x.Rds"))
+markers<- read.csv(paste0("analysis/Ped.Adult_NMF/", cohort, "/", "AdultWithMUV.", adult_withMUV, "/", "top_DE_genes_NMF_rank", rank_use, ".csv"))
+
+## Set annotations to use (above)
+annots<- annot_rank_list[[paste0("rank", rank_use)]]
+
+  
+## Reassign nmf names based on 10x annotations
+  ## marker genes
+  markers$cluster<- plyr::mapvalues(paste0("NMF", markers$cluster),  names(annots) ,annots)
+
+  ## seurat
+  myeloid_seurat@meta.data[[paste0("NMF_rank", rank_use, "_annotByAdult10X")]]<- plyr::mapvalues(myeloid_seurat@meta.data[[paste0("NMF_rank", rank_use)]],
+                                                                                          gsub("NMF", "", names(annots)) ,annots)
+  myeloid_seurat@meta.data[[paste0("NMF_rank", rank_use, "byScore_annotByAdult10X")]]<- plyr::mapvalues(myeloid_seurat@meta.data[[paste0("NMF_rank", rank_use)]],
+                                                                                     gsub("NMF", "", names(annots)) ,annots)
+  
+  ## scores
+  scores<- scores[,!grepl("Adult_", colnames(scores))]
+  colnames(scores)<- plyr::mapvalues(colnames(scores), gsub("NMF", "", names(annots)) ,annots)
+  scores$MaxProgram<- apply(scores, 1, function(x){names(x)[which.max(x)]})
+  scores$MaxScore<- apply(scores[,colnames(scores) != "MaxProgram"], 1, function(x){x[which.max(x)]})
+  
+  ## Save marker genes with annotations
+  write.csv(markers, file=paste0(analysis_dir,  "top_DE_genes_10Xannotated_NMF_rank", rank_use, ".csv"))
+
+
+## save seurat with 10x annotations
+saveRDS(myeloid_seurat, file=paste0("../03_CompareToAdult/analysis/Merge_AssessIntegration/",
+                               cohort,"/adult_withMUV.FALSE/myeloid_seurat_Ped.AdultGBM.IDHMut_merged.Rds" ))
+
+## save scores with 10x annotations
+saveRDS(scores, file=paste0(analysis_dir, "NMF_scores_annotByAdult10X_rank", rank_use, ".Rds"))
+
+
+```
+
+## Save colors for all follow up
+```{r}
+## pedOnly_nomuv63- annotated with 10X primary
+color_annots<- list(rank6=c(SEPP1_Mo_TAM ="orange", Inflammatory="red", IFN_Mg_TAM="purple", Stress_Response="olivedrab4",
+                            Monocytes="turquoise3", Mo_TAM="navy"))
+
+## pedOnly_novmu63- annotated with 10X recurrent
+color_annots<- list(rank6=c(SEPP1_Mo_TAM ="orange", Inflammatory="red", IFN_TAM="purple", Stress_Response="olivedrab4",
+                            Monocytes="turquoise3", Hypoxic_TAM="navy"))
+
+## pedOnly_novmu63, with harmony integration- annotated with 10X recurrent
+color_annots<- list(rank7=c(SEPP1_Hi_Mo_TAM ="orange", Inflammatory="red", IFN_TAM="purple", Stress_Response="olivedrab4",
+                            Monocytes="turquoise3", Hypoxic_TAM="navy",prol_TAM="grey22" ))
+
+saveRDS(color_annots, paste0(analysis_dir, "annot_colors.Rds"))
+```
+
+## Exploratory- can delete
+```{r}
+df<- as.data.frame(table(myeloid_seurat$NiceSubtype, myeloid_seurat$NMF_rank10_annotByAdult10X))
+colnames(df)<- c("Age", "Program", "Ncells")
+df<- df %>% group_by(Age) %>% mutate(perCells=Ncells/sum(Ncells)) %>% as.data.frame()
+
+ggplot(df, aes(x=Age, y=perCells, fill=Program))+
+  geom_bar(stat="identity")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))
+```
+
