@@ -131,10 +131,10 @@ for(cohort in names(surv_res_list)){
   
   ## Plot
   all_plots<- lapply(genesets_test, function(geneset){
-    plot_mySurvAnalysis(survRes[[geneset]]$fit,input, DepColumnName = geneset)
+    plot_mySurvAnalysis(survRes[[geneset]]$fit,input, DepColumnName = geneset, showPvalue = FALSE)
   })
   p<-arrange_ggsurvplots(all_plots, ncol=3, nrow=ceiling(length(all_plots)/3))
-  ggsave(plot=p, paste0(figure_dir_use, "CD4_SurvRes_allGenesets.png"), width=9, height=9)
+  ggsave(plot=p, paste0(figure_dir_use, "CD4_SurvRes_allGenesets_noPvalue.png"), width=9, height=9)
 }
 ```
 
@@ -178,4 +178,43 @@ for(cohort in names(surv_res_list)){
   ggsave(plot=p, paste0(figure_dir_use, "Myeloid_SurvRes_allGenesets.png"), width=9, height=6)
 }
 ```
+
+## Run survival analysis: GOI
+```{r}
+genesets_test<- c("KLRB1", "PTGER2", "SELPLG", "GNLY", "PDCD1")
+
+surv_obj_list<- lapply(surv_obj_list_allCellTypes, function(x){x$GOI})
+surv_obj_list<-surv_obj_list[unlist(lapply(surv_obj_list, function(x){!is.null(x)}))]
+
+surv_res_list<- lapply(surv_obj_list, function(FinalMeta){
+  all_genesets_surv<- lapply(genesets_test, function(geneset){
+    surv_res<- run_mySurvAnalysis(FinalMeta, DepColumnName = geneset)
+    return(surv_res)
+  })
+  names(all_genesets_surv)<- genesets_test
+  return(all_genesets_surv)
+})
+
+
+## Plot results separately for each cohort
+for(cohort in names(surv_res_list)){
+  print(cohort)
+  
+  ## Set output dir- separate for each cohort
+  figure_dir_use<- paste0(figure_dir, cohort, "/")
+  if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
+  
+  ## Set input/km results
+  input<- surv_obj_list[[cohort]]
+  survRes<- surv_res_list[[cohort]]
+  
+  ## Plot
+  all_plots<- lapply(genesets_test, function(geneset){
+    plot_mySurvAnalysis(survRes[[geneset]]$fit,input, DepColumnName = geneset)
+  })
+  p<-arrange_ggsurvplots(all_plots, ncol=3, nrow=ceiling(length(all_plots)/3))
+  ggsave(plot=p, paste0(figure_dir_use, "GOI_SurvRes_allGenesets.png"), width=9, height=6)
+}
+```
+
 
