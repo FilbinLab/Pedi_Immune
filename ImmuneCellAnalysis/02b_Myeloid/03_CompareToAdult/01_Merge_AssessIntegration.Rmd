@@ -43,8 +43,8 @@ source(nmf_helper)
 cohort<- "pedOnly_nomuv63"
 adult_withMUV<- FALSE ## adult cohort with just published datasetes (FALSE) or with our 4 adult samples (TRUE)
 
-figure_dir<- paste0(figure_dir_tmp, cohort, "/", paste0("adult_withMUV.", adult_withMUV), "/")
-analysis_dir<- paste0(analysis_dir_tmp, cohort, "/", paste0("adult_withMUV.", adult_withMUV), "/")
+figure_dir<- paste0(figure_dir_tmp, cohort, "/", paste0("AdultWithMUV.", adult_withMUV), "/")
+analysis_dir<- paste0(analysis_dir_tmp, cohort, "/", paste0("AdultWithMUV.", adult_withMUV), "/")
 data_dir<- paste0(data_dir_tmp, cohort, "/")
 
 
@@ -115,7 +115,7 @@ figure_append<- ""
 if(integration=="HarmonyInt/"){
   seurat_obj<-FindClusters(seurat_obj, resolution = 0.5) ## .32 for without integration
 }else{
-  seurat_obj<- FindClusters(seurat_obj, resolution = .7, algorithm = 4, random.seed = 100)
+  seurat_obj<- FindClusters(seurat_obj, resolution = .8, algorithm = 4, random.seed = 100)
 }
 
 
@@ -127,6 +127,8 @@ ggsave(paste0(figure_dir, "UMAP_ByAge", figure_append, ".png"), width=6, height=
 DimPlot(seurat_obj, label=TRUE)+NoLegend()
 ggsave(paste0(figure_dir, "UMAP_ByCluster_res0.5", figure_append, ".png"), width=6, height=6)
 
+DimPlot(seurat_obj, label=TRUE)+NoLegend()
+ggsave(paste0(figure_dir, "UMAP_ByCluster_res0.8", figure_append, ".png"), width=6, height=6)
 ```
 
 ## composition of clusters by age
@@ -174,7 +176,34 @@ ggplot(cluster_bdByAge, aes(x=Cluster, y=CellPercentage_ByAge, fill=Age))+
   xlab("")
 ggsave(paste0(figure_dir, "ProportionOfAdultPed_PerCluster_SideBySide.png"), width=6, height=4)
 
-
+## Alternatively: normalize number of cells so that ped/adult are weighted equally- i.e., 50/50 cluster means equally likely for ped/adult, even given the larger cell n in adult
+  ## Normalize by total cohort n size
+  totalByAge<- table(seurat_obj$Age)
+  NormFactor<- totalByAge["Ped"]/totalByAge
+  cluster_bd$NormFactor<- as.numeric(as.character(plyr::mapvalues(cluster_bd$Age, names(NormFactor), NormFactor)))
+  cluster_bd$NCells_Norm<- cluster_bd$NCells * cluster_bd$NormFactor
+  
+  ## Proportion in each cluster 
+  cluster_bd<- cluster_bd %>% group_by(Cluster) %>% mutate(CellPercentage_Norm=NCells_Norm/sum(NCells_Norm)) %>% as.data.frame()
+  
+  ## plot
+  #cluster_bd$Cluster<- factor(cluster_bd$Cluster, levels=c("Total", variable_levels))
+  ggplot(cluster_bd, aes(x=Cluster, y=CellPercentage_Norm, fill=Age))+
+    geom_bar(position="stack", stat="identity")+
+    scale_fill_manual(values=c(Adult="navy", Ped="red"))+
+    theme_classic()+
+    theme(axis.text = element_text(face="bold", size=12, color="black"),
+          axis.title = element_text(face="bold", size=12,color="black"))+
+    ylab("Percentage of adult/pediatric cells \nper cluster")+
+    xlab("")+
+    geom_hline(yintercept = .5,
+               linetype="dashed", size=1)
+  ggsave(paste0(figure_dir, "ProportionOfAdultPed_PerCluster_NormByCohortSize.png"), width=6, height=4)
+  
+  ## How many clusters are not found equally amongst ped/adult (<40% or >60% belonging to 1 age group)
+  age_specific<- cluster_bd[cluster_bd$CellPercentage_Norm<0.35 | cluster_bd$CellPercentage_Norm>0.65,]
+  print(paste0("Out of ", length(unique(seurat_obj$seurat_clusters)), " clusters, ",  
+               length(unique(age_specific$Cluster)), " are age-specific"))
 ```
 results: no age-specific clusters are formed. suggests the possibility that while there are differences in PROPORTION of cell states, there are not any totally age-specific programs. This informs how we compare programs in adult/ped- don't expect age-specific programs, so can either use the ped programs directly, or run NMF on ped/adult together and use those.
 
