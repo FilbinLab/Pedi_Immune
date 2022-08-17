@@ -91,7 +91,7 @@ names(final_meta_list)<-names(surv_obj_list_allCellTypes)
 
 
 ## Flatten into 1 finalMeta df for each celltype. Need to subset to shared columns between all cohorts (varying clinical data)
-finalMeta_allCellTypes<- lapply(c("cd8", "cd4", "myeloid"), function(cellType){
+finalMeta_allCellTypes<- lapply(c("cd8", "cd4", "myeloid", "GOI"), function(cellType){
   tmp<- lapply(final_meta_list, function(x){x[[cellType]]})
   
   ## Get vector of columsn that occur in all- time/censored, programs, any shared clinical data
@@ -105,7 +105,7 @@ finalMeta_allCellTypes<- lapply(c("cd8", "cd4", "myeloid"), function(cellType){
   tmp<- do.call("rbind", tmp)
   return(tmp)
 })
-names(finalMeta_allCellTypes)<- c("cd8", "cd4", "myeloid")
+names(finalMeta_allCellTypes)<- c("cd8", "cd4", "myeloid", "GOI")
 
 ## If analysis name == OnlyCBTN_noDNA: remove samples that are "DataNotAvailable" for Histone mutation
 if(analysis_name=="OnlyCBTN_noDNA"){
@@ -117,7 +117,8 @@ if(analysis_name=="OnlyCBTN_noDNA"){
 ## Set high/low to factor- so that comparison is always to "high" program proportion
 genesets<-c("Memory", "Predysfunctional", "Cytotoxic_NKreceptor", "IFN_Response", "Stress", "Effector_Memory", "Cycling",
              "Treg", "Inhibitory",
-            "IFN_TAM", "Monocytes", "Inflammatory", "SEPP1_Mo_TAM", "Hypoxic_TAM", "Stress_Response")
+            "IFN_TAM", "Monocytes", "Inflammatory", "SEPP1_Mo_TAM", "Hypoxic_TAM", "Stress_Response",
+            "KLRB1", "PTGER2", "SELPLG", "GNLY", "PDCD1")
 finalMeta_allCellTypes<- lapply(finalMeta_allCellTypes, function(x){
   tmp<- x[,colnames(x) %in% genesets]
   tmp<- tmp %>% mutate_if(is.character, factor, levels=c("Low","High")) %>% as.data.frame()
@@ -310,6 +311,54 @@ allSamples_diagnosis<- RunCoxWrapper(genesets_test, finalMeta_allCellTypes$myelo
                                      exportName=paste0("Myeloid_ControlFor.", paste(ToBeControlled, collapse = "."), split_method), 
                                      exportCsv = TRUE, resultsFolder = analysis_dir,
                                      appendToNumericVariable = "")
+
+
+```
+
+#########
+## GOI ##
+#########
+```{r}
+## Run univariate cox for all potential controlling variables
+## set exportCsv to FALSE if you want to examine results before exporting
+allSamples_diagnosis<- RunCoxWrapper(geneSet_groups = ToControlFor, AllMeta= finalMeta_allCellTypes$GOI, mySubset="AllSamples", 
+                                     controlFor=FALSE, 
+                                     exportName = paste0("GOI_univariate_variables_", analysis_name), 
+                                     exportCsv=FALSE, resultsFolder = analysis_dir)
+
+## select just variables that had significant hazard
+cox_df<-na.omit(allSamples_diagnosis$cox_df)
+sig<-cox_df[cox_df$`Pr(>|z|)` < 0.1,]
+sig_variables<-unique(sig$Variable)
+
+ToBeControlled<- sig_variables
+#ToBeControlled<- c(sig_variables, "HistoneStatus")
+```
+
+
+## Run univariate cox for genesets
+## Univariate
+```{r}
+genesets_test<- c("Memory", "Predysfunctional", "Cytotoxic_NKreceptor", "IFN_Response", "Stress", "Effector_Memory", "Cycling")
+if(split_method=="_numericProp"){
+  genesets_test<- paste0(genesets_test, "_perCells")
+}
+
+## Run univariate for all samples
+allSamples<- RunCoxWrapper(genesets_test, finalMeta_allCellTypes$cd8, mySubset=analysis_name, 
+                                    controlFor=FALSE, exportName = paste0("CD8_univariate", split_method),
+                                    exportCsv=TRUE, subsetToHighLow = TRUE, resultsFolder = analysis_dir,
+                           appendToNumericVariable = "")
+```
+
+## Run multivariate cox, for all gene sets, controlling for variables
+
+```{r}
+## Control for all sig clinical confounders- can also specify only a subset of these
+allSamples_diagnosis<- RunCoxWrapper(genesets_test, finalMeta_allCellTypes$cd8, mySubset=analysis_name,
+                                     controlFor=ToBeControlled,
+                                     exportName=paste0("CD8_ControlFor.", paste(ToBeControlled, collapse = "."), split_method), 
+                                     exportCsv = TRUE, resultsFolder = analysis_dir)
 
 
 ```
