@@ -11,7 +11,7 @@
 
 
 
-# Pediatric immune  preprocessing
+### Pediatric immune  preprocessing
 
 1. Tracer preprocessing for 5 new samples: 01_Tracer_Preprocess (Note: need to run 02_Counts_Preprocess/01_5Samples_ProcessToSeurat.Rmd just to have seurat object)\
 
@@ -33,17 +33,17 @@
 
 Additional files: CompareSeuratPipelines.Rmd used for testing our "standard" pipeline vs Orr's vs integration
 
-# Adult immune dataset preprocessing
+### Adult immune dataset preprocessing
 
 Performed in 03_PreprocessAdultDatasets. Contains preprocessing for myeloid and cell adult datasets: 
 
-	1. Myeloid: preprocessing for 3 publicly available myeloid datasets in Preprocess_AdultMyeloid. These datasets are: IDHmut (Science), GBM (Neftel), GBM (10X, Movahedi)
+1. Myeloid: preprocessing for 3 publicly available myeloid datasets in Preprocess_AdultMyeloid. These datasets are: IDHmut (Science), GBM (Neftel), GBM (10X, Movahedi)
 
 All 3 datasets are processed to seurat objects, any annotations as needed, any re-scaling as needed. Saved for comparison to pediatric myeloid cells downstream
 
 Note: unlike for Tcells, downstream "detailed" annotation is done SEPARATELY for pediatric/adult. Any DC/Bcells (rare) are removed from adult myeloid datasets here, using same method as for pediatric
 
-	2. Tcells: adult t cells used downstream are all from Cell 2021 and were provided as a seurat object by Orr. In Tcells_Ped.Adult_Merge, pediatric and adult cells are:
+2. Tcells: adult t cells used downstream are all from Cell 2021 and were provided as a seurat object by Orr. In Tcells_Ped.Adult_Merge, pediatric and adult cells are:
 
 	1) merged into single seurat object 
 	2) harmony integration 
