@@ -21,6 +21,7 @@ library(clusterProfiler)
 library(biomaRt)
 library(stringr)
 library(ggpubr)
+library(ggVennDiagram)
 
 base_dir = "/Users/jlabelle/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
@@ -41,7 +42,7 @@ source(nmf_helper)
 
 ```
 
-## Read in seurat objects + marker genes
+## Set rank, output directories
 ```{r}
 cohort<- "pedOnly_nomuv63"
 ped_rank<-6 ## rank to use for ped
@@ -50,35 +51,40 @@ adult_rank<- 6 ## rank to use for adult
 figure_dir<- paste0(figure_dir_tmp, cohort, "/"); analysis_dir<- paste0(analysis_dir_tmp, cohort, "/")
 data_dir<- paste0(data_dir_tmp, cohort, "/")
 if(!dir.exists(figure_dir)){dir.create(figure_dir)};if(!dir.exists(analysis_dir)){dir.create(analysis_dir)}
-
-## ped seurat object
-ped_seurat<-readRDS(paste0(data_dir, "myeloid_seurat_noDC.B.Rds"))
-
-## adult (GBM and IDHmut; smartseq2)
-load(paste0("../../01_Preprocessing/03_PreprocessAdultDatasets/", 
-                                "analysis/Preprocess_AdultMyeloid/", "GBMNeftel_IDHmut2018_myeloid_merged_seurat.Robj"))
-#adult_seurat<- gbm_idhmut_myeloid_seurat; rm(gbm_idhmut_myeloid_seurat)
-
-## ped marker genes
-ped_markers<- read.csv(paste0("../01a_NMF/analysis/de.novoNMF/", cohort,  "/top_DE_genes_10Xannotated_NMF_rank", ped_rank, ".csv"))
-ped_markers<- ped_markers[,!grepl("X", colnames(ped_markers))]
-
-## adult marker genes- for NMF run simultaneously for gbm/idhmut
-adult_markers<- read.csv(paste0("../01b_Ped.Adult.NMF/analysis/AdultCohorts_DeNovoNMF/MergedNMF_GBM.Neftel_IDHmutScience2018_top_DE_genes_NMF_rank", 
-                                adult_rank, ".csv"))
-adult_markers<- adult_markers[,!grepl("X", colnames(adult_markers))]
 ```
 
-## Merge and normalize count matrix
+## Read in seurat objects + marker genes
 ```{r}
-## Merge count matrix
-ped_cm<- ped_seurat@assays$RNA@counts; adult_cm<- adult_seurat@assays$RNA@counts
-ped_cm<- ped_cm[rownames(adult_cm),]
-sum(rownames(ped_cm) == rownames(adult_cm)); nrow(ped_cm); nrow(adult_cm)
-cm<- cbind(ped_cm, adult_cm)
+## Seurat objects
+  ## ped seurat object
+  ped_seurat<-readRDS(paste0(data_dir, "myeloid_seurat_noDC.B.Rds"))
+  
+  ## adult seurat object (GBM and IDHmut; smartseq2)
+  load(paste0("../../01_Preprocessing/03_PreprocessAdultDatasets/", 
+                                  "analysis/Preprocess_AdultMyeloid/", "GBMNeftel_IDHmut2018_myeloid_merged_seurat.Robj"))
+  
+  ## Load merged seurat object for ped/adult
+  merged_seurat<- readRDS(paste0("analysis/Merge_AssessIntegration/",cohort,"/adult_withMUV.FALSE/myeloid_seurat_Ped.AdultGBM.IDHMut_merged.Rds" ))
 
+## Marker genes
+  ## ped marker genes
+  ped_markers<- read.csv(paste0("../01a_NMF/analysis/de.novoNMF/", cohort,  "/top_DE_genes_10Xannotated_NMF_rank", ped_rank, ".csv"))
+  ped_markers<- ped_markers[,!grepl("X", colnames(ped_markers))]
+  
+  ## adult marker genes- for NMF run simultaneously for gbm/idhmut
+  adult_markers<- read.csv(paste0("../01b_Ped.Adult.NMF/analysis/AdultCohorts_DeNovoNMF/MergedNMF_GBM.Neftel_IDHmutScience2018_top_DE_genes_NMF_rank", 
+                                  adult_rank, ".csv"))
+  adult_markers<- adult_markers[,!grepl("X", colnames(adult_markers))]
+  
+  ## Adult 10x markers
+  adult_10Xmarkers_top100<- readRDS(paste0("../../01_Preprocessing/03_PreprocessAdultDatasets/analysis/Preprocess_AdultMyeloid/", 
+                                        "GBM.10X_recurrent_myeloid_markers_top100.Rds"))
+```
+
+## normalize count matrix
+```{r}
 ## Normalize/center merged count matrix
-cm_list<- NormCenter(cm)
+cm_list<- NormCenter(merged_seurat@assays$RNA@counts)
 cm_mean<- rowMeans(log2(cm_list$raw_data + 1))
 ```
 
@@ -96,9 +102,6 @@ scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, marker_list
 
 ## Correlate scores
 ```{r}
-library(grid)
-library(pheatmap)
-
 ## Correlate and plot heatmap
 scores_factor_hc = clusterNmfFactors(scores)
 scores_factor_cor = scores_factor_hc$cor_coef[scores_factor_hc$hc_obj$order, scores_factor_hc$hc_obj$order]
@@ -133,9 +136,6 @@ dev.off()
 
 ## Based on correlation and gene overlap, set adult/pediatric programs to merge
 ```{r}
-ped_rank<-6 ## rank to use for ped
-adult_rank<- 6
-
 ## Set genesets to be merged
 merge_list<- list(rank6_6=list(Merged_Inflammatory=c("Inflammatory", "5"),
                                Merged_StressResponse=c("Stress_Response", "3"),
@@ -146,22 +146,6 @@ merge_list<- merge_list[[paste0("rank", ped_rank, "_", adult_rank)]]
 
 ## Gene overlap between ped/adult
 ```{r}
-library(ggVennDiagram)
-
-cohort<- "pedOnly_nomuv63"
-ped_rank<-6 ## rank to use for ped
-adult_rank<- 6
-
-## ped marker genes
-ped_markers<- read.csv(paste0("../01a_NMF/analysis/de.novoNMF/", cohort,  "/top_DE_genes_10Xannotated_NMF_rank", ped_rank, ".csv"))
-ped_markers<- ped_markers[,!grepl("X", colnames(ped_markers))]
-
-
-## adult marker genes- for NMF run simultaneously for gbm/idhmut
-adult_markers<- read.csv(paste0("../01b_Ped.Adult.NMF/analysis/AdultCohorts_DeNovoNMF/MergedNMF_GBM.Neftel_IDHmutScience2018_top_DE_genes_NMF_rank", 
-                                adult_rank, ".csv"))
-adult_markers<- adult_markers[,!grepl("X", colnames(adult_markers))]
-
 ## create marker list
 ped_marker_list<- split(ped_markers, f=ped_markers$cluster); ped_marker_list<- lapply(ped_marker_list, function(x){x$gene})
 adult_marker_list<- split(adult_markers, f=adult_markers$cluster); adult_marker_list<- lapply(adult_marker_list, function(x){x$gene})
@@ -202,7 +186,6 @@ ggplot(overlaps, aes(y=program, x=dummy, color=PearsonCorrelation, size=nOverlap
   ylab("")+
   xlab("")
 ggsave(paste0(figure_dir, "Overlap_sharedPedAdult_pedRank", ped_rank, "_adultRank", adult_rank, ".png"), width=4, height=3)
-
 ```
 
 ## Merge genesets from ped/adult that are similar
@@ -223,24 +206,18 @@ specific_gene_list<- c(PedSpecific=ped_marker_list[!names(ped_marker_list) %in% 
                        AdultSpecific=adult_marker_list[!names(adult_marker_list) %in% unlist(merge_list)])
 
 ## Add "shared" and "specific" together
-final_PA_gene_list<- c(merged_gene_list, specific_gene_list)
-saveRDS(final_PA_gene_list, file=paste0(analysis_dir, "pedAdultmerged_pedAdultspecific_geneList_pedRank", ped_rank, "_adultRank", adult_rank, ".Rds"))
+PA_gene_list<- c(merged_gene_list, specific_gene_list)
+saveRDS(PA_gene_list, file=paste0(analysis_dir, "pedAdultmerged_pedAdultspecific_geneList_pedRank", ped_rank, "_adultRank", adult_rank, ".Rds"))
 ```
 
 
 
-## Score all cells for final merged/specific gene list + adult 10X for annotation
+## Score all cells for merged/specific gene list + adult 10X for annotation
 ```{r}
-cohort<- "pedOnly_nomuv63"
-ped_rank<-6 ## rank to use for ped
-adult_rank<- 6
-
+## Load shared/specific gene list
 PA_gene_list<-readRDS(paste0(analysis_dir, "pedAdultmerged_pedAdultspecific_geneList_pedRank", ped_rank, "_adultRank", adult_rank, ".Rds"))
 
-
-## Load in adult gene lists (preprocessed in Preprocess_AdultMyeloid.Rmd)
-adult_10Xmarkers_top100<- readRDS(paste0("../../01_Preprocessing/03_PreprocessAdultDatasets/analysis/Preprocess_AdultMyeloid/", 
-                                      "GBM.10X_recurrent_myeloid_markers_top100.Rds"))
+## Split adult 10X markers to list
 adult_10Xmyeloid_markers<- split(adult_10Xmarkers_top100, f=adult_10Xmarkers_top100$cluster)
 adult_10Xmyeloid_markers<- lapply(adult_10Xmyeloid_markers, function(x){x$gene})
 names(adult_10Xmyeloid_markers)<- paste0("Adult10X_", names(adult_10Xmyeloid_markers))
@@ -291,13 +268,6 @@ saveRDS(PA_gene_list, file=paste0(analysis_dir, "pedAdultmerged_pedAdultspecific
 
 ## Score all cells for merged/specific gene list, assign max, re-identify markers
 ```{r}
-cohort<- "pedOnly_nomuv63"
-ped_rank<-6 ## rank to use for ped
-adult_rank<- 6
-
-## Load seurat object for ped/adult
-merged_seurat<- readRDS(paste0("analysis/Merge_AssessIntegration/",cohort,"/adult_withMUV.FALSE/myeloid_seurat_Ped.AdultGBM.IDHMut_merged.Rds" ))
-
 ## Load in merged/specific genes (above)
 PA_gene_list<-readRDS(paste0(analysis_dir, "pedAdultmerged_pedAdultspecific_geneList_pedRank", ped_rank, "_adultRank", adult_rank, ".Rds"))
 
@@ -315,19 +285,17 @@ filtered_markers<- markers[markers$p_val_adj<0.05 & markers$avg_log2FC>0.2,]
 saveRDS(filtered_markers, file=paste0(analysis_dir, "markers_mergedPedAdult_assignMax_reidentify_pedRank", ped_rank, "_adultRank", adult_rank, ".Rds"))
 ```
 
-## Assign max scoring program, comparison of program breakdown
+## Assign max scoring program, save to seurat
 ```{r}
 ## Load in final ped/adult gene list
-final_PA_gene_list<-readRDS(paste0(analysis_dir, "markers_mergedPedAdult_assignMax_reidentify_pedRank", ped_rank, "_adultRank", adult_rank, ".Rds"))
+final_PA_gene_df<-readRDS(paste0(analysis_dir, "markers_mergedPedAdult_assignMax_reidentify_pedRank", ped_rank, "_adultRank", adult_rank, ".Rds"))
 
 ## Subset to top 100 genes
-final_PA_gene_list<- final_PA_gene_list %>% group_by(cluster) %>% top_n(n=100, wt=avg_log2FC) %>% as.data.frame()
+final_PA_gene_list<- final_PA_gene_df %>% group_by(cluster) %>% top_n(n=100, wt=avg_log2FC) %>% as.data.frame()
 final_PA_gene_list<- split(final_PA_gene_list, f=final_PA_gene_list$cluster)
 final_PA_gene_list<- lapply(final_PA_gene_list, function(x){x$gene})
 
-## Load in merged ped/adult seurat object
-myeloid_seurat<- readRDS(paste0("analysis/Merge_AssessIntegration/",cohort,"/adult_withMUV.FALSE/myeloid_seurat_Ped.AdultGBM.IDHMut_merged.Rds" ))
-cm_list<- NormCenter(myeloid_seurat@assays$RNA@counts)
+cm_list<- NormCenter(merged_seurat@assays$RNA@counts)
 cm_mean<- rowMeans(log2(cm_list$raw_data+1))
 
 ## Score
@@ -335,59 +303,170 @@ scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean,  final_PA_g
 
 ## Add max program to seurat object
 scores$maxProgram<- apply(scores, 1, function(x){names(which.max(x))})
-myeloid_seurat$MaxProgram_PA_mergedGenesets<- as.character(plyr::mapvalues(colnames(myeloid_seurat),
+merged_seurat$MaxProgram_PA_mergedGenesets<- as.character(plyr::mapvalues(colnames(merged_seurat),
                                                                         rownames(scores),
                                                                         scores$maxProgram, warn_missing = FALSE))
 
-## Bd by age
-df<-as.data.frame(table(myeloid_seurat$MaxProgram_PA_mergedGenesets, myeloid_seurat$Age))
-colnames(df)<-c("Program", "Age", "NCells")
-df<- df %>% group_by(Age) %>% mutate(perCells=NCells/sum(NCells)) %>%as.data.frame()
+## Clean up names
+merged_seurat$MaxProgram_PA_mergedGenesets<- gsub("AdultSpecific_", "", 
+                                                    gsub("Merged_", "", gsub("PedSpecific.", "",merged_seurat$MaxProgram_PA_mergedGenesets)))
+final_PA_gene_df$cluster<- gsub("AdultSpecific_", "", 
+                                                    gsub("Merged_", "", gsub("PedSpecific.", "",final_PA_gene_df$cluster)))
 
-## Plot
+saveRDS(merged_seurat, paste0("analysis/Merge_AssessIntegration/",cohort,"/adult_withMUV.FALSE/myeloid_seurat_Ped.AdultGBM.IDHMut_merged.Rds" ))
+saveRDS(final_PA_gene_df, file=paste0(analysis_dir, "markers_mergedPedAdult_assignMax_reidentify_pedRank", ped_rank, "_adultRank", adult_rank, ".Rds"))
+```
+
+## Plot: breakdown by age, UMAP
+```{r}
+## Load seurat with annotations, final marker genes
+merged_seurat<- readRDS(paste0("analysis/Merge_AssessIntegration/",cohort,"/adult_withMUV.FALSE/myeloid_seurat_Ped.AdultGBM.IDHMut_merged.Rds" ))
+final_PA_gene_list<-readRDS(paste0(analysis_dir, "markers_mergedPedAdult_assignMax_reidentify_pedRank", ped_rank, "_adultRank", adult_rank, ".Rds"))
+
+## Set colors
 colors_use<-c("purple","red", "navy","turquoise3",  "magenta", "olivedrab", "plum3", "gold")
 names(colors_use)<- c("IFN_TAM", "Inflammatory", "HypoxicTAM", "Monocytes", "Transitory_TAM", "Microglia", "IFN_Mo_TAM","SEPP1_Mo_TAM")
 
-df$Program<- gsub("AdultSpecific_", "", gsub("Merged_", "", gsub("PedSpecific.", "",df$Program)))
-df$Program<- factor(df$Program, levels=rev(c("Monocytes", "Microglia", "SEPP1_Mo_TAM", "Inflammatory", "HypoxicTAM", "IFN_Mo_TAM", "Transitory_TAM", "IFN_TAM")))
-ggplot(df, aes(x=Age, y=perCells, fill=Program))+
-  geom_bar(stat="identity", position="stack")+
-  theme_classic()+
-  scale_fill_manual(values=colors_use)+
-  ylab("Proportion of cells in program")+ xlab("")+
-  theme(axis.text = element_text(color="black", face="bold"),
-        axis.title = element_text(color="black", face="bold"))
-ggsave(paste0(figure_dir, "AgeBreakdown_byMerged.RegeneratedPrograms.png"), width=5, height=6)
-
-## Proportion of programs in ped/adult  by sample
-myeloid_seurat$MaxProgram_PA_mergedGenesets<- gsub("AdultSpecific_", "", gsub("Merged_", "", gsub("PedSpecific.", "",myeloid_seurat$MaxProgram_PA_mergedGenesets)))
-df<- as.data.frame(table(myeloid_seurat$MaxProgram_PA_mergedGenesets, myeloid_seurat$sampleid))
-colnames(df)<- c("Program", "Sample", "Ncells")
-
-
-  ## add on age
-  df$Age<- plyr::mapvalues(df$Sample, myeloid_seurat$sampleid, myeloid_seurat$Age, warn_missing = FALSE)
+## Plot breakdown by age
+  ## Bd by age
+  df<-as.data.frame(table(merged_seurat$MaxProgram_PA_mergedGenesets, merged_seurat$Age))
+  colnames(df)<-c("Program", "Age", "NCells")
+  df<- df %>% group_by(Age) %>% mutate(perCells=NCells/sum(NCells)) %>%as.data.frame()
   
-  ## Add on subtype- used for ordering
-  df$Subtype<- plyr::mapvalues(df$Sample, myeloid_seurat$sampleid, myeloid_seurat$NiceSubtype, warn_missing = FALSE)
-  subtype_order<- unique(df$Subtype); names(subtype_order)<- 1:length(subtype_order)
-  df$Order<- as.numeric(as.character(plyr::mapvalues(df$Subtype, subtype_order, names(subtype_order))))
-  
-
-  ## plot
-  df<- df %>% group_by(Sample) %>% mutate(PerCells=Ncells/sum(Ncells)) %>% as.data.frame()
-  ggplot(df, aes(x=reorder(Sample,Order), y=PerCells, fill=Program))+
+  ## Plot
+  df$Program<- gsub("AdultSpecific_", "", gsub("Merged_", "", gsub("PedSpecific.", "",df$Program)))
+  df$Program<- factor(df$Program, 
+                      levels=rev(c("Monocytes", "Microglia", "SEPP1_Mo_TAM", "Inflammatory", "HypoxicTAM", "IFN_Mo_TAM", "Transitory_TAM", "IFN_TAM")))
+  ggplot(df, aes(x=Age, y=perCells, fill=Program))+
     geom_bar(stat="identity", position="stack")+
     theme_classic()+
     scale_fill_manual(values=colors_use)+
-    ylab("Proportion of cells\nin program")+ xlab("")+
+    ylab("Proportion of cells in program")+ xlab("")+
     theme(axis.text = element_text(color="black", face="bold"),
-          axis.text.x = element_text(angle=45, hjust=1),
-          axis.title = element_text(color="black", face="bold"))+
-    facet_grid(cols=vars(Age), scales="free_x", space="free_x")
-  ggsave(paste0(figure_dir, "AgeBreakdown_byMerged.RegeneratedPrograms_Sample.png"), width=9, height=2.5)
+          axis.title = element_text(color="black", face="bold"))
+  ggsave(paste0(figure_dir, "AgeBreakdown_byMerged.RegeneratedPrograms.png"), width=5, height=6)
+
+## Plot breakdown by age, by sample
+  ## Proportion of programs in ped/adult  by sample
+  df<- as.data.frame(table(merged_seurat$MaxProgram_PA_mergedGenesets, merged_seurat$sampleid))
+  colnames(df)<- c("Program", "Sample", "Ncells")
+  
+    ## add on age
+    df$Age<- plyr::mapvalues(df$Sample, merged_seurat$sampleid, merged_seurat$Age, warn_missing = FALSE)
+    
+    ## Add on subtype- used for ordering
+    df$Subtype<- plyr::mapvalues(df$Sample, merged_seurat$sampleid, merged_seurat$NiceSubtype, warn_missing = FALSE)
+    subtype_order<- unique(df$Subtype); names(subtype_order)<- 1:length(subtype_order)
+    df$Order<- as.numeric(as.character(plyr::mapvalues(df$Subtype, subtype_order, names(subtype_order))))
+    
+    ## plot
+    df<- df %>% group_by(Sample) %>% mutate(PerCells=Ncells/sum(Ncells)) %>% as.data.frame()
+    ggplot(df, aes(x=reorder(Sample,Order), y=PerCells, fill=Program))+
+      geom_bar(stat="identity", position="stack")+
+      theme_classic()+
+      scale_fill_manual(values=colors_use)+
+      ylab("Proportion of cells\nin program")+ xlab("")+
+      theme(axis.text = element_text(color="black", face="bold"),
+            axis.text.x = element_text(angle=45, hjust=1),
+            axis.title = element_text(color="black", face="bold"))+
+      facet_grid(cols=vars(Age), scales="free_x", space="free_x")
+    ggsave(paste0(figure_dir, "AgeBreakdown_byMerged.RegeneratedPrograms_Sample.png"), width=9, height=2.5)
+    
+## Plot UMAP by new annotations
+DimPlot(merged_seurat, group.by = "MaxProgram_PA_mergedGenesets" )+
+  scale_color_manual(values=colors_use)+
+  ggtitle("")
+ggsave(paste0(figure_dir, "UMAP_Ped.Adult_byMerged.RegeneratedPrograms.png"), width=7, height=5)
+  
+## Heatmap of top marker genes
+  ## Set whether to center by age or across all samples
+  center_method<- "byAgeGroup" ## "byAgeGroup" or "allSamples"
+  
+  ## Get top markers
+  top_markers<- final_PA_gene_df[!final_PA_gene_df$gene %in% c("RNASE1"),]
+  top_markers<- top_markers %>% group_by(cluster) %>% top_n(n=5, wt=avg_log2FC) %>% as.data.frame()
+  top_markers$cluster<- gsub("_", "\n", top_markers$cluster)
+    
+  ## Pseudobulk
+  merged_seurat$PB_variable<-paste0(merged_seurat$Age, "_", 
+                                    gsub("_", "\n", merged_seurat$MaxProgram_PA_mergedGenesets))
+  pb<- pseudobulk_byVariable(merged_seurat@assays$RNA@counts, merged_seurat@meta.data, "PB_variable")
+  
+  ## Center- for each age group separately or all together
+  if(center_method=="byAgeGroup"){
+    ## center for each age group separately
+    center_bySample<- lapply(unique(merged_seurat$Age), function(age){
+      pb_tmp<- pb[,grepl(age, colnames(pb))]
+      pb_list_tmp<- NormCenter(pb_tmp)
+      pb_center_tmp<- pb_list_tmp$center_data
+      return(pb_center_tmp)
+    })
+    pb_center<- do.call("cbind", center_bySample)
+  } else if(center_method=="allSamples"){
+     pb_list<- NormCenter(pb)
+     pb_center<- pb_list$center_data
+  }
+  
+  ## Plot
+  p<- myHeatmap(pb_center, GOI=top_markers$gene, min.value = -3, max.value = 3,
+                orderFactors = unique(top_markers$cluster)) +
+    scale_fill_gradient2(high="red", low="blue", mid="white", name="Centered log2(TPM)")
+  
+  ## Add horizontal lines around each set of nmf genes
+  tmp<- split(top_markers, f=top_markers$cluster)
+  lastGene<- lapply(tmp, function(x){
+    x$tmp<- 1:nrow(x)
+    x<- x[x$gene %in% rownames(pb), ]
+    return(x[max(x$tmp), "gene"])
+  })
+  linePositions<- as.data.frame(pb_center[top_markers$gene,])
+  linePositions$tmp<- 1:nrow(linePositions)
+  linePositions<- linePositions[unlist(lastGene),"tmp"]
+  linePositions<- linePositions[order(linePositions)]
+  linePositions<- linePositions[1:length(linePositions)-1]+ 0.5
+  
+  p+geom_hline(yintercept = linePositions, linetype="dashed",size=1)
 
   
-saveRDS(myeloid_seurat, paste0("analysis/Merge_AssessIntegration/",cohort,"/adult_withMUV.FALSE/myeloid_seurat_Ped.AdultGBM.IDHMut_merged.Rds" ))
+    
+  ggsave(paste0(figure_dir, "Heatmap_topMarkers_MergedRegeneratedPedAdultMarkers_centeredBy", center_method, ".png"), width=15, height=10)
+```
+
+## For visualization purposes: harmony integration --> plot UMAP of sample, program
+```{r}
+merged_seurat<- readRDS(paste0("analysis/Merge_AssessIntegration/",cohort,"/adult_withMUV.FALSE/myeloid_seurat_Ped.AdultGBM.IDHMut_merged.Rds" ))
+
+## Set colors
+colors_use<-c("purple","red", "navy","turquoise3",  "magenta", "olivedrab", "plum3", "gold")
+names(colors_use)<- c("IFN_TAM", "Inflammatory", "HypoxicTAM", "Monocytes", "Transitory_TAM", "Microglia", "IFN_Mo_TAM","SEPP1_Mo_TAM")
+
+## Rerun processing with harmony integration
+meta<- merged_seurat@meta.data
+merged_seurat<- RunFullSeurat(merged_seurat@assays$RNA@counts, RunHarmony = TRUE, samples=meta$sampleid)
+merged_seurat<- AddMetaData(merged_seurat, meta[,!colnames(meta) %in% colnames(merged_seurat@meta.data)])
+
+## UMAP- sample, program
+DimPlot(merged_seurat, group.by = "Age")+
+  scale_color_manual(values=c(Ped="red", Adult="navy"))+
+  theme(legend.position = "bottom")
+ggsave(paste0(figure_dir, "UMAP_harmony_byAge.png"), width=7, height=7)
+
+DimPlot(merged_seurat, group.by="MaxProgram_PA_mergedGenesets")+
+  scale_color_manual(values=colors_use)+
+  ggtitle("")+
+  theme(legend.position = "bottom")
+ggsave(paste0(figure_dir, "UMAP_harmony_byMergedRegeneratedPrograms.png"), width=7, height=7.3)
+
+## UMAP by microglia/macrophage gradient
+merged_seurat$MM_score<- merged_seurat$microglia_score - merged_seurat$macrophage_score
+FeaturePlot(merged_seurat, features="MM_score")+
+  scale_color_gradient2(low="green", mid="white", high="violetred")+
+  ggtitle("macrophage to microglia")+
+  theme(legend.position = "bottom")
+ggsave(paste0(figure_dir, "UMAP_harmony_byMacrophage.MicrogliaScore.png"), width=7, height=7.3)
+
+saveRDS(merged_seurat, 
+        file=paste0("analysis/Merge_AssessIntegration/",cohort,
+                    "/adult_withMUV.FALSE/myeloid_seurat_Ped.AdultGBM.IDHMut_merged_harmony.Rds" ))
 ```
 
