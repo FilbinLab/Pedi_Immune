@@ -45,7 +45,7 @@ cohort<- "pedOnly_nomuv63"
 
 ## Current seurat object
 myeloid_seurat<-readRDS(paste0("../../01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/",integration, "/",
-                               cohort, "/myeloid_seurat_noDC.B.Rds"))
+                               cohort, "/myeloid_seurat_noDC.B_harmony.Rds"))
 
 figure_dir<- paste0(figure_dir_tmp, cohort, "/"); analysis_dir<- paste0(analysis_dir_tmp, cohort, "/")
 if(!dir.exists(figure_dir)){dir.create(figure_dir)};if(!dir.exists(analysis_dir)){dir.create(analysis_dir)}
@@ -123,7 +123,69 @@ ggsave(paste0(figure_dir, "Heatmap_TopNMFgenes_annotBy", annotation, "_rank", ra
 
 ```
 
+## Plot by pseudobulk, centering each sample independently
+```{r}
+rank<- "6"
+add_lines<- TRUE
+annotation<- "10X" ## "10X" annotations or "" for original
 
+## Read in NMF marker genes
+marker_genes<- read.csv(paste0(analysis_dir,  "top_DE_genes_", annotation, "annotated_NMF_rank", rank, ".csv"))
+marker_genes$cluster<- gsub("_", "\n", marker_genes$cluster)
+
+## Subset to top markers for each nmf- top 10
+## If any genes are top markers for multiple clusters- remove, then find top 10 again
+top_markers<- marker_genes %>% group_by(cluster) %>% slice_max(order_by = avg_log2FC, n = 10) %>% as.data.frame()
+if(sum(duplicated(top_markers$gene))!=0){
+  duplicated<- top_markers$gene[duplicated(top_markers$gene)]
+  print(paste0("Shared top markers: ", paste(duplicated, collapse=",")))
+  marker_genes<- marker_genes[!marker_genes$gene %in% duplicated,]
+  top_markers<- marker_genes %>% group_by(cluster) %>% slice_max(order_by = avg_log2FC, n = 10) %>% as.data.frame()
+}
+
+add_lines<-TRUE
+n_markers<-25
+
+
+## Pseudobulk
+myeloid_seurat$PB_variable<- paste0(myeloid_seurat$ShortSubtype, "_", 
+                                    myeloid_seurat@meta.data[[paste0("NMF_rank", rank, "_annotByAdult10X")]])
+pb<- pseudobulk_byVariable(myeloid_seurat@assays$RNA@counts, myeloid_seurat@meta.data, "PB_variable")
+
+## center for each sample separately
+center_bySample<- lapply(unique(myeloid_seurat$ShortSubtype), function(sample){
+  pb_tmp<- pb[,grepl(sample, colnames(pb))]
+  pb_list_tmp<- NormCenter(pb_tmp)
+  pb_center_tmp<- pb_list_tmp$center_data
+  return(pb_center_tmp)
+})
+center_bySample<- do.call("cbind", center_bySample)
+
+
+## Plot
+p<- myHeatmap(center_bySample, GOI=top_markers$gene, min.value = -3, max.value = 3, 
+              orderFactors = unique(top_markers$cluster))+
+  scale_fill_gradient2(high="red", low="blue", mid="white", name="Centered log2(TPM)")
+
+## Add horizontal lines around each set of nmf genes
+if(add_lines){
+  tmp<- split(top_markers, f=top_markers$cluster)
+  lastGene<- lapply(tmp, function(x){
+    x$tmp<- 1:nrow(x)
+    x<- x[x$gene %in% rownames(pb), ]
+    return(x[max(x$tmp), "gene"])
+  })
+  linePositions<- as.data.frame(pb_center[top_markers$gene,])
+  linePositions$tmp<- 1:nrow(linePositions)
+  linePositions<- linePositions[unlist(lastGene),"tmp"]
+  linePositions<- linePositions[1:length(linePositions)-1]+ 0.5
+  
+  p+geom_hline(yintercept = linePositions, linetype="dashed",size=1)
+}else{p}
+
+  
+ggsave(paste0(figure_dir, "Heatmap_TopNMFgenes_annotBy", annotation, "_rank", rank, "_centerBySubtype.png"), width=12, height=12)
+```
 ## UMAP with annotations
 ```{r}
 ## Option: can use seurat with harmony integration JUST for visualization purposes. 
@@ -134,7 +196,7 @@ if(use_harmony_forVis=="_harmony"){
   }else{figure_dir_tmp<- figure_dir}
 
 myeloid_seurat<-readRDS(paste0("../../01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/",integration, "/",
-                               cohort, "/myeloid_seurat_noDC.B.Rds", use_harmony_forVis, ".Rds"))
+                               cohort, "/myeloid_seurat_noDC.B", use_harmony_forVis, ".Rds"))
 rank_use<-6
 colors_use<-annot_colors[[paste0("rank", rank_use)]]
 
