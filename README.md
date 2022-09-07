@@ -1,4 +1,4 @@
-# Pediatric immune microenvironment
+# Pediatric immune microenvironment profiling
 ## scRNAseq profiling of pediatric glioma-associated immune cells across 6 glioma subtypes
 
 Brief description of main folders (see detailed README in subdirectories for more info):
