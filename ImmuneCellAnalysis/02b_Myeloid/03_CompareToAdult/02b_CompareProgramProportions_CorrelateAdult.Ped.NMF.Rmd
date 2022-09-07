@@ -10,9 +10,10 @@ Identify programs that are SHARED between ped/adult myeloid cells and programs t
 
 ## Approach:
 1. Correlate ped NMF programs with adult NMF programs- using the adult NMF with IDHmut/GBM run simultaneously
-2. Use the correlation heatmap to identify shared and specific programs. For shared, merge genesets. Consider taking shared genes + top X genes from adult/ped
-3. Score adult and ped myeloid cells for these shared and specific gene sets
-4. Compare proportions of these programs in adult/ped
+2. Use the correlation heatmap to identify shared and specific programs. For shared, merge genesets (union)
+3. Correlate scores for merged/specific gene set with scores for GBM 10X to help annotate adult-specific programs
+4. Score adult and ped myeloid cells for these shared and specific gene sets. Assign to max and re-identify final gene set
+5. Score for final programs, assign max. Compare proportions of these programs in adult/ped
 
 ```{r}
 library(Seurat) 
@@ -44,7 +45,7 @@ source(nmf_helper)
 ```{r}
 cohort<- "pedOnly_nomuv63"
 ped_rank<-6 ## rank to use for ped
-adult_rank<- 7
+adult_rank<- 6 ## rank to use for adult
 
 figure_dir<- paste0(figure_dir_tmp, cohort, "/"); analysis_dir<- paste0(analysis_dir_tmp, cohort, "/")
 data_dir<- paste0(data_dir_tmp, cohort, "/")
@@ -95,19 +96,34 @@ scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, marker_list
 
 ## Correlate scores
 ```{r}
+library(grid)
+library(pheatmap)
+
 ## Correlate and plot heatmap
 scores_factor_hc = clusterNmfFactors(scores)
 scores_factor_cor = scores_factor_hc$cor_coef[scores_factor_hc$hc_obj$order, scores_factor_hc$hc_obj$order]
-
+ 
+## Add on column for color
+scores_factor_cor<- as.data.frame(scores_factor_cor)
+scores_factor_cor$color<-ifelse(rownames(scores_factor_cor) %in% names(ped_marker_list), "red", "navy")
+ 
 ## Heatmap of correlations
 hm_colors = rev((brewer.pal(n=9, name="RdBu")))
 hm_colors = colorRampPalette(colors = hm_colors)
-pheatmap(scores_factor_cor, color = hm_colors(100), 
-         cluster_rows = F, cluster_cols = F, 
+p<-pheatmap(scores_factor_cor[,colnames(scores_factor_cor) != "color"], color = hm_colors(100),
+         cluster_rows = F, cluster_cols = F,
          annotation_names_row = F, annotation_names_col =T,
          show_rownames = T, show_colnames = F,
-         filename = paste0(figure_dir, "Cor_Ped.rank", ped_rank,"_Adult.rank", adult_rank,  ".png"),
-         width = 8, height = 4)
+         #filename = paste0(figure_dir , "CorHeatmap.png"),
+         width = 10, height = 6)
+ 
+cols=scores_factor_cor[order(match(rownames(scores_factor_cor), p$gtable$grobs[[2]]$label)), ]$color
+p$gtable$grobs[[2]]$gp=gpar(col=cols)
+ 
+png(filename= paste0(figure_dir, "Cor_Ped.rank", ped_rank,"_Adult.rank", adult_rank,  ".png"), width = 500, height = 300)
+p
+dev.off()
+
 
 ## Dendrogram of hierarchical clustering 
 jpeg(filename=paste0(figure_dir, "HC_Ped.rank", ped_rank,"_Adult.rank", adult_rank,  ".png"), width = 400, height = 600)
@@ -115,6 +131,18 @@ plot(scores_factor_hc$hc_obj)
 dev.off()
 ```
 
+## Based on correlation and gene overlap, set adult/pediatric programs to merge
+```{r}
+ped_rank<-6 ## rank to use for ped
+adult_rank<- 6
+
+## Set genesets to be merged
+merge_list<- list(rank6_6=list(Merged_Inflammatory=c("Inflammatory", "5"),
+                               Merged_StressResponse=c("Stress_Response", "3"),
+                               Merged_Monocytes=c("Monocytes", "1"),
+                               Merged_HypoxicTAM=c("Hypoxic_TAM", "6")))
+merge_list<- merge_list[[paste0("rank", ped_rank, "_", adult_rank)]]
+```
 
 ## Gene overlap between ped/adult
 ```{r}
@@ -122,7 +150,7 @@ library(ggVennDiagram)
 
 cohort<- "pedOnly_nomuv63"
 ped_rank<-6 ## rank to use for ped
-adult_rank<- 5
+adult_rank<- 6
 
 ## ped marker genes
 ped_markers<- read.csv(paste0("../01a_NMF/analysis/de.novoNMF/", cohort,  "/top_DE_genes_10Xannotated_NMF_rank", ped_rank, ".csv"))
@@ -152,5 +180,214 @@ all_plots<- lapply(names(ped_marker_list), function(x){
 })
 cowplot::plot_grid(plotlist=all_plots)
 ggsave(paste0(figure_dir, "Venn_PedRank", ped_rank, "_withMaxOverlapAdultRank", adult_rank, ".png"), width=9, height=6)
+
+## Overlap of genes for set "shared" programs
+overlaps<- lapply(merge_list, function(x){
+  ped<- ped_marker_list[[x[1]]] ; adult<- adult_marker_list[[paste0("Adult_NMF", x[2])]]
+  nOverlap=sum(ped %in% adult)
+  perOverlap=nOverlap/min(length(ped), length(adult))
+  cor<- scores_factor_cor[x[1], paste0("Adult_NMF", x[2])]
+  return(data.frame(program=x[1], nOverlap=nOverlap, perOverlap=perOverlap, PearsonCorrelation=cor))
+  })
+overlaps<- do.call("rbind", overlaps)
+
+## Plot numeric overlaps
+overlaps$dummy<-"x"
+ggplot(overlaps, aes(y=program, x=dummy, color=PearsonCorrelation, size=nOverlap))+
+  geom_point()+
+  scale_color_gradient2(low="yellow",mid="orange", high="red", midpoint=0.7)+
+  theme_classic()+
+  theme(axis.text.y = element_text(face="bold"),
+        axis.text.x = element_blank())+
+  ylab("")+
+  xlab("")
+ggsave(paste0(figure_dir, "Overlap_sharedPedAdult_pedRank", ped_rank, "_adultRank", adult_rank, ".png"), width=4, height=3)
+
+```
+
+## Merge genesets from ped/adult that are similar
+```{r}
+## Merge together gene lists
+lapply(merge_list, function(x){
+  print(x)
+  sum(ped_markers$gene[ped_markers$cluster==x[1]] %in% adult_markers$gene[adult_markers$cluster==x[2]])
+})
+
+## Merge shared genes
+merged_gene_list<- lapply(merge_list, function(x){
+  unique(c(ped_markers$gene[ped_markers$cluster==x[1]], adult_markers$gene[adult_markers$cluster==x[2]]))
+})
+
+## Get specific (to ped or adult) gene lists
+specific_gene_list<- c(PedSpecific=ped_marker_list[!names(ped_marker_list) %in% unlist(merge_list)],
+                       AdultSpecific=adult_marker_list[!names(adult_marker_list) %in% unlist(merge_list)])
+
+## Add "shared" and "specific" together
+final_PA_gene_list<- c(merged_gene_list, specific_gene_list)
+saveRDS(final_PA_gene_list, file=paste0(analysis_dir, "pedAdultmerged_pedAdultspecific_geneList_pedRank", ped_rank, "_adultRank", adult_rank, ".Rds"))
+```
+
+
+
+## Score all cells for final merged/specific gene list + adult 10X for annotation
+```{r}
+cohort<- "pedOnly_nomuv63"
+ped_rank<-6 ## rank to use for ped
+adult_rank<- 6
+
+PA_gene_list<-readRDS(paste0(analysis_dir, "pedAdultmerged_pedAdultspecific_geneList_pedRank", ped_rank, "_adultRank", adult_rank, ".Rds"))
+
+
+## Load in adult gene lists (preprocessed in Preprocess_AdultMyeloid.Rmd)
+adult_10Xmarkers_top100<- readRDS(paste0("../../01_Preprocessing/03_PreprocessAdultDatasets/analysis/Preprocess_AdultMyeloid/", 
+                                      "GBM.10X_recurrent_myeloid_markers_top100.Rds"))
+adult_10Xmyeloid_markers<- split(adult_10Xmarkers_top100, f=adult_10Xmarkers_top100$cluster)
+adult_10Xmyeloid_markers<- lapply(adult_10Xmyeloid_markers, function(x){x$gene})
+names(adult_10Xmyeloid_markers)<- paste0("Adult10X_", names(adult_10Xmyeloid_markers))
+
+## Score for all
+scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, c(adult_10Xmyeloid_markers, PA_gene_list))))
+
+## Correlate and plot heatmap
+scores_factor_hc = clusterNmfFactors(scores)
+scores_factor_cor = scores_factor_hc$cor_coef[scores_factor_hc$hc_obj$order, scores_factor_hc$hc_obj$order]
+ 
+## Add on column for color
+scores_factor_cor<- as.data.frame(scores_factor_cor)
+scores_factor_cor$color<-ifelse(grepl("PedSpecific", rownames(scores_factor_cor)), "red",
+                         ifelse(grepl("AdultSpecific", rownames(scores_factor_cor)), "navy",
+                         ifelse(grepl("Adult10X", rownames(scores_factor_cor)), "skyblue3",
+                         ifelse(grepl("Merged", rownames(scores_factor_cor)), "purple", "issue"))))
+ 
+## Heatmap of correlations
+hm_colors = rev((brewer.pal(n=9, name="RdBu")))
+hm_colors = colorRampPalette(colors = hm_colors)
+p<-pheatmap(scores_factor_cor[,colnames(scores_factor_cor) != "color"], color = hm_colors(100),
+         cluster_rows = F, cluster_cols = F,
+         annotation_names_row = F, annotation_names_col =T,
+         show_rownames = T, show_colnames = F,
+         #filename = paste0(figure_dir , "CorHeatmap.png"),
+         width = 10, height = 6)
+ 
+cols=scores_factor_cor[order(match(rownames(scores_factor_cor), p$gtable$grobs[[2]]$label)), ]$color
+p$gtable$grobs[[2]]$gp=gpar(col=cols)
+ 
+png(filename= paste0(figure_dir, "Cor_Ped.rank", ped_rank,"_Adult.rank", adult_rank,  "_Adult10X.png"), width = 500, height = 300)
+p
+dev.off()
+
+
+## Dendrogram of hierarchical clustering 
+jpeg(filename=paste0(figure_dir, "HC_Ped.rank", ped_rank,"_Adult.rank", adult_rank,  "_Adult10X.png"), width = 400, height = 600)
+plot(scores_factor_hc$hc_obj)
+dev.off()
+
+## Annotate adult-specific based on correlation
+names(PA_gene_list)<- gsub("AdultSpecific.4", "AdultSpecific_Transitory_TAM",
+                           gsub("AdultSpecific.2", "AdultSpecific_IFN_Mo_TAM", gsub("StressResponse", "Microglia", names(PA_gene_list))))
+saveRDS(PA_gene_list, file=paste0(analysis_dir, "pedAdultmerged_pedAdultspecific_geneList_pedRank", ped_rank, "_adultRank", adult_rank, ".Rds"))
+```
+
+
+## Score all cells for merged/specific gene list, assign max, re-identify markers
+```{r}
+cohort<- "pedOnly_nomuv63"
+ped_rank<-6 ## rank to use for ped
+adult_rank<- 6
+
+## Load seurat object for ped/adult
+merged_seurat<- readRDS(paste0("analysis/Merge_AssessIntegration/",cohort,"/adult_withMUV.FALSE/myeloid_seurat_Ped.AdultGBM.IDHMut_merged.Rds" ))
+
+## Load in merged/specific genes (above)
+PA_gene_list<-readRDS(paste0(analysis_dir, "pedAdultmerged_pedAdultspecific_geneList_pedRank", ped_rank, "_adultRank", adult_rank, ".Rds"))
+
+## Score for all
+scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, final_PA_gene_list)))
+
+## Assign max
+scores$MaxProgram<- apply(scores, 1, function(x){names(x)[which.max(x)]})
+merged_seurat$MaxProgram_tmp<-plyr::mapvalues(colnames(merged_seurat), rownames(scores), scores$MaxProgram, warn_missing = FALSE)
+
+## Re-identify markers
+merged_seurat<- SetIdent(merged_seurat, value=merged_seurat$MaxProgram_tmp)
+markers<- FindAllMarkers(merged_seurat, min.pct = 0.2)
+filtered_markers<- markers[markers$p_val_adj<0.05 & markers$avg_log2FC>0.2,]
+saveRDS(filtered_markers, file=paste0(analysis_dir, "markers_mergedPedAdult_assignMax_reidentify_pedRank", ped_rank, "_adultRank", adult_rank, ".Rds"))
+```
+
+## Assign max scoring program, comparison of program breakdown
+```{r}
+## Load in final ped/adult gene list
+final_PA_gene_list<-readRDS(paste0(analysis_dir, "markers_mergedPedAdult_assignMax_reidentify_pedRank", ped_rank, "_adultRank", adult_rank, ".Rds"))
+
+## Subset to top 100 genes
+final_PA_gene_list<- final_PA_gene_list %>% group_by(cluster) %>% top_n(n=100, wt=avg_log2FC) %>% as.data.frame()
+final_PA_gene_list<- split(final_PA_gene_list, f=final_PA_gene_list$cluster)
+final_PA_gene_list<- lapply(final_PA_gene_list, function(x){x$gene})
+
+## Load in merged ped/adult seurat object
+myeloid_seurat<- readRDS(paste0("analysis/Merge_AssessIntegration/",cohort,"/adult_withMUV.FALSE/myeloid_seurat_Ped.AdultGBM.IDHMut_merged.Rds" ))
+cm_list<- NormCenter(myeloid_seurat@assays$RNA@counts)
+cm_mean<- rowMeans(log2(cm_list$raw_data+1))
+
+## Score
+scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean,  final_PA_gene_list)))
+
+## Add max program to seurat object
+scores$maxProgram<- apply(scores, 1, function(x){names(which.max(x))})
+myeloid_seurat$MaxProgram_PA_mergedGenesets<- as.character(plyr::mapvalues(colnames(myeloid_seurat),
+                                                                        rownames(scores),
+                                                                        scores$maxProgram, warn_missing = FALSE))
+
+## Bd by age
+df<-as.data.frame(table(myeloid_seurat$MaxProgram_PA_mergedGenesets, myeloid_seurat$Age))
+colnames(df)<-c("Program", "Age", "NCells")
+df<- df %>% group_by(Age) %>% mutate(perCells=NCells/sum(NCells)) %>%as.data.frame()
+
+## Plot
+colors_use<-c("purple","red", "navy","turquoise3",  "magenta", "olivedrab", "plum3", "gold")
+names(colors_use)<- c("IFN_TAM", "Inflammatory", "HypoxicTAM", "Monocytes", "Transitory_TAM", "Microglia", "IFN_Mo_TAM","SEPP1_Mo_TAM")
+
+df$Program<- gsub("AdultSpecific_", "", gsub("Merged_", "", gsub("PedSpecific.", "",df$Program)))
+df$Program<- factor(df$Program, levels=rev(c("Monocytes", "Microglia", "SEPP1_Mo_TAM", "Inflammatory", "HypoxicTAM", "IFN_Mo_TAM", "Transitory_TAM", "IFN_TAM")))
+ggplot(df, aes(x=Age, y=perCells, fill=Program))+
+  geom_bar(stat="identity", position="stack")+
+  theme_classic()+
+  scale_fill_manual(values=colors_use)+
+  ylab("Proportion of cells in program")+ xlab("")+
+  theme(axis.text = element_text(color="black", face="bold"),
+        axis.title = element_text(color="black", face="bold"))
+ggsave(paste0(figure_dir, "AgeBreakdown_byMerged.RegeneratedPrograms.png"), width=5, height=6)
+
+## Proportion of programs in ped/adult  by sample
+myeloid_seurat$MaxProgram_PA_mergedGenesets<- gsub("AdultSpecific_", "", gsub("Merged_", "", gsub("PedSpecific.", "",myeloid_seurat$MaxProgram_PA_mergedGenesets)))
+df<- as.data.frame(table(myeloid_seurat$MaxProgram_PA_mergedGenesets, myeloid_seurat$sampleid))
+colnames(df)<- c("Program", "Sample", "Ncells")
+
+
+  ## add on age
+  df$Age<- plyr::mapvalues(df$Sample, myeloid_seurat$sampleid, myeloid_seurat$Age, warn_missing = FALSE)
+  
+  ## Add on subtype- used for ordering
+  df$Subtype<- plyr::mapvalues(df$Sample, myeloid_seurat$sampleid, myeloid_seurat$NiceSubtype, warn_missing = FALSE)
+  subtype_order<- unique(df$Subtype); names(subtype_order)<- 1:length(subtype_order)
+  df$Order<- as.numeric(as.character(plyr::mapvalues(df$Subtype, subtype_order, names(subtype_order))))
+  
+
+  ## plot
+  df<- df %>% group_by(Sample) %>% mutate(PerCells=Ncells/sum(Ncells)) %>% as.data.frame()
+  ggplot(df, aes(x=reorder(Sample,Order), y=PerCells, fill=Program))+
+    geom_bar(stat="identity", position="stack")+
+    theme_classic()+
+    scale_fill_manual(values=colors_use)+
+    ylab("Proportion of cells\nin program")+ xlab("")+
+    theme(axis.text = element_text(color="black", face="bold"),
+          axis.text.x = element_text(angle=45, hjust=1),
+          axis.title = element_text(color="black", face="bold"))+
+    facet_grid(cols=vars(Age), scales="free_x", space="free_x")
+  ggsave(paste0(figure_dir, "AgeBreakdown_byMerged.RegeneratedPrograms_Sample.png"), width=9, height=2.5)
+
+  
+saveRDS(myeloid_seurat, paste0("analysis/Merge_AssessIntegration/",cohort,"/adult_withMUV.FALSE/myeloid_seurat_Ped.AdultGBM.IDHMut_merged.Rds" ))
 ```
 
