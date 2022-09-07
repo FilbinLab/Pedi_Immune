@@ -39,7 +39,7 @@ NMF approach:
 	- Merge with our pediatric glioma T cells + adult glioma T cells: ***Merge_*.Rmd***
 	- Run STREAM trajectory analysis (***04a_Trajectory***)
 
-6. In 01a_Ped/02_ClonalOverexpression and 01b_Adult/02_ClonalOverexpression, run clonal vs monoclonal analysis as in Cell 2021 to identify genes over expressed in clonal cells. Run separately for adult/ped. Actual analysis is run on O2 due to time/memory constraints. NOTE: this analysis is run AFTER NMF and AFTER identifying CD4/CD8 cells in program-wise basis for Adult/Ped t cells together. Thus, the adult results may vary slightly from Cell 2021 paper, as our CD4/CD8 annotations are not identical
+6. In ***01a_Ped/02_ClonalOverexpression*** and ***01b_Adult/02_ClonalOverexpression***, run clonal vs monoclonal analysis as in Cell 2021 to identify genes over expressed in clonal cells. Run separately for adult/ped. Actual analysis is run on O2 due to time/memory constraints. NOTE: this analysis is run AFTER NMF and AFTER identifying CD4/CD8 cells in program-wise basis for Adult/Ped t cells together. Thus, the adult results may vary slightly from Cell 2021 paper, as our CD4/CD8 annotations are not identical
 
 
 	
