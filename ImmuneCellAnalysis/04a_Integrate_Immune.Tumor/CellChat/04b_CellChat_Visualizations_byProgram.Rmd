@@ -1,7 +1,9 @@
 ---
-title: "R Notebook"
+title: "Plot cellchat"
 output: html_document
 ---
+
+## Plot cell chat results between immune programs, tumor cell types
 
 ```{r}
 library(CellChat)
@@ -10,6 +12,7 @@ library(circlize)
 library(patchwork)
 library(Seurat) 
 library(ggh4x)
+library(ggalluvial)
 
 options(stringsAsFactors = FALSE)
 
@@ -212,7 +215,7 @@ Plotting options: heatmap, chord diagram, sankey plot
 ## Preprocess
 ```{r}
 ## Set major sender/receiver cell types
-majorCellType1<- c("CD4")
+majorCellType1<- c("CD4", "CD8")
 majorCellType2<- "Myeloid" 
 
 ## Set normalization method-"noNorm", "bySample", "byCell"
@@ -352,16 +355,8 @@ sigLRs_plot$sender.plot<- factor(sigLRs_plot$sender, levels=ordered_celltypes[or
 
 sigLRs_plot$major_sender<- gsub("CD4", "Immune", gsub("CD8", "Immune",gsub("Myeloid2", "Immune", sigLRs_plot$major_sender)))
 
-## optional (still testing)- plot sender -->receiver,sender-->receiver
-## So myeloid --> tcell, tcell --> myeloid
-## Slightly simplifies visual and maybe more direct sender/receiver comparison?
-## Need to 1) reformat to 3 
 ## Plot
-all_plots<- lapply(c(unique(sigLRs_plot$major_sender), list(unique(sigLRs_plot$major_sender))), function(major_sender){
-  print(major_sender)
-  tmp<- sigLRs_plot[sigLRs_plot$major_sender %in% major_sender,]
-  
-  ggplot(data=tmp, aes(axis1=sender, axis2=receiver,  y=nLRs_norm))+
+  ggplot(data=sigLRs_plot, aes(axis1=sender, axis2=receiver,  y=nLRs_norm))+
     geom_alluvium(aes(fill = nLRs_norm)) +
     geom_stratum() +
     theme_classic()+
@@ -369,18 +364,18 @@ all_plots<- lapply(c(unique(sigLRs_plot$major_sender), list(unique(sigLRs_plot$m
               aes(label = after_stat(stratum))) +
     scale_x_discrete(limits = c("Sender", "Receiver"),
                      expand = c(0.15, 0.05), position="top") +
-    scale_fill_gradient2(low="blue", mid="white", high="red", midpoint=mean(sigLRs_plot$nLRs_norm))+
+    #scale_fill_gradientn(colors=c("blue", "green", "yellow", "orange", "red"))+
+    #scale_fill_viridis_c()+
+    paletteer::scale_fill_paletteer_c("viridis::plasma")+
     ylab("")+
     theme(axis.text.y=element_blank(), 
           axis.ticks.y=element_blank(),
           axis.text.x = element_text(face="bold", color="black", size=12),
           strip.text = element_blank())  +
     facet_grid(rows=vars(major_sender), scale="free_y", space="free_y")
-})
-cowplot::plot_grid(plotlist=all_plots, ncol=3)
-  
+
 ggsave(paste0(figure_dir, "Sankey_ByTotalLR_Norm", norm_method,"_",paste(majorCellType1, collapse="."),".", majorCellType2, ".png"),
-       width=24, height=7)
+       width=8, height=16)
 
 
 ```
