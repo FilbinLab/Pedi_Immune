@@ -9,23 +9,27 @@ Overall approach:
 
 ### NMF ###
 
+
 ***01a_NMF/***
 	- Ran NMF locally for myeloid cells, as well as with Cycling set as separate program (this option not used downstream)- ***01a_NMF*.Rmd***
 	- programs plotted in ***NMF_plots.Rmd*** (heat maps, UMAP, etc
 	- Correlate ped programs with adult gbm 10x to help annotate. Correlated with both primary and recurrent tumors from adult GBM 10X dataset, but recurrent used downstream. ***02b_AdultGBM10X_AnnotatePed*.Rmd***
 	-Tested different numbers of repeats (10/30/50) in ***NMF_10vs30vs50_repeats.Rmd***. For myeloid cells at least (nothing else tested), there was no real difference between number of repeats, so 10x used downstream.
 
+
 ***01b_Ped.Adult.NMF/***
 	- Run de novo NMF on adult myeloid cells (smartseq2, idhmut, gbm) in ***01a_AdultCohorts_DeNovoNMF.Rmd***. Two main options here- separately for IDHmut/GBM, or merged for IDHmut/GBM. Tried to assess which makes more sense (which represents cluster split better, etc) and decided to use the merged option (i.e., merging idhmut/gbm adult myeloid count matrix —> running NMF) moving forward.
 	- Run de novo NMF on merged ped/adult myeloid count matrix in ***01b_Ped.Adult_merged_NMF.Rmd***. Then correlate with adult 10X GBM to help annotate (***02_AdultGBM10X_AnnotatePed.Adult.Rmd***) This option not used downstream- decided that running separately for ped/adult then correlating made more sense.
 
+
 ***01c_Liger/***
 	Run integrative NMF (liger) on pediatric myeloid cells. correlate with NMF programs. Main purpose here is to help inform the number of programs to use.
 
+
 ### Addtional layers of annotation- 02_AdditionalAnnotation
 
-	- No ordering to these Rmd files, none depend on others
-	- Used for additional levels of annotation (primarily microglia/macropahge) on top of programs. Also compare programs to these cell types to help annotate programs- some are exclusively microglia/macrophage, others are a mix
+- No ordering to these Rmd files, none depend on others
+- Used for additional levels of annotation (primarily microglia/macropahge) on top of programs. Also compare programs to these cell types to help annotate programs- some are exclusively microglia/macrophage, others are a mix
 	
 ***Microglia.vs.Macrophage.Rmd***
 		Used microglia/macrophage geneses from Li- scored ped myeloid, various visualizations. Compare to myeloid NMF programs
