@@ -28,22 +28,22 @@
 
 	Using this approach improves correlation between adult/ped cell programs, slightly improves accuracy of cd4/cd8 annotation, and increases our confidence in these annotations due to larger cell count provided by adult cells
 
-	For myeloid cells, the original "detailed" annotations are used ( in 02_Counts_Preprocess/04_MergedSamples_DetailedAnnotation.Rmd.). This file edited to clarify that this approach used only for myeloid cells. (Note: no harmony integration is used for this, but these cell types are quite distinct and it doesn't seem to matter much)
+	For myeloid cells, the original "detailed" annotations are used ( in ***02_Counts_Preprocess/04_MergedSamples_DetailedAnnotation.Rmd***.). This file edited to clarify that this approach used only for myeloid cells. (Note: no harmony integration is used for this, but these cell types are quite distinct and it doesn't seem to matter much)
 
 
 Additional files: CompareSeuratPipelines.Rmd used for testing our "standard" pipeline vs Orr's vs integration
 
 ### Adult immune dataset preprocessing
 
-Performed in 03_PreprocessAdultDatasets. Contains preprocessing for myeloid and cell adult datasets: 
+Performed in ***03_PreprocessAdultDatasets***. Contains preprocessing for myeloid and cell adult datasets: 
 
-1. Myeloid: preprocessing for 3 publicly available myeloid datasets in Preprocess_AdultMyeloid. These datasets are: IDHmut (Science), GBM (Neftel), GBM (10X, Movahedi)
+1. Myeloid: preprocessing for 3 publicly available myeloid datasets in ***Preprocess_AdultMyeloid.Rmd***. These datasets are: IDHmut (Science), GBM (Neftel), GBM (10X, Movahedi)
 
 All 3 datasets are processed to seurat objects, any annotations as needed, any re-scaling as needed. Saved for comparison to pediatric myeloid cells downstream
 
 Note: unlike for Tcells, downstream "detailed" annotation is done SEPARATELY for pediatric/adult. Any DC/Bcells (rare) are removed from adult myeloid datasets here, using same method as for pediatric
 
-2. Tcells: adult t cells used downstream are all from Cell 2021 and were provided as a seurat object by Orr. In Tcells_Ped.Adult_Merge, pediatric and adult cells are:
+2. Tcells: adult t cells used downstream are all from Cell 2021 and were provided as a seurat object by Orr. In ***Tcells_Ped.Adult_Merge.Rmd***, pediatric and adult cells are:
 
 	1) merged into single seurat object 
 	2) harmony integration 
