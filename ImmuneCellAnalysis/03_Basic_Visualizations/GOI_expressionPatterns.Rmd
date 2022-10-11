@@ -145,8 +145,14 @@ figure_dir_use<- paste0(figure_dir, analysis_name, "/"); if(!dir.exists(figure_d
   ggsave(paste0(figure_dir_use, "DotPlot_PTGER2_CD8_byprogram_onlySamplesThatExpressPTGER2.png"), width=4, height=3)
   
 ## PGE enzymes in Myeloid
-  DotPlot(ped_myeloid_seurat, features=c("PTGES2", "PTGS1", "PTGS2"), group.by = "sampleid") + DotPlot(ped_myeloid_seurat, features=c("PTGES2", "PTGS1", "PTGS2"), group.by = myeloid_program_name)
+  DotPlot(ped_myeloid_seurat, features=c("PTGES2", "PTGS1", "PTGS2"), group.by = "sampleid", scale = FALSE) +
+    DotPlot(ped_myeloid_seurat, features=c("PTGES2", "PTGS1", "PTGS2"), group.by = myeloid_program_name, scale = FALSE)
   ggsave(paste0(figure_dir_use, "DotPlot_PTGEREnzmyes_Myeloid_bySample.Program.png"), width=12, height=4)
+  
+## PGE enzymes in tumor
+    DotPlot(tumor_seurat, features=c("PTGES2", "PTGS1", "PTGS2"), group.by = "sample", scale = FALSE) +
+    DotPlot(tumor_seurat, features=c("PTGES2", "PTGS1", "PTGS2"), group.by = "CellAnnot", scale = FALSE)
+  ggsave(paste0(figure_dir_use, "DotPlot_PTGEREnzmyes_Tumor_bySample.Program.png"), width=12, height=4)
   
 ## PTGER4 in CD8
   ## by sample
@@ -646,4 +652,113 @@ DotPlot(merged_cd8, features=c("PDCD1", "CTLA4", "TIGIT", "KLRB1", "LAG3","CD244
 ggsave(paste0(figure_dir_use, "Ped.Adult.CD8_BySubtype.png"), width=7, height=4)
 ```
 
+## PTGER2 and SELPLG together, on heatmap
+```{r}
+analysis_name<- "PTGER2.SELPLG"
+figure_dir_use<- paste0(figure_dir, analysis_name, "/"); if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
+
+## CD8 by age + program
+pedAdult_cd8_seurat$tmp<- paste0( pedAdult_cd8_seurat$Final_Annot, "-", pedAdult_cd8_seurat$Age)
+pb<- pseudobulk_byVariable(pedAdult_cd8_seurat@assays$RNA@counts,pedAdult_cd8_seurat@meta.data, "tmp")
+pb_center<- as.data.frame(t(NormCenter(pb)$center_data[c("SELPLG", "PTGER2", "KLRB1"),]))
+pb_center$Program<- rownames(pb_center)
+pb_melt<- melt(pb_center, id="Program")
+colnames(pb_melt)<- c("Program", "Gene", "TPM")
+age_color<- ifelse(grepl("Adult", pb_melt$Program), "red", "blue")
+ggplot(pb_melt, aes(x=Program, y=Gene, fill=TPM))+
+  geom_tile()+
+  theme_classic()+
+  scale_fill_gradient2(high="red", low="blue", mid="white",)+
+  scale_x_discrete(position = "top")+
+  theme(axis.text.x = element_text(angle=45, hjust=0, face="bold", size=16, color=age_color),
+        axis.text.y = element_text(color="black", face="bold"))+
+  xlab("")+ylab("")
+ggsave(paste0(figure_dir_use, "Heatmap_SELPLG.PTGER2_byCD8_program.age.png"), width=8, height=4)
+
+## CD8 by age + clonality
+pedAdult_cd8_seurat$tmp<- paste0(  pedAdult_cd8_seurat$Age,"-", pedAdult_cd8_seurat$clonal)
+pb<- pseudobulk_byVariable(pedAdult_cd8_seurat@assays$RNA@counts,pedAdult_cd8_seurat@meta.data, "tmp")
+pb_center<- as.data.frame(t(NormCenter(pb)$center_data[c("SELPLG", "PTGER2", "KLRB1"),]))
+pb_center$Program<- rownames(pb_center)
+pb_melt2<- melt(pb_center, id="Program")
+colnames(pb_melt2)<- c("Program", "Gene", "TPM")
+age_color<- ifelse(grepl("Adult", pb_melt2$Program), "red", "blue")
+ggplot(pb_melt2, aes(x=Program, y=Gene, fill=TPM))+
+  geom_tile()+
+  theme_classic()+
+  scale_fill_gradient2(high="red", low="blue", mid="white",)+
+  scale_x_discrete(position = "top")+
+  theme(axis.text.x = element_text(angle=45, hjust=0, face="bold", size=16, color=age_color),
+        axis.text.y = element_text(color="black", face="bold"))+
+  xlab("")+ylab("")
+ggsave(paste0(figure_dir_use, "Heatmap_SELPLG.PTGER2_byCD8_clonality.age.png"), width=5, height=3)
+
+## CD8 by age + clonality, age + program
+pb_melt3<- rbind(pb_melt, pb_melt2)
+age_color<- ifelse(grepl("Adult", pb_melt3$Program), "red", "blue")
+pb_melt3$Program<- factor(pb_melt3$Program, levels=c(unique(pb_melt2$Program), unique(pb_melt$Program)))
+ggplot(pb_melt3, aes(x=Program, y=Gene, fill=TPM))+
+  geom_tile()+
+  theme_classic()+
+  scale_fill_gradient2(high="red", low="blue", mid="white",)+
+  scale_x_discrete(position = "top")+
+  theme(axis.text.x = element_text(angle=45, hjust=0, face="bold", size=16, color=age_color),
+        axis.text.y = element_text(color="black", face="bold"))+
+  xlab("")+ylab("")
+ggsave(paste0(figure_dir_use, "Heatmap_SELPLG.PTGER2_byCD8_program.clonality.age.png"), width=10, height=4)
+
+## Enzymes/ligands by sample in myeloid cells
+pb<- pseudobulk_byVariable(ped_myeloid_seurat@assays$RNA@data,ped_myeloid_seurat@meta.data, "sampleid")
+pb_center<- as.data.frame(t(pb[c("PTGES2", "PTGS1", "PTGS2", "SELP", "SELL", "SELE"),]))
+pb_center$Program<- rownames(pb_center)
+pb_melt4<- melt(pb_center, id="Program")
+colnames(pb_melt4)<- c("Program", "Gene", "TPM")
+pb_melt4$receptor<- ifelse(grepl("SEL", pb_melt4$Gene), "SELPLG", "PTGER2")
+ggplot(pb_melt4, aes(x=Program, y=Gene, fill=TPM))+
+  geom_tile()+
+  theme_classic()+
+  scale_fill_viridis_c()+
+  scale_x_discrete(position = "top")+
+  theme(axis.text.x = element_text(angle=45, hjust=0, face="bold", size=16, color="black"),
+        axis.text.y = element_text(color="black", face="bold"))+
+  xlab("")+ylab("")+
+  facet_grid(rows=vars(receptor), scale="free_y", space="free_y")
+ggsave(paste0(figure_dir_use, "Heatmap_ligands.SELPLG.PTGER2_byMyeloid_sample.png"), width=9, height=4.5)
+
+## Enzymes/ligands by program in myeloid cells
+pb<- pseudobulk_byVariable(ped_myeloid_seurat@assays$RNA@data,ped_myeloid_seurat@meta.data, "NMF_rank6_annotByAdult10X")
+pb_center<- as.data.frame(t(pb[c("PTGES2", "PTGS1", "PTGS2", "SELP", "SELL", "SELE"),]))
+pb_center$Program<- rownames(pb_center)
+pb_melt5<- melt(pb_center, id="Program")
+colnames(pb_melt5)<- c("Program", "Gene", "TPM")
+pb_melt5$receptor<- ifelse(grepl("SEL", pb_melt5$Gene), "SELPLG", "PTGER2")
+ggplot(pb_melt5, aes(x=Program, y=Gene, fill=TPM))+
+  geom_tile()+
+  theme_classic()+
+  scale_fill_viridis_c()+
+  scale_x_discrete(position = "top")+
+  theme(axis.text.x = element_text(angle=45, hjust=0, face="bold", size=16, color="black"),
+        axis.text.y = element_text(color="black", face="bold"))+
+  xlab("")+ylab("")+
+  facet_grid(rows=vars(receptor), scale="free_y", space="free_y")
+ggsave(paste0(figure_dir_use, "Heatmap_ligands.SELPLG.PTGER2_byMyeloid_program.png"), width=6, height=4.5)
+
+## Enzymes/ligands by sample in tumor cells
+pb<- pseudobulk_byVariable(tumor_seurat@assays$RNA@data,tumor_seurat@meta.data, "sample")
+pb_center<- as.data.frame(t(pb[c("PTGES2", "PTGS1", "PTGS2", "SELP", "SELL", "SELE"),]))
+pb_center$Program<- rownames(pb_center)
+pb_melt6<- melt(pb_center, id="Program")
+colnames(pb_melt6)<- c("Program", "Gene", "TPM")
+pb_melt6$receptor<- ifelse(grepl("SEL", pb_melt6$Gene), "SELPLG", "PTGER2")
+ggplot(pb_melt6, aes(x=Program, y=Gene, fill=TPM))+
+  geom_tile()+
+  theme_classic()+
+  scale_fill_viridis_c()+
+  scale_x_discrete(position = "top")+
+  theme(axis.text.x = element_text(angle=45, hjust=0, face="bold", size=16, color="black"),
+        axis.text.y = element_text(color="black", face="bold"))+
+  xlab("")+ylab("")+
+  facet_grid(rows=vars(receptor), scale="free_y", space="free_y")
+ggsave(paste0(figure_dir_use, "Heatmap_ligands.SELPLG.PTGER2_byTumor_sample.png"), width=9, height=4.5)
+```
 
