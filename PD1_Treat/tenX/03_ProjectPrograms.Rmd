@@ -1,0 +1,162 @@
+---
+title: "ProjectBroadAnnots.Rmd"
+author: "Jenna LaBelle"
+date: "10/07/22"
+output: html_document
+---
+
+## Project program annotations from the full immune cohort to PD1 treated patients
+
+```{r}
+library(Seurat) 
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/PD1_Treat/tenX/")
+
+analysis_dir<- paste0(working_dir, "/analysis/project_programs/")
+figure_dir<- paste0(working_dir, "/figures/project_programs/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+```
+
+## Load seurat objects: pd-1 (processed in 01b_Preprocess_QC_ToSeurat.Rmd) and full immune cohort (both myeloid and t cells)
+```{r}
+full_cohort_dir<- "../../ImmuneCellAnalysis/"
+pd1_data_dir<- paste0(working_dir, "/analysis/project_broad.detailed_annot/")
+
+#pd1_myeloid<- readRDS(paste0(pd1_data_dir, "myeloid_pd1_noDC.B_seurat.Rds"))
+pd1_cd4<- readRDS(paste0(pd1_data_dir, "cd4_pd1_seurat.Rds"))
+pd1_cd8<- readRDS(paste0(pd1_data_dir, "cd8_pd1_seurat.Rds"))
+
+full_myeloid_seurat<- readRDS(paste0(full_cohort_dir,
+                                     "01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/",
+                                     "pedOnly_nomuv63/",
+                                     "myeloid_seurat_noDC.B_harmony.Rds"))
+full_cd4_seurat<- readRDS(paste0(full_cohort_dir,
+                                   "02a_Tcells/02_Ped.Adult/03_Visualize.Reannotate_programs/analysis/Reannotate_programs/",
+                                   "rank8_sharedByunion/",
+                                   "ped_seurat_cd4_harmony.Rds"))
+full_cd8_seurat<- readRDS(paste0(full_cohort_dir,
+                                   "02a_Tcells/02_Ped.Adult/03_Visualize.Reannotate_programs/analysis/Reannotate_programs/",
+                                   "rank8_sharedByunion/",
+                                   "ped_seurat_cd8_harmony.Rds"))
+
+## Colors 
+tcell_colors<- readRDS(paste0(full_cohort_dir, "/plot_colors/Tcell.programs_rank8sharedByunion_reAnnot.Rds"))
+myeloid_colors<- readRDS(paste0(full_cohort_dir, "/plot_colors/Myeloid_program_colors.Rds"))
+myeloid_colors<- myeloid_colors$rank6
+```
+
+
+## Projection of cd4 programs to pd1 cd4
+```{r}
+seurat_list<-list(full=full_cd4_seurat, pd1=cd4_pd1)
+
+transferAnchors<-FindTransferAnchors(reference = seurat_list$full, query=seurat_list$pd1,
+                                     reduction = "pcaproject")
+
+predictions <- TransferData(anchorset = transferAnchors, 
+                            refdata = full_cd4_seurat$NMF_rank8_annot_mergedByunion_reAnnot,
+                            weight.reduction = "pcaproject")
+
+predictions_final<- predictions$predicted.id; names(predictions_final)<- rownames(predictions)
+cd4_pd1<- AddMetaData(cd4_pd1, predictions, col.name=c("Program_projected", 
+                                                       paste0(gsub("prediction.score.", "", colnames(predictions)[2:ncol(predictions)]),
+                                                              "_score_projected")))
+
+## plot
+DimPlot(cd4_pd1, group.by="Program_projected", pt.size = 1, label=FALSE, label.size = 6)+ 
+  scale_color_manual(values=tcell_colors[names(tcell_colors) %in% cd4_pd1$Program_projected])
+ggsave(paste0(figure_dir, "UMAP_CD4_program_projectedFromFull.png"), width=6, height=6)
+
+## Proportion of programs by sample
+df<- as.data.frame(table(cd4_pd1$sample, cd4_pd1$Program_projected))
+colnames(df)<- c("Sample", "Program", "NCells")
+df<- df %>% group_by(Sample) %>% mutate(perCells=NCells/sum(NCells)) %>% as.data.frame()
+ggplot(df, aes(x=Sample, y=perCells, fill=Program))+
+  geom_bar(stat="identity")+
+  scale_fill_manual(values=tcell_colors[names(tcell_colors) %in% df$Program])+
+  theme_classic()
+ggsave(paste0(figure_dir, "Breakdown_CD4_programBySample.png"), width=4, height=4)
+
+saveRDS(cd4_pd1, file=paste0(pd1_data_dir, "cd4_pd1_seurat.Rds"))
+```
+
+## Projection of cd8 programs to pd1 cd8
+```{r}
+seurat_list<-list(full=full_cd8_seurat, pd1=cd8_pd1)
+
+transferAnchors<-FindTransferAnchors(reference = seurat_list$full, query=seurat_list$pd1,
+                                     reduction = "pcaproject")
+
+predictions <- TransferData(anchorset = transferAnchors, 
+                            refdata = full_cd8_seurat$NMF_rank8_annot_mergedByunion_reAnnot,
+                            weight.reduction = "pcaproject")
+
+predictions_final<- predictions$predicted.id; names(predictions_final)<- rownames(predictions)
+cd8_pd1<- AddMetaData(cd8_pd1, predictions, col.name=c("Program_projected", 
+                                                       paste0(gsub("prediction.score.", "", colnames(predictions)[2:ncol(predictions)]),
+                                                              "_score_projected")))
+
+## plot
+DimPlot(cd8_pd1, group.by="Program_projected", pt.size = 1, label=FALSE, label.size = 6)+ 
+  scale_color_manual(values=tcell_colors[names(tcell_colors) %in% cd8_pd1$Program_projected])
+ggsave(paste0(figure_dir, "UMAP_CD8_program_projectedFromFull.png"), width=6, height=6)
+
+## Proportion of programs by sample
+df<- as.data.frame(table(cd8_pd1$sample, cd8_pd1$Program_projected))
+colnames(df)<- c("Sample", "Program", "NCells")
+df<- df %>% group_by(Sample) %>% mutate(perCells=NCells/sum(NCells)) %>% as.data.frame()
+ggplot(df, aes(x=Sample, y=perCells, fill=Program))+
+  geom_bar(stat="identity")+
+  scale_fill_manual(values=tcell_colors[names(tcell_colors) %in% df$Program])+
+  theme_classic()
+ggsave(paste0(figure_dir, "Breakdown_cd8_programBySample.png"), width=4, height=4)
+
+saveRDS(cd8_pd1, file=paste0(pd1_data_dir, "CD8_pd1_seurat.Rds"))
+```
+
+## Projection of myeloid programs to pd1 myeloid
+```{r}
+seurat_list<-list(full=full_myeloid_seurat, pd1=myeloid_pd1)
+
+transferAnchors<-FindTransferAnchors(reference = seurat_list$full, query=seurat_list$pd1,
+                                     reduction = "pcaproject")
+
+predictions <- TransferData(anchorset = transferAnchors, 
+                            refdata = full_myeloid_seurat$NMF_rank6_annotByAdult10X,
+                            weight.reduction = "pcaproject")
+
+predictions_final<- predictions$predicted.id; names(predictions_final)<- rownames(predictions)
+myeloid_pd1<- AddMetaData(myeloid_pd1, predictions, col.name=c("Program_projected", 
+                                                       paste0(gsub("prediction.score.", "", colnames(predictions)[2:ncol(predictions)]),
+                                                              "_score_projected")))
+
+## plot
+DimPlot(myeloid_pd1, group.by="Program_projected", pt.size = 1, label=FALSE, label.size = 6)+
+  scale_color_manual(values=myeloid_colors[names(myeloid_colors) %in% myeloid_pd1$Program_projected])
+ggsave(paste0(figure_dir, "UMAP_Myeloid_program_projectedFromFull.png"), width=6, height=6)
+
+## Proportion of programs by sample
+df<- as.data.frame(table(myeloid_pd1$sample, myeloid_pd1$Program_projected))
+colnames(df)<- c("Sample", "Program", "NCells")
+df<- df %>% group_by(Sample) %>% mutate(perCells=NCells/sum(NCells)) %>% as.data.frame()
+ggplot(df, aes(x=Sample, y=perCells, fill=Program))+
+  geom_bar(stat="identity")+
+  scale_fill_manual(values=myeloid_colors[names(myeloid_colors) %in% df$Program])+
+  theme_classic()
+ggsave(paste0(figure_dir, "Breakdown_myeloid_programBySample.png"), width=4, height=4)
+
+saveRDS(myeloid_pd1, file=paste0(pd1_data_dir, "myeloid_pd1_noDC.B_seurat.Rds"))
+```
+
