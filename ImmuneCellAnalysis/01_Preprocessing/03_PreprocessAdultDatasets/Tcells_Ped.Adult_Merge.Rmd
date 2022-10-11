@@ -51,7 +51,7 @@ cohort<- "pedOnly_nomuv63"
 
 
 ## Read in age metadata
-age_meta<- read.csv("../../CohortAges_Filbin.Cell2021.csv")
+age_meta<- read.csv("../../NotUploaded/CohortAges_Filbin.Cell2021.csv")
 
 ## merge cm- due to memory issues, subset to common genes, order same way, then bind columns
 commonGenes<- rownames(adult_seurat)[rownames(adult_seurat) %in% rownames(tcell_seurat)]
@@ -100,9 +100,16 @@ tcell_meta<- tcell_seurat@meta.data
 tcell_seurat<- RunFullSeurat(tcell_seurat@assays$RNA@counts, RunHarmony = TRUE, samples=tcell_meta$sampleid)
 tcell_seurat<-AddMetaData(tcell_seurat, tcell_meta[,!colnames(tcell_meta) %in% colnames(tcell_seurat@meta.data)])
 
-## Basic visualizations
+saveRDS(tcell_seurat, file=paste0(analysis_dir, "adult_ped_tcell_merged_seurat_harmony.Rds"))
+```
+
+## Basic visualizations for harmony integrated ped/adult t cells
+```{r}
+tcell_seurat<- readRDS(paste0(analysis_dir, "adult_ped_tcell_merged_seurat_harmony.Rds"))
+
+
 DimPlot(tcell_seurat, group.by = "Age")+scale_color_manual(values=c(Adult="blue", Ped="red"))
-ggsave(paste0(figure_dir, "Tcell_UMAP_adult.ped_harmonyInt_byAge.png"), width=6, height=5)
+ggsave(paste0(figure_dir, "Tcell_UMAP_adult.ped_harmonyInt_byAge.pdf"), device="pdf", width=6, height=5)
 
 DimPlot(tcell_seurat, group.by = "sampleid")
 ggsave(paste0(figure_dir, "Tcell_UMAP_adult.ped_harmonyInt_byAge.sample.png"), width=8.5, height=5)
@@ -116,7 +123,7 @@ ggsave(paste0(figure_dir, "Tcell_UMAP.adult.ped_MarkerGenes.png"), width=8, heig
 DimPlot(tcell_seurat, label=TRUE)+NoLegend()
 ggsave(paste0(figure_dir, "Tcell_UMAP_adult.ped_seuratClusters.png"), width=6, height=6)
 
-saveRDS(tcell_seurat, file=paste0(analysis_dir, "adult_ped_tcell_merged_seurat_harmony.Rds"))
+
 ```
 
 ## Add on clonotype information
