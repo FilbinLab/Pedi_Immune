@@ -236,7 +236,15 @@ all_plots$legend<-  as_ggplot(get_legend(legend))
 all_plots<- all_plots[c(1:3,7,4:6)]
 cowplot::plot_grid(plotlist = all_plots, ncol=4)
 
-ggsave(paste0(figure_dir, "DensityOfNMFByMgMoMonocytes_rank", rank_use,".png"), width=20, height=8)
+ggsave(paste0(figure_dir, "DensityOfNMFByMgMoMonocytes_rank", rank_use,".pdf"), device="pdf", width=20, height=8)
+
+## KS test comparing Mg vs Mo for each program (not sure if you can do a 3 variable test with KS?)
+sapply(colnames(myeloid_df)[4:9], function(x){
+  print(x)
+  ks.test(myeloid_df[,x][myeloid_df$MgMoMonocyte_annot=="Adult_Mg_TAM"],
+        myeloid_df[,x][myeloid_df$MgMoMonocyte_annot=="Adult_Mo_TAM"])
+})
+
 
 ```
 
