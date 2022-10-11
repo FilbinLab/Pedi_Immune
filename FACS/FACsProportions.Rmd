@@ -17,10 +17,10 @@ nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
 source(nmf_helper)
 
 
-figure_dir<- paste0(working_dir, "/figures/FACs/")
+figure_dir<- paste0(working_dir, "/figures/")
 if(!dir.exists(figure_dir)){dir.create(figure_dir)}
 
-analysis_dir<- paste0(working_dir, "/analysis/FACs/")
+analysis_dir<- paste0(working_dir, "/analysis/")
 if(!dir.exists(analysis_dir)){dir.create(analysis_dir)}
 ```
 
@@ -28,6 +28,9 @@ if(!dir.exists(analysis_dir)){dir.create(analysis_dir)}
 ```{r}
 facs_df<- read.csv("../notUploaded/FACsPercentages.csv")
 colnames(facs_df)<- c("Sample", "CD3", "CD45", "TumorCells", "Total")
+
+## plot colors
+immune_colors<- readRDS("../ImmuneCellAnalysis/plot_colors/ImmuneCell.celltypes.Rds")
 ```
 
 ## Preprocess: 
@@ -49,10 +52,10 @@ facs_df$Subtype<- plyr::mapvalues(facs_df$Sample, subtypes$sample, subtypes$MySu
 
 ## Clean up subtype
 facs_df$Subtype<- gsub("hemiBCOR", "BCOR", 
-                       gsub("hemiG34R","Hemi_H3G34R",
+                       gsub("hemiG34R","H3G34R",
                             gsub("midlineHistoneWT", "Midline_HistoneWT",
                                  gsub("midlineK27M", "Midline_H3K27M", 
-                                      gsub("hemiHistoneWT", "Hemispheric_HistoneWT", facs_df$Subtype)))))
+                                      gsub("hemiHistoneWT", "GBM", facs_df$Subtype)))))
 
 ```
 
@@ -143,6 +146,40 @@ ggplot(facs_melt, aes(x=reorder(Sample, Order), y=ImmuneCellProportion, fill=Cel
         strip.text.x = element_text(face="bold", color="black"),
         axis.title.y =  element_text(face="bold", color="black", size=12))+
   xlab("")+ylab("Cell Proportion")+
-  scale_fill_manual(values=c(TCell="red", Myeloid="blue", TumorCells="olivedrab"))
+  scale_fill_manual(values=c(TCell="cadetblue4", Myeloid="gold3", TumorCells="#f52c7d"))
 ggsave(paste0(figure_dir, "ImmuneCellFACsPercentage_Tumor.Myeloid.Tcell.png"), width=9, height=4)
+
+
+## Remove adult samples
+adult_samples<-c("MUV063", "MV092", "MUV091", "MUV090")
+facs_melt<- facs_melt[!facs_melt$Sample %in% adult_samples,]
+
+ggplot(facs_melt, aes(x=reorder(Sample, Order), y=ImmuneCellProportion, fill=CellType))+
+  geom_bar(position="stack", stat="identity")+
+  facet_grid(cols=vars(Subtype), scale="free_x", space="free_x")+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle=45, hjust=1, face="bold", color="black"),
+        axis.text.y = element_text(face="bold", color="black"),
+        strip.text.x = element_text(face="bold", color="black"),
+        axis.title.y =  element_text(face="bold", color="black", size=12))+
+  xlab("")+ylab("Cell Proportion")+
+  scale_fill_manual(values=c(TCell="cadetblue4", Myeloid="gold3", TumorCells="#f52c7d"))
+ggsave(paste0(figure_dir, "ImmuneCellFACsPercentage_Tumor.Myeloid.Tcell_NoAdult.png"), width=9, height=4)
+
+## Remove adult samples + BCOR sample(s)
+samples_remove<-c("MUV063", "MV092", "MUV091", "MUV090", "MUV065")
+facs_melt<- facs_melt[!facs_melt$Sample %in% samples_remove,]
+
+ggplot(facs_melt, aes(x=reorder(Sample, Order), y=ImmuneCellProportion, fill=CellType))+
+  geom_bar(position="stack", stat="identity")+
+  facet_grid(cols=vars(Subtype), scale="free_x", space="free_x")+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle=45, hjust=1, face="bold", color="black"),
+        axis.text.y = element_text(face="bold", color="black"),
+        strip.text.x = element_text(face="bold", color="black"),
+        axis.title.y =  element_text(face="bold", color="black", size=12))+
+  xlab("")+ylab("Cell Proportion")+
+  scale_fill_manual(values=c(TCell="cadetblue4", Myeloid="gold3", TumorCells="#f52c7d"))
+ggsave(paste0(figure_dir, "ImmuneCellFACsPercentage_Tumor.Myeloid.Tcell_NoAdult.BCOR.png"), width=8, height=4)
+ggsave(paste0(figure_dir, "ImmuneCellFACsPercentage_Tumor.Myeloid.Tcell_NoAdult.BCOR.pdf"), device="pdf", width=8, height=4)
 ```
