@@ -52,6 +52,7 @@ all_files<- all_files[grepl("WithBackground", all_files)]
 analysis_names<-gsub("WithBackgroundx100_ClonalVsNonclonal_Expression.CV_Zscores_ped_cd8_", "", gsub(".Rds", "", all_files))
 
 GOI<- c("KLRB1", "GZMB", "NKG7", "CCL5", "IL7R", "CCR7", "KLRK1", "ITGAE", "CCL4", "KLRD1", "GPR56", "PTGER2", "SELPLG")
+GOI<- c("KLRB1","PTGER2", "SELPLG")
 outliers_plot<- 20
 
 all_outliers<- list()
@@ -70,7 +71,7 @@ for(analysis in analysis_names){
     cnc_res$label<-ifelse(rownames(cnc_res) %in% GOI, rownames(cnc_res), "")
       
     ## assign outliers- expression + cv filter, then top n by expression
-    outliers_all<- cnc_res[cnc_res$Expr_background_zscore>1.5 & cnc_res$CV_background_zscore < -1.2,]
+    outliers_all<- cnc_res[cnc_res$Expr_background_zscore>1.5 & cnc_res$CV_background_zscore < -1.8,] ## was -1.2
     outliers_all<- outliers_all[order(outliers_all$Expr_background_zscore, decreasing =TRUE),]
     outliers<- rownames(outliers_all)[1:outliers_plot]
     
@@ -78,17 +79,23 @@ for(analysis in analysis_names){
     cnc_res$GOI<- ifelse(rownames(cnc_res) %in% GOI, "GOI", ifelse(rownames(cnc_res) %in% outliers, "outlier", "no"))
     cnc_res$label<-ifelse(rownames(cnc_res) %in% c(outliers, GOI), rownames(cnc_res), "")
     
-    ggplot(cnc_res, aes(x=CV_background_zscore, y=Expr_background_zscore, color=GOI, alpha=GOI))+
-      geom_point()+
+    ggplot(cnc_res, aes(x=CV_background_zscore, y=Expr_background_zscore, color=GOI))+
+      geom_point(aes(alpha=GOI))+
+      theme_classic()+
       #scale_color_manual(values=c(yes="red", no="grey71"))+
       scale_color_manual(values=c(GOI="red",outlier="black", no="grey71"))+
-      geom_text(aes(label=label), size=2, nudge_x = 0.3, nudge_y=-0.1)+
-      scale_alpha_manual(values=c(GOI=1, outlier=1, no=0.2))+
-      theme_classic()+
+      geom_text(aes(label=label, alpha=GOI, size=GOI),  nudge_x = 0.4, nudge_y=-0.1)+
+      scale_alpha_manual(values=c(GOI=1, outlier=.7, no=0.2))+
+      scale_size_manual(values=c(GOI=3.5, outlier=2, no=0))+
+      theme(legend.position = "none",
+            axis.title=element_text(face="bold", color="black"),
+            axis.text = element_text(face="bold", color="black"))+
       xlim(-6.5,6.5)+
-      ggtitle(analysis)
+      ggtitle(analysis)+
+      ylab("Expression background Z score")+
+      xlab("CV background Z score")
     
-    #ggsave(paste0(figure_dir, analysis, "_ExprCVZscores_GOI.outliers.png"), width=6, height=4.5)
+    ggsave(paste0(figure_dir, analysis, "_ExprCVZscores_GOI.outliers_editedFigure.png"), width=6, height=4.5)
     
   ## 3. Plot top 20 genes in DotPlot
     ## merge clonal/nonclonal seurat objects
