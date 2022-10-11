@@ -1,0 +1,184 @@
+---
+title: "MergeSamples_QC_ToSeurat.Rmd"
+author: "Jenna LaBelle"
+date: "11/04/21"
+output: html_document
+---
+
+```{r}
+library(Seurat) 
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/SS2/PD1_Treat/Immune/")
+
+analysis_dir<- paste0(working_dir, "/analysis/preprocess/")
+figure_dir<- paste0(working_dir, "/figures/preprocess/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+```
+
+## Read in data:
+```{r}
+## read in count matrices
+cm_files<- list.files("data/", pattern="tpm.csv")
+cm<-read.csv(paste0("data/", cm_files[1]), row.names = "gene_id")
+for(i in cm_files[2:length(cm_files)]){
+  cm_tmp<- read.csv(paste0("data/", i), row.names = "gene_id")
+  cm<- cbind(cm, cm_tmp)
+}
+
+## Create simple metadata
+metadata<- data.frame(cells=colnames(cm))
+metadata$sampleid<- ifelse(grepl("BT1910", metadata$cells), "BT1910", "BT1935")
+
+## Clonality info 
+  load(paste0("analysis/tracer/clonalTcells_cluster.Rda"))
+  clonal_cells<- unlist(unname(clonal)); rm(clonal); rm(clonotypes.all); rm(clonotypes.cells); rm(tcell.reconstructed)
+  
+## Cycling/HK markers
+marker_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Marker_genes/")
+cycling_genes<- read.table(paste0(marker_dir,"regev_lab_cell_cycle_genes.txt"))
+hkgenes <- read.table(paste0(marker_dir, "tirosh_house_keeping.txt"), skip = 2)
+hkgenes <- as.vector(hkgenes$V1)
+```
+
+
+
+## Create seurat object
+```{r}
+seurat_obj<- RunFullSeurat_Immune(cm=cm, samples=metadata$sampleid)
+
+saveRDS(seurat_obj, file=paste0(analysis_dir, "seurat_obj_raw.Rds"))
+```
+
+## Basic QC- matches same QC as rest of cohort, by Orr
+## Quality control metrics
+
+Count number of UMIs per cell (these are TPM in SmartSeq2), number of genes expressed per cell, number of human housekeeping genes expressed per cell, and fraction mitochondrial gene expression per cell.
+
+```{r quality, eval = T}
+## split seurat by sample
+sampleid<- unique(seurat_obj$sampleid)
+seurat_obj_split<- SplitObject(seurat_obj, "sampleid")
+
+# Within each sample, get number of expressed housekeeping genes detected per cell barcode and
+# fraction of mitochondrial gene expression.
+for (i in sampleid) {
+  # Indices of hkgenes not present in seurat_obj.
+  hkgenes.notfound.indices <- which(!hkgenes %in% rownames(seurat_obj_split[[i]]))  
+  if (length(hkgenes.notfound.indices)) {
+    message = paste0(paste0(hkgenes[hkgenes.notfound.indices], collapse = " "), " housekeeping genes were not found in sample ", i)
+    print(message)
+  }
+  
+  # Get number of expressed housekeeping genes.
+  hkgenes.found <- hkgenes[-hkgenes.notfound.indices]  # remove hkgenes that were not found
+  seurat_obj_split[[i]][["nHK_RNA"]] <- Matrix::colSums(seurat_obj_split[[i]][['RNA']]@data[hkgenes.found, ] > 0)
+  
+  # Mitochondrial genes can be identified in USCS Table Browser using chrM search.
+  seurat_obj_split[[i]][["percent_mito"]] <- PercentageFeatureSet(seurat_obj_split[[i]], pattern = "^MT-")
+  
+  print (paste0(sum(seurat_obj_split[[i]][["percent_mito"]] > .1), " of ", ncol(seurat_obj_split[[i]]), " cells have greater than 10% mitochondrial gene expression"))
+}
+
+# Merge Seurat objects. 
+seurat_obj<- merge(x = seurat_obj_split[[1]], y = seurat_obj_split[2:length(seurat_obj_split)], add.cell.ids = NULL)
+Idents(seurat_obj) <- "sampleid"  # use identity based on sample identity
+
+# Plot number of genes per cell, percent mitochondrial gene expression, and number of housekeeping genes. 
+# This is done on a Seurat object merged across samples.
+VlnPlot(seurat_obj, features = c("nFeature_RNA", "nHK_RNA"), ncol = 1, pt.size = 0.5) 
+ggsave(paste0(figure_dir, "vln_nGene_nHK.png"), width = 6, height = 6)
+```
+
+## Filter cells
+Remove cells that have a high percentage mitochondrial gene expression, or too few or too many genes detected. Remove cells from E30, E88, E119. This is all stored in Seurat @data slot. 
+```{r filtercells, eval = T}
+n.cells.beforeqc<- table(seurat_obj$sampleid)
+
+# Filter cells based on nGene, nHK, and percent.mito and store in @data slot 
+seurat_obj <- subset(seurat_obj, subset = nFeature_RNA > 500 & nFeature_RNA < 5000 & nHK_RNA > 20)
+seurat_obj<- SetIdent(seurat_obj, value=seurat_obj$sampleid)
+```
+
+## Quality control metrics after filtering
+These are a few quality control metrics after the final filtering of genes and cells. We look at number of cells, number of genes per cell, and fraction of reads mapping to different genomic regions.
+```{r qc_postfilter, eval = T}
+# Number of cells in each experiment after filtering.
+table(Idents(seurat_obj))
+
+# Group cells by their experimental sample and find number of cells and median genes per sample after filtering. 
+qc <- seurat_obj[[]] %>% group_by(sampleid) %>% summarise(n.cells.after = n(), med.nGene = median(nFeature_RNA)) 
+
+# Include number of cells per sample before filtering and sort samples by their original order.
+qc <- merge(data.frame("sampleid" = names(n.cells.beforeqc), "n.cells.before" = n.cells.beforeqc), qc, by = "sampleid") 
+rownames(qc) <- qc$sampleid
+qc <- qc[as.character(sampleid), ]  # reorder rows to have same order as sampleid
+print(qc)
+
+
+# Total number of cells before and after filtering
+sum(qc$n.cells.before.Freq)
+sum(qc$n.cells.after)
+
+# Save current progress.
+saveRDS(seurat_obj, file=paste0(analysis_dir, "tcell.myeloid_seurat.Rds"))
+```
+
+## Score for cycling
+```{r}
+cycling_genes<- list(cycling=cycling_genes$V1)
+
+cm_list<- NormCenter(seurat_obj@assays$RNA@counts)
+cm_mean<- log2(rowMeans(seurat_obj@assays$RNA@counts) + 1)
+cycling_score<- scoreSignature(cm_list$center_data, cm_mean, s=cycling_genes$cycling)
+
+sum(names(cycling_score)==colnames(seurat_obj)); ncol(seurat_obj); length(cycling_score)
+seurat_obj$cycling_score<- cycling_score
+seurat_obj$cycling_predicted<- ifelse(seurat_obj$cycling_score>=1, "cycling", "not_cycling")
+```
+
+
+## Re-run clustering/UMAP
+```{r}
+seurat_meta<- seurat_obj@meta.data
+seurat_obj<- RunFullSeurat_Immune(seurat_obj@assays$RNA@counts, samples=seurat_obj$sampleid)
+seurat_obj<- AddMetaData(seurat_obj, seurat_meta[,!colnames(seurat_meta) %in% colnames(seurat_obj@meta.data)])
+
+saveRDS(seurat_obj, file=paste0(analysis_dir, "tcell.myeloid_seurat.Rds"))
+```
+
+## Add on metadata
+```{r}
+## Add clonality info- need to slightly rename cells
+seurat_obj$clonal<- ifelse(colnames(seurat_obj) %in% clonal_cells, "clonal", "nonclonal")
+```
+
+
+
+
+## Optional: Run with harmony, save
+```{r}
+library(harmony)
+
+seurat_obj<- readRDS(paste0(analysis_dir, "tcell.myeloid_seurat.Rds"))
+
+immune_meta<- seurat_obj@meta.data
+seurat_obj<-RunFullSeurat(cm=seurat_obj@assays$RNA@counts, RunHarmony = TRUE, samples=seurat_obj$sampleid)
+seurat_obj<- AddMetaData(seurat_obj, immune_meta[,!colnames(immune_meta) %in% colnames(seurat_obj@meta.data)])
+
+saveRDS(seurat_obj, file=paste0(analysis_dir,"HarmonyInt/", "tcell.myeloid_seurat.Rds"))
+```
+
+
+
