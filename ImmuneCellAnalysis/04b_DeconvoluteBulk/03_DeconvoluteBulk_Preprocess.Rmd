@@ -161,13 +161,25 @@ survival_tcga<- meta_read$idh1_YA; rm(meta_read)
 cb_tcga<- read.csv("data/CIBERSORTx_Results_TCGA.IDHmut.AYA.csv")
   
 
-  
+## EPN
+cb_epn<- read.csv("data/CIBERSORTx_Results_EPN.csv")
+load(paste0(data_dir, "Ependymoma/epn_clinical.Robj"))
+clinical_epn<- epn_clinical; rm(epn_clinical)
+
+load(paste0(data_dir, "Ependymoma/epn_surv.Robj"))
+clinical_epn<- merge(clinical_epn, epn_surv, by="submitter_id")
+clinical_epn<- clinical_epn %>% dplyr::rename(Sample=submitter_id) %>% as.data.frame()
+clinical_epn$censored<- as.numeric(gsub(FALSE, 0, gsub(TRUE, 1, clinical_epn$censored)))
+```
+
 ## List of cibersort res/clinical
+```{r}
 input_list<- list(CBTN_WT=list(ciber=cb_cbtn_wt, meta=clinical_cbtn_wt),
                   CBTN_K27M=list(ciber=cb_cbtn_k27m, meta=clinical_cbtn_k27m),
                   CBTN_All=list(ciber=cb_cbtn, meta=clinical_cbtn),
                   DFCI=list(ciber=cb_dfci, meta=clinical_dfci),
-                  TCGA_IDHmutAYA=list(ciber=cb_tcga, meta=clinical_tcga))
+                  TCGA_IDHmutAYA=list(ciber=cb_tcga, meta=clinical_tcga),
+                  EPN=list(ciber=cb_epn, meta=clinical_epn))
 
 ## Fix program annotations
 input_list<- lapply(input_list, function(input){
@@ -245,7 +257,7 @@ cb_program_norm_list<- lapply(cb_prop_list, function(cb_prop){
   return(list(cd8=res_cd8, cd4=res_cd4, myeloid=res_myeloid))
 })
 
-saveRDS(cb_program_norm_list, file=paste0(analysis_dir, "CiberSortRes_normByCellType_TCGA.CBTN.DFCI.Rds"))
+saveRDS(cb_program_norm_list, file=paste0(analysis_dir, "CiberSortRes_normByCellType_TCGA.CBTN.DFCI.EPN.Rds"))
 ```
 
 ## Plot overall proportions
@@ -350,10 +362,68 @@ for(cohort in names(cb_prop_list)){
 
 ```
 
+## Plot average proportion of each program by tumor type
+```{r}
+## Get mean program proportion for each cohort
+mean_prop_byCohort_byCellType<- lapply(cb_program_norm_list, function(cohort){
+  mean_prop_byCellType<- lapply(cohort, function(celltype){
+    celltype %>% group_by(Program) %>% summarise(meanProp=mean(perCells)) %>% as.data.frame()
+  })
+  names(mean_prop_byCellType)<- names(cohort)
+  return(mean_prop_byCellType)
+})
+
+## Merge into single df for each cell type
+mean_prop_byCohort_byCellType<- lapply(c("cd8", "cd4", "myeloid"), function(celltype){
+ meanProp_byCohort<- lapply(names(mean_prop_byCohort_byCellType), function(cohort){
+  tmp<- mean_prop_byCohort_byCellType[[cohort]][[celltype]]
+  tmp$cohort<- cohort
+  return(tmp)
+  })
+  meanProp_byCohort<- do.call("rbind", meanProp_byCohort) 
+  return(meanProp_byCohort)
+})
+names(mean_prop_byCohort_byCellType)<-c("cd8", "cd4", "myeloid")
+
+
+## Plot
+ggplot(mean_prop_byCohort_byCellType$cd8, aes(x=cohort, y=meanProp, fill=Program))+
+    geom_bar(stat="identity")+
+    theme_classic()+
+    scale_fill_manual(values=tcell_program_colors[names(tcell_program_colors) %in% program_prop$cd8$Program] )+
+  theme(axis.text = element_text(face="bold", color="black"),
+        axis.title = element_text(face="bold", color="black"))+
+  xlab("")+
+  ylab("mean predicted proportion")+
+  ggtitle("CD8")
+
+ggplot(mean_prop_byCohort_byCellType$cd4, aes(x=cohort, y=meanProp, fill=Program))+
+    geom_bar(stat="identity")+
+    theme_classic()+
+    scale_fill_manual(values=tcell_program_colors[names(tcell_program_colors) %in% program_prop$cd4$Program] )+
+  theme(axis.text = element_text(face="bold", color="black"),
+        axis.title = element_text(face="bold", color="black"))+
+  xlab("")+
+  ylab("mean predicted proportion")+
+  ggtitle("CD4")
+
+ggplot(mean_prop_byCohort_byCellType$myeloid, aes(x=cohort, y=meanProp, fill=Program))+
+    geom_bar(stat="identity")+
+    theme_classic()+
+    scale_fill_manual(values=myeloid_program_colors[names(myeloid_program_colors) %in% program_prop$myeloid$Program] )+
+  theme(axis.text = element_text(face="bold", color="black"),
+        axis.title = element_text(face="bold", color="black"))+
+  xlab("")+
+  ylab("mean predicted proportion")+
+  ggtitle("Myeloid")
+```
+
+
+
 
 ## Calculate high/low for each program (based on 50/50 split)
 ```{r}
-cb_program_norm_list<- readRDS(paste0(analysis_dir, "CiberSortRes_normByCellType_TCGA.CBTN.DFCI.Rds"))
+cb_program_norm_list<- readRDS(paste0(analysis_dir, "CiberSortRes_normByCellType_TCGA.CBTN.DFCI.EPN.Rds"))
 
 ## Settings
 quant_split_thresh<- .5

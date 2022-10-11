@@ -262,7 +262,7 @@ write.table(sc_cm, file = paste0(analysis_dir_use, "scRNAseq_reference.cm_tcellP
 ## Bulk data
 ```{r}
 analysis_dir_use<- paste0(analysis_dir, "cibersort_input/")
-data_dir<- "/Users/jlabelle/Dropbox (Partners HealthCare)/FilbinLab/data_analysis/PublishedDatasets/BulkRNAseq/"
+data_dir<- "/Users/jlabelle/Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/PublishedDatasets/BulkRNAseq/"
 
 ## CBTN: HGG+DIPG, WT and K27M available
 tpm<- readRDS(paste0(data_dir, "CBTN/tpm_allSamples_processed.Rds"))
@@ -286,6 +286,24 @@ write.table(tpm, file = paste0(analysis_dir_use, "TCGA_IDHmut.AYA_cm.txt"), quot
 
 
 ```
+
+
+## Microarray (epn)
+```{r}
+library(affy)
+
+data_dir<- "/Users/jlabelle/Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/PublishedDatasets/BulkRNAseq/"
+
+## Load microarray counts
+load(paste0(data_dir, "Ependymoma/epn_cm_ProbesConverted_SamplesWithSurv.Robj"))
+
+## normalize (log2)
+epn_log<- log2(epn_cm + 1)
+epn_log$GeneSymbol<- rownames(epn_log)
+epn_log<- epn_log[,c("GeneSymbol", colnames(epn_cm))]
+write.table(epn_log, file = paste0(analysis_dir_use, "EPN_microarrayLog2_cm.txt"), quote= FALSE, row.names = FALSE, sep="\t")
+```
+
 
 ## Mean expression of GOI in bulk data
 ```{r}

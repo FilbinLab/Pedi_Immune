@@ -63,6 +63,7 @@ files<- list.files(data_dir, pattern="HighLowPropSplit")
 #files<- files[grep("DFCI", files)] ## "onlyDFCI"
 #files<- files[grep("TCGA", files)] ## "onlyTCGA"
 files<- files[grepl(paste(c("CBTN_All"), collapse = "|"), files)]
+#files<- files[grepl(paste(c("EPN"), collapse = "|"), files)]
 
 analysis_name<- "OnlyCBTN_noDNA"
 ```
@@ -106,6 +107,7 @@ finalMeta_allCellTypes<- lapply(c("cd8", "cd4", "myeloid", "GOI"), function(cell
   return(tmp)
 })
 names(finalMeta_allCellTypes)<- c("cd8", "cd4", "myeloid", "GOI")
+finalMeta_allCellTypes<- finalMeta_allCellTypes[!unlist(lapply(finalMeta_allCellTypes, is.null))]
 
 ## If analysis name == OnlyCBTN_noDNA: remove samples that are "DataNotAvailable" for Histone mutation
 if(analysis_name=="OnlyCBTN_noDNA"){
@@ -140,6 +142,8 @@ head(finalMeta_allCellTypes$cd8)
 #ToControlFor<- c("Age", "Sex", "TumorType_detailed", "Primary_Recurrent", "HistoneStatus")
 #ToControlFor<- c("Age", "Sex", "Primary_Recurrent", "HistoneStatus", "Location")
 ToControlFor<- c("Age", "Sex", "Primary_Recurrent", "HistoneStatus", "TumorType_detailed")
+ToControlFor<- c("Subtype", "Gender", "Location", "Chemo", "Radio", "Progression", "Age", "Re")
+ToControlFor<- c("Primary_Recurrent", "TumorType_detailed", "HistoneStatus") ## Final variables controlled for
 
 split_method<- "" ## "" for high/low (default), "_numericProp" for actual proportions
 ```
@@ -228,7 +232,7 @@ cox_df<-na.omit(allSamples_diagnosis$cox_df)
 sig<-cox_df[cox_df$`Pr(>|z|)` < 0.1,]
 sig_variables<-unique(sig$Variable)
 
-#ToBeControlled<- sig_variables
+ToBeControlled<- sig_variables
 #ToBeControlled<- "HistoneStatus"
 ```
 
@@ -278,7 +282,7 @@ cox_df<-na.omit(allSamples_diagnosis$cox_df)
 sig<-cox_df[cox_df$`Pr(>|z|)` < 0.1,]
 sig_variables<-unique(sig$Variable)
 
-#ToBeControlled<- sig_variables
+ToBeControlled<- sig_variables
 #ToBeControlled<- "HistoneStatus"
 ```
 
@@ -486,7 +490,7 @@ ggplot(df, aes(x=HazardRatio, y=ControlFor,color=Variable ))+
   scale_alpha_manual(aes(alpha=Sig), values = c(NotSig=.2, AlmostSig=.5, Sig=1), guide="none")
 ggsave(paste0(figure_dir, "allCoxResults_ControlFor.", 
               paste(ToBeControlled, collapse="."),"_", 
-              analysis_name,split_method, ".png"), width=14, height=5)
+              analysis_name,split_method, ".pdf"), device="pdf", width=13, height=5)
 ```
 
 
