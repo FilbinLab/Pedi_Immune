@@ -107,6 +107,7 @@ seurat_plot<- immune_seurat
 seurat_plot$plotting<- seurat_plot$broad_annot
 DimPlot(seurat_plot, group.by = "plotting", label = TRUE, label.size = 10) %>% umap_theme()
 ggsave(paste0(figure_dir, "TCellMyeloid.png"), width=6, height=5.5)
+ggsave(paste0(figure_dir, "TCellMyeloid.pdf"),device="pdf", width=6, height=5.5)
 
 ## With CD4/CD8 distinction
 immune_seurat$Final_detailed_annot<- ifelse(immune_seurat$broad_annot=="Myeloid", "Myeloid", immune_seurat$Final_detailed_annot)
@@ -122,6 +123,7 @@ seurat_plot<- immune_seurat
 seurat_plot$plotting<- seurat_plot$Age
 DimPlot(seurat_plot, group.by = "plotting", label=FALSE, label.size = 8) %>% umap_theme(colors=c(Ped="red", Adult="navy"))
 ggsave(paste0(figure_dir, "byAge.png"), width=6, height=5.5)
+ggsave(paste0(figure_dir, "byAge.pdf"), device="pdf", width=6, height=5.5)
 
 ## By dataset
 seurat_plot<- immune_seurat

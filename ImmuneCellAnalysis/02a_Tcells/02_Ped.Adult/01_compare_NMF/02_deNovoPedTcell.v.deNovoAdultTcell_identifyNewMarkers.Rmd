@@ -21,7 +21,7 @@ base_dir = "/Users/jlabelle/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
 working_dir<- paste0(base_dir, 
                      "Dropbox (Partners HealthCare)/FilbinLab/",
-                     "data_analysis/Projectsgit_repos/Pedi_Immune/ImmuneCellAnalysis/02a_Tcells/02_Ped.Adult/01_compare_NMF/")
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/02a_Tcells/02_Ped.Adult/01_compare_NMF/")
 
 analysis_dir<- paste0(working_dir, "/analysis/newMarkers_deNovoPed.AdultTcell/")
 figure_dir<- paste0(working_dir, "/figures/newMarkers_deNovoPed.AdultTcell/")
@@ -55,9 +55,9 @@ merge_cd4.cd8<- FALSE
 programs_remove<-c("EffectorMemory2", "NMF9")
 
 ## Read in markers
-ped_tcell_markers<- read.csv(paste0( "../../01a_Ped/NMF/analysis/deNovoNMF/", cohort, 
+ped_tcell_markers<- read.csv(paste0( "../../01a_Ped/01_NMF/analysis/deNovoNMF/", cohort, 
                                      "/top_DE_genes_annotated_NMF_rank", rank_use,".csv"))
-adult_tcell_markers<- read.csv(paste0( "../../01b_Adult/NMF/analysis/deNovoNMF/", 
+adult_tcell_markers<- read.csv(paste0( "../../01b_Adult/01_NMF/analysis/deNovoNMF/", 
                                        "/top_DE_genes_annotated_NMF_rank",rank_use, ".csv"))
 
 ## Rename markers as needed to reflect desired merges- for now, all cyto/inhibitory are merged together
@@ -120,10 +120,54 @@ new_programs<- list(union=c(union_gene_list, specific_gene_list),
 saveRDS(new_programs, file=paste0(analysis_dir, "merged.ped.adultRank",rank_use, ".genes_specific_shared.union.intersect.Rds"))
 ```
 
+## Plot overlap of genes / correlation of scores between "shared" programs
+To show that "shared" programs in T cells are quite similar to one another (in contrast to myeloid)
+```{r}
+## Programs to merge
+merge_programs<- names(adult_tcell_markers)[names(adult_tcell_markers) %in% names(ped_tcell_markers)]
+
+## Score for annotated programs- pre-merging/re-generating
+names(ped_tcell_markers)<-paste0("Ped_" ,names(ped_tcell_markers))
+names(adult_tcell_markers)<- paste0("Adult_", names(adult_tcell_markers))
+
+scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean,c(ped_tcell_markers, adult_tcell_markers) )))
+scores_factor_hc = clusterNmfFactors(scores)
+scores_factor_cor = scores_factor_hc$cor_coef[scores_factor_hc$hc_obj$order, scores_factor_hc$hc_obj$order]
+cor_shared_programs<- sapply(merge_programs, function(program){
+  scores_factor_cor[paste0("Ped_", program), paste0("Adult_", program)]
+})
+
+## Get overlap of "shared" programs
+gene_overlaps<- sapply(merge_programs, function(program){
+  sum(unlist(unname(ped_tcell_markers[grepl(program, names(ped_tcell_markers))])) %in% 
+        unlist(unname(adult_tcell_markers[grepl(program, names(adult_tcell_markers))])))
+})
+
+## df with correlation/overlaps
+overlaps<- data.frame(program=merge_programs,
+                nOverlap=as.numeric(plyr::mapvalues(merge_programs, names(gene_overlaps), gene_overlaps)),
+                PearsonCorrelation=as.numeric(plyr::mapvalues(merge_programs, names(cor_shared_programs), cor_shared_programs)))
+
+## Plot numeric overlaps
+overlaps$dummy<-"x"
+ggplot(overlaps, aes(y=program, x=dummy, color=PearsonCorrelation, size=nOverlap))+
+  geom_point()+
+  scale_color_gradient2(low="yellow",mid="orange", high="red", midpoint=0.7)+
+  theme_classic()+
+  theme(axis.text.y = element_text(face="bold"),
+        axis.text.x = element_blank())+
+  ylab("")+
+  xlab("")
+ggsave(paste0(figure_dir, "Overlap_sharedPedAdult_Rank", rank_use, ".png"), width=4, height=3)
+
+## save df for plotting simultaneously with myeloid
+write.csv(overlaps, file = paste0(analysis_dir, "sharedPedAdult_rank", rank_use, "_nGeneOverlap_PearsonCorr.csv"))
+```
+
 ## Score all cells for "new" programs, assign max program 
 intersect: 65 cells score <0, 301<.2. Spread evenly across programs
 ```{r}
-rank_use<- 9
+rank_use<- 8
 new_programs<- readRDS(paste0(analysis_dir, "merged.ped.adultRank",rank_use, ".genes_specific_shared.union.intersect.Rds"))
 union_intersect<-"intersect"
 gene_list<- new_programs[[union_intersect]]

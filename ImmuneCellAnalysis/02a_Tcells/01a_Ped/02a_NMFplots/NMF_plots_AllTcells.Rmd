@@ -169,7 +169,7 @@ if(add_lines){
 }else{p}
 
   
-ggsave(paste0(figure_dir, "AllTcells_Heatmap_TopNMFgenes_annot_rank", rank,figure_append, ".png"), width=16, height=11)
+ggsave(paste0(figure_dir, "AllTcells_Heatmap_TopNMFgenes_annot_rank", rank,figure_append, ".png"), width=16, height=14)
 
 
 ```

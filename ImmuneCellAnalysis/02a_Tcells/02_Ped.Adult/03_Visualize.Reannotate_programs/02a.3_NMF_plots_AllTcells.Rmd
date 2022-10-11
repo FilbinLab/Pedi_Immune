@@ -70,14 +70,15 @@ celltype_colors<- readRDS(paste0("../../../plot_colors/Tcell.celltypes.Rds"))
 ## Subset to top markers for each nmf- top 10
 ```{r}
 marker_genes<- program_markers
+nMarkers<- 5
 
 ## If any genes are top markers for multiple clusters- remove, then find top 10 again
-top_markers<- marker_genes %>% group_by(cluster) %>% slice_max(order_by = avg_log2FC, n = 10) %>% as.data.frame()
+top_markers<- marker_genes %>% group_by(cluster) %>% slice_max(order_by = avg_log2FC, n = nMarkers) %>% as.data.frame()
 if(sum(duplicated(top_markers$gene))!=0){
   duplicated<- top_markers$gene[duplicated(top_markers$gene)]
   print(paste0("Shared top markers: ", paste(duplicated, collapse=",")))
   marker_genes<- marker_genes[!marker_genes$gene %in% duplicated,]
-  top_markers<- marker_genes %>% group_by(cluster) %>% slice_max(order_by = avg_log2FC, n = 10) %>% as.data.frame()
+  top_markers<- marker_genes %>% group_by(cluster) %>% slice_max(order_by = avg_log2FC, n = nMarkers) %>% as.data.frame()
 }
 all_markers<- top_markers
 all_markers$cluster<- as.character(all_markers$cluster)
@@ -90,7 +91,7 @@ all_markers$cluster<- as.character(all_markers$cluster)
 rank<- "8"
 add_lines<- TRUE
 program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
-grouping_variable<- "Age" ## variable to pseudobulk by. "Subtype", "Age", "detailed_annot"
+grouping_variable<- "detailed_annot" ## variable to pseudobulk by. "Subtype", "Age", "detailed_annot"
 
 top_markers<-all_markers
 program_order<- c("Cytotoxic\nNKreceptor", "Predysfunctional", "Inhibitory", "Treg", "Cycling", "IFN\nResponse", "Memory","Effector\nMemory", "Stress")
@@ -151,7 +152,7 @@ if(add_lines){
 }else{p}
 
   
-ggsave(paste0(figure_dir, "AllTcells_Heatmap_TopNMFgenes_annot_rank", rank,figure_append, ".png"), width=18, height=11)
+ggsave(paste0(figure_dir, "AllTcells_Heatmap_TopNMFgenes_annot_rank", rank,figure_append, "_5Markers.pdf"), device="pdf", width=16, height=18)
 
 
 ```

@@ -96,7 +96,7 @@ for(cohort in names(surv_res_list)){
     plot_mySurvAnalysis(survRes[[geneset]]$fit,input, DepColumnName = geneset)
   })
   p<-arrange_ggsurvplots(all_plots, ncol=3, nrow=ceiling(length(all_plots)/3))
-  ggsave(plot=p, paste0(figure_dir_use, "CD8_SurvRes_allGenesets.png"), width=9, height=9)
+  ggsave(plot=p, paste0(figure_dir_use, "CD8_SurvRes_allGenesets.pdf"), device="pdf", width=9, height=9)
 }
 ```
 
@@ -131,10 +131,10 @@ for(cohort in names(surv_res_list)){
   
   ## Plot
   all_plots<- lapply(genesets_test, function(geneset){
-    plot_mySurvAnalysis(survRes[[geneset]]$fit,input, DepColumnName = geneset, showPvalue = FALSE)
+    plot_mySurvAnalysis(survRes[[geneset]]$fit,input, DepColumnName = geneset, showPvalue = TRUE)
   })
   p<-arrange_ggsurvplots(all_plots, ncol=3, nrow=ceiling(length(all_plots)/3))
-  ggsave(plot=p, paste0(figure_dir_use, "CD4_SurvRes_allGenesets_noPvalue.png"), width=9, height=9)
+  ggsave(plot=p, paste0(figure_dir_use, "CD4_SurvRes_allGenesets.pdf"), device="pdf", width=9, height=9)
 }
 ```
 

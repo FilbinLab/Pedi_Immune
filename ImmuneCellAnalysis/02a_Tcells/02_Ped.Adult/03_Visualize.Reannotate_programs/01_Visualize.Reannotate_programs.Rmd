@@ -63,7 +63,7 @@ program_markers<- readRDS(paste0("../01_compare_NMF/analysis/newMarkers_deNovoPe
                                  "new_markers_NMFrank", rank_use, "_bySeurat_sharedBy", sharedBy, ".Rds"))
 
 ## Read in colors to use
-program_colors<- readRDS(paste0("../../../plot_colors/Tcell.programs_rank", rank_use, "sharedBy", sharedBy, ".Rds"))
+program_colors<- readRDS(paste0("../../../plot_colors/Tcell.programs_rank", rank_use, "sharedBy", sharedBy, "_reAnnot.Rds"))
 tcell_colors<- readRDS(paste0("../../../plot_colors/Tcell.celltypes.Rds"))
 cell_colors<- readRDS(paste0("../../../plot_colors/ImmuneCell.celltypes.Rds"))
 
@@ -128,14 +128,14 @@ bd_age<- bd_age[bd_age$celltype!="Unclear",]
   bd_age<- bd_age %>%  group_by(celltype,  age) %>% mutate(PerCells=nCells/sum(nCells)) %>% as.data.frame()
   ggplot(bd_age, aes(x=age, y=PerCells, fill=program))+
     geom_bar(stat="identity", position="stack")+
-    scale_fill_manual(values=colors_use)+
+    scale_fill_manual(values=program_colors)+
     facet_grid(cols=vars(celltype))+
     theme_classic()+
     theme(axis.text.x = element_text(angle=45, hjust=1),
           axis.text = element_text(face="bold", color="black"),
           axis.title = element_text(face="bold", color="black"))+
     ylab("Proportion of cells")+xlab("")
-  ggsave(paste0(figure_dir, "CD4.CD8breakdown_byProgram.byAge.png"), width=7, height=5)
+  ggsave(paste0(figure_dir, "CD4.CD8breakdown_byProgram.byAge.pdf"), device="pdf", width=7, height=5)
   
   ## Program by cell type
   bd_age<- bd_age %>%  group_by(program,  age) %>% mutate(PerCells=nCells/sum(nCells)) %>% as.data.frame()
@@ -559,7 +559,7 @@ bd<- bd[bd$CellType!="Unclear",]
           axis.text = element_text(face="bold", color="black"),
           axis.title = element_text(face="bold", color="black"))+
     ylab("Proportion of cells")+xlab("")
-  ggsave(paste0(figure_dir, "ProgramBreakdown_byCD4.CD8_reAnnot.png"), width=5, height=3)
+  ggsave(paste0(figure_dir, "ProgramBreakdown_byCD4.CD8_reAnnot.pdf"), device="pdf", width=5, height=3)
 ```
 
 

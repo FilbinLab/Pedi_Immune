@@ -95,7 +95,7 @@ myeloid_seurat$MgMoProlMonocyte_score<- plyr::mapvalues(colnames(myeloid_seurat)
 colors_use<- c(Adult_Monocytes="turquoise3", Adult_Mg_TAM="blue", Adult_Mo_TAM="red", Adult_prol_TAM="gold3")
 DimPlot(myeloid_seurat, group.by = "MgMoProlMonocyte_annot")+
   scale_color_manual(values=colors_use)
-ggsave(paste0(figure_dir, "UMAP_MaxProgram.png"), width=6, height=4.5)
+ggsave(paste0(figure_dir, "UMAP_MaxProgram.pdf"), device="pdf", width=6, height=4.5)
 
 ## Plot each program one at a time
 seurat_tmp<- myeloid_seurat
