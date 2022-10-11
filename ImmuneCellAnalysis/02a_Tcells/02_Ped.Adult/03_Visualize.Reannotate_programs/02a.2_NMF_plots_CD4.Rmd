@@ -67,6 +67,22 @@ program_colors<- readRDS(paste0("../../../plot_colors/Tcell.programs_rank", rank
 celltype_colors<- readRDS(paste0("../../../plot_colors/Tcell.celltypes.Rds"))
 ```
 
+# Need to re-annotate BT1478 to non-BCOR; hemispheric, maybe GBM? Set to GBM for now, may update
+```{r}
+updateBCOR<- TRUE
+
+figure_dir<- ifelse(removeBCOR, paste0(figure_dir, "updateBCOR/"), figure_dir_tmp)
+#analysis_dir<- ifelse(removeBCOR, paste0(analysis_dir, "updateBCOR/"), data_dir_tmp)
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+#if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp, recursive = TRUE)}
+
+if(updateBCOR){
+  cd4_seurat$NiceSubtype<- ifelse(cd4_seurat$sample=="BT1478", "Hemispheric-HistoneWT", cd4_seurat$NiceSubtype)
+
+}
+```
+
 ## Subset to top markers for each nmf- top 10
 ```{r}
 marker_genes<- program_markers
@@ -151,7 +167,7 @@ program_colors_use<- program_colors[names(program_colors) %in% unique(cd4_seurat
 DimPlot(cd4_seurat, group.by = program_name)+
   scale_color_manual(values=program_colors_use)+
   ggtitle("")
-ggsave(paste0(figure_dir, "CD4_UMAP_annot.png"), width=6, height=4)
+ggsave(paste0(figure_dir, "CD4_UMAP_annot.pdf"),device="pdf", width=6, height=4)
 
 ## Plot each program one at a time
 seurat_tmp<- cd4_seurat

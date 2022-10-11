@@ -58,6 +58,24 @@ immune_colors<- readRDS("../plot_colors/ImmuneCell.celltypes.Rds")
 subtype_colors<-  readRDS("../plot_colors/Subtype.Rds")
 ```
 
+# Need to re-annotate BT1478 to non-BCOR; hemispheric, maybe GBM? Set to GBM for now, may update
+```{r}
+updateBCOR<- TRUE
+
+figure_dir<- ifelse(updateBCOR, paste0(figure_dir, "updateBCOR/"), figure_dir_tmp)
+#analysis_dir<- ifelse(removeBCOR, paste0(analysis_dir, "updateBCOR/"), data_dir_tmp)
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+#if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp, recursive = TRUE)}
+
+if(updateBCOR){
+  tcell_seurat$NiceSubtype<- ifelse(tcell_seurat$sample=="BT1478", "Hemispheric-HistoneWT", tcell_seurat$NiceSubtype)
+  ped.adult_tcell$NiceSubtype<- ifelse(ped.adult_tcell$sample=="BT1478", "Hemispheric-HistoneWT", ped.adult_tcell$NiceSubtype)
+  myeloid_seurat_noDC.Bcell$NiceSubtype<- ifelse( myeloid_seurat_noDC.Bcell$sample=="BT1478", "Hemispheric-HistoneWT",
+                                                   myeloid_seurat_noDC.Bcell$NiceSubtype)
+}
+```
+
 ## Plotting themes
 ```{r}
 umap_theme<- function(p, colors=immune_colors){
@@ -127,11 +145,28 @@ ggsave(paste0(figure_dir, "CD4CD8.BcellDCMonocyte.png"), width=6, height=5.5)
 ## With DC/Bcell/monocyte, but no CD4/CD8
 seurat_plot$plotting<- gsub("CD4", "Tcell", gsub("CD8", "Tcell", seurat_plot$plotting))
 DimPlot(seurat_plot, group.by = "plotting", label=TRUE, label.size = 5) %>% umap_theme()
-ggsave(paste0(figure_dir, "CD4CD8.BcellDCMonocyte_NoCD4.CD8.png"), width=6, height=5.5)
+ggsave(paste0(figure_dir, "CD4CD8.BcellDCMonocyte_NoCD4.CD8.pdf"), device="pdf", width=6, height=5.5)
 
 ## To support myeloid/tcell annotation: show myeloid marker genes
 FeaturePlot(immune_seurat, features=c( "CSF1R", "CD3G", "CD8A", "CD4"), ncol = 4, cols = c("grey", "red"))
 ggsave(paste0(figure_dir, "MyeloidTcellMarkers.png"), width=24, height=5.5)
+
+## To support myeloid, t cell, monocyte, bcell, and dc annotation: show top marker genes
+  ## UMAP
+  cowplot::plot_grid(plotlist=lapply(c("CD3G", "CSF1R", "FCN1", "CD207", "MS4A1" ), function(x){
+    FeaturePlot(immune_seurat, features=x, pt.size = 0.2)+
+      scale_color_gradient(low="grey80", high="red")
+  })) 
+  ggsave(paste0(figure_dir, "Tcell.Myeloid.Monocyte.DC.BC_markers_UMAP.pdf"), device="pdf", width=11, height=6)
+  
+  ## VlnPlot
+  cowplot::plot_grid(plotlist=lapply(c("CD3G", "CSF1R", "FCN1", "CD207", "MS4A1" ), function(x){
+    VlnPlot(seurat_plot, group.by = "plotting", features=x, sort=FALSE, ncol=1)+ NoLegend()+
+      scale_fill_manual(values=immune_colors)+
+      xlab("")
+  }), ncol=5) 
+  ggsave(paste0(figure_dir, "Tcell.Myeloid.Monocyte.DC.BC_markers_Vln.pdf"), device="pdf", width=11, height=4)
+  
 ```
 
 
@@ -171,7 +206,7 @@ colors_use<- distinctColorPalette(length(unique(immune_seurat$sampleid)))
 names(colors_use)<-unique(immune_seurat$sampleid)
 seurat_plot<- immune_seurat; seurat_plot$plotting<- seurat_plot$sampleid
 DimPlot(seurat_plot, group.by = "plotting", label = FALSE) %>% umap_theme(colors=colors_use)
-ggsave(paste0(figure_dir, "TCellMyeloid_Sample.png"), width=6, height=6.5)
+ggsave(paste0(figure_dir, "TCellMyeloid_Sample.pdf"), device="pdf", width=6, height=6.5)
 
 ## T cells
 seurat_plot<- tcell_seurat; seurat_plot$plotting<- seurat_plot$sampleid
@@ -327,7 +362,7 @@ ggsave(paste0(figure_dir, "Tcells_clonal.vs.nonclonal.png"), width=10, height=3)
 seurat_plot<- subset(ped.adult_tcell, Final_detailed_annot != "Unclear")
 seurat_plot$plotting<- seurat_plot$Final_detailed_annot
 DimPlot(seurat_plot, group.by = "plotting",label=TRUE, label.size = 5) %>% umap_theme(immune_colors)
-ggsave(paste0(figure_dir, "Ped.Adult_TCellMajorCellTypes.png"), width=5, height=5.5)
+ggsave(paste0(figure_dir, "Ped.Adult_TCellMajorCellTypes.pdf"), device="pdf", width=5, height=5.5)
 
 ## Bar plot of adult major annots + ped major annots. Grouped by subtype
   ## Ped

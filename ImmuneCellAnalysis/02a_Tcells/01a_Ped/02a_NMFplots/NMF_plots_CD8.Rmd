@@ -71,6 +71,23 @@ celltype_colors<- readRDS(paste0("../../../plot_colors/Tcell.celltypes.Rds"))
 subtype_colors<-  readRDS("../../../plot_colors/Subtype.Rds")
 ```
 
+
+# Need to re-annotate BT1478 to non-BCOR; hemispheric, maybe GBM? Set to GBM for now, may update
+```{r}
+updateBCOR<- TRUE
+
+figure_dir<- ifelse(updateBCOR, paste0(figure_dir, "updateBCOR/"), figure_dir_tmp)
+#analysis_dir<- ifelse(removeBCOR, paste0(analysis_dir, "updateBCOR/"), data_dir_tmp)
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+#if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp, recursive = TRUE)}
+
+if(updateBCOR){
+  cd8_seurat$NiceSubtype<- ifelse(cd8_seurat$sample=="BT1478", "Hemispheric-HistoneWT", cd8_seurat$NiceSubtype)
+
+}
+```
+
 ## Optional: remove inhibitory (may not be real CD8 program)
 No longer necessary! removed at source
 ```{r}
@@ -153,7 +170,7 @@ if(add_lines){
 }else{p}
 
   
-ggsave(paste0(figure_dir, "CD8_Heatmap_TopNMFgenes_annot_rank", rank,figure_append, ".png"), width=17, height=11)
+ggsave(paste0(figure_dir, "CD8_Heatmap_TopNMFgenes_annot_rank", rank,figure_append, ".png"), width=14, height=11)
 
 
 ```
@@ -190,7 +207,7 @@ sharedBy<- "union"
 program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
 
 ## remove GBM? Very few cells
-removeGBM<- TRUE
+removeGBM<- FALSE
 
 if(removeGBM){
   cd8_seurat_use<- subset(cd8_seurat, NiceSubtype != "Hemispheric-HistoneWT")
@@ -257,7 +274,7 @@ program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnno
 cd8_seurat$tmp<- cd8_seurat@meta.data[[program_name]]
 
 ## remove GBM? Very few cells
-removeGBM<- TRUE
+removeGBM<- FALSE
 
 if(removeGBM){
   cd8_seurat_use<- subset(cd8_seurat, NiceSubtype != "Hemispheric-HistoneWT")
@@ -277,7 +294,7 @@ ggplot(df, aes(x=NiceSubtype, y=perCells, fill=tmp))+
         axis.text = element_text(face="bold", color="black"),
         axis.title = element_text(face="bold", color="black"))+
   ylab("Proportion of cells")+xlab("")
-filename<- ifelse(removeGBM,"Breakdown_SubtypeByProgram_noGBM", "Density_NMFScoreBySubtype" )
+filename<- ifelse(removeGBM,"Breakdown_SubtypeByProgram_noGBM", "Breakdown_SubtypeByProgram" )
 ggsave(paste0(figure_dir,filename, ".png"), width=5, height=4)
 
 
@@ -300,6 +317,29 @@ ggplot(df, aes(x=Age_group, y=perCells, fill=tmp))+
 filename<- ifelse(removeGBM,"Breakdown_AgeByProgram_noGBM", "Density_NMFScoreBySubtype" )
 ggsave(paste0(figure_dir,filename, ".png"), width=5, height=4)
 
+```
+
+## Programs by sample
+GBM only- for comparison to PD1 treated patient
+```{r}
+program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
+cd8_seurat$tmp<- cd8_seurat@meta.data[[program_name]]
+
+cd8_seurat_tmp<- subset(cd8_seurat, NiceSubtype== "Hemispheric-HistoneWT")
+df<- as.data.frame(table(cd8_seurat_tmp$tmp, cd8_seurat_tmp$sample))
+colnames(df)<-c("Program", "Sample", "NCells")
+df<- df %>% group_by(Sample) %>% mutate(perCells=NCells/sum(NCells)) %>% as.data.frame()
+
+ggplot(df, aes(x=Sample, y=perCells, fill=Program))+
+  geom_bar(stat="identity")+
+  scale_fill_manual(values=program_colors[names(program_colors) %in% unique(df$Program)])+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle=45, hjust=1),
+        axis.text = element_text(face="bold", color="black"),
+        axis.title = element_text(face="bold", color="black"))+
+  ylab("Proportion of cells")+xlab("")
+
+ggsave(paste0(figure_dir, "Breakdown_SampleByProgram_onlyGBM.png"), width=4, height=4)
 ```
 
 

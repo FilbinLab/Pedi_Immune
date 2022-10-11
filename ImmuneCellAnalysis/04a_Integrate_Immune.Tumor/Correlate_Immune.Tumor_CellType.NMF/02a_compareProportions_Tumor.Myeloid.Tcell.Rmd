@@ -27,10 +27,10 @@ library(ggpubr)
 library(randomcoloR)
 
 figure_dir_tmp<- paste0("figures/")
-analysis_dir_tmp<- paste0("analysis/")
+data_dir_tmp<- paste0("analysis/")
 
 if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp, recursive = TRUE)}
-if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp, recursive = TRUE)}
+if(!dir.exists(data_dir_tmp)){dir.create(data_dir_tmp, recursive = TRUE)}
 
 preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
 nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
@@ -39,19 +39,34 @@ source(nmf_helper)
 source(paste0(working_dir, "HelperFunctions.R"))
 ```
 
+# May need to remove BCOR tumors- not published yet. Set whether to do so (new figure/analysis folder)
+```{r}
+removeBCOR<- TRUE
+
+figure_dir_tmp<- ifelse(removeBCOR, paste0(figure_dir_tmp, "removeBCOR/"), figure_dir_tmp)
+analysis_dir_tmp<- ifelse(removeBCOR, paste0(data_dir_tmp, "removeBCOR/"), data_dir_tmp)
+
+if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp, recursive = TRUE)}
+if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp, recursive = TRUE)}
+```
+
+
 ## Set analysis/figure directories. Read in processed files with program proportions, mean scores, and sample metadata
 processed in 01_Preprocess_proportionFiles.Rmd
 ```{r}
 cohort<- "pedOnly_nomuv63"
-figure_dir<- paste0(figure_dir_tmp, cohort, "/");analysis_dir<- paste0(analysis_dir_tmp, cohort, "/")
-if(!dir.exists(figure_dir)){dir.create(figure_dir)}; if(!dir.exists(analysis_dir)){dir.create(analysis_dir)}
+figure_dir<- paste0(figure_dir_tmp, cohort, "/")
+data_dir<-paste0(data_dir_tmp, cohort, "/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+if(!dir.exists(data_dir)){dir.create(analysis_dir)}
 
 ## Proportion list
-prop_list<- readRDS(paste0(analysis_dir, "program_proportions_tumor.myeloid.cd4.cd8.cd8Clonal.Rds"))
+prop_list<- readRDS(paste0(data_dir, "program_proportions_tumor.myeloid.cd4.cd8.cd8Clonal.Rds"))
 
 
 ## Sample metadata
-sample_meta<- readRDS(paste0(analysis_dir, "all_sample_metadata.Rds"))
+sample_meta<- readRDS(paste0(data_dir, "all_sample_metadata.Rds"))
 
 
 ```
@@ -219,7 +234,7 @@ figure_dir_use<- paste0(figure_dir, "byProportion/")
 if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
 
 ## Input- use single independent and all dependent
-ind_data<- "myeloid" 
+ind_data<- "cd8" 
 dep_data<-names(prop_list)[names(prop_list) != ind_data & names(prop_list) !="tumor"]
 
 ## Merge together

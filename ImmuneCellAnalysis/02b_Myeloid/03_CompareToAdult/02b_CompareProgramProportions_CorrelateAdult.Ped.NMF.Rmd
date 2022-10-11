@@ -81,6 +81,21 @@ if(!dir.exists(figure_dir)){dir.create(figure_dir)};if(!dir.exists(analysis_dir)
                                         "GBM.10X_recurrent_myeloid_markers_top100.Rds"))
 ```
 
+# Need to re-annotate BT1478 to non-BCOR; hemispheric, maybe GBM? Set to GBM for now, may update
+Can actually skip this and pick up at line 366- only needed for plotting by subtype
+```{r}
+updateBCOR<- TRUE
+
+figure_dir<- ifelse(updateBCOR, paste0(figure_dir, "updateBCOR/"), figure_dir_tmp)
+#analysis_dir<- ifelse(removeBCOR, paste0(analysis_dir, "updateBCOR/"), data_dir_tmp)
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+#if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp, recursive = TRUE)}
+
+```
+
+
+
 ## normalize count matrix
 ```{r}
 ## Normalize/center merged count matrix
@@ -179,13 +194,41 @@ overlaps<- do.call("rbind", overlaps)
 overlaps$dummy<-"x"
 ggplot(overlaps, aes(y=program, x=dummy, color=PearsonCorrelation, size=nOverlap))+
   geom_point()+
-  scale_color_gradient2(low="yellow",mid="orange", high="red", midpoint=0.7)+
+  scale_color_viridis_c()+
   theme_classic()+
   theme(axis.text.y = element_text(face="bold"),
         axis.text.x = element_blank())+
   ylab("")+
   xlab("")
-ggsave(paste0(figure_dir, "Overlap_sharedPedAdult_pedRank", ped_rank, "_adultRank", adult_rank, ".png"), width=4, height=3)
+ggsave(paste0(figure_dir, "Overlap_sharedPedAdult_pedRank", ped_rank, "_adultRank", adult_rank, ".pdf"), device="pdf", width=4, height=3)
+
+## Plot numeric overlaps with T cells (to show that myeloid "shared" are less similar than T cell "shared")
+  ## Read in same analysis (n genes overlapping, pearson corr of score) for T cells
+  tcell_overlaps<- read.csv("../../02a_Tcells/02_Ped.Adult/01_compare_NMF//analysis/newMarkers_deNovoPed.AdultTcell/sharedPedAdult_rank8_nGeneOverlap_PearsonCorr.csv",
+                            row.names = "X")
+  tcell_overlaps$CellType<- "Tcell"
+  
+  ## Merge into single df
+  myeloid_overlaps<- overlaps
+  myeloid_overlaps$CellType<- "Myeloid"
+  tcell_myeloid_overlaps<- rbind(myeloid_overlaps[,!colnames(myeloid_overlaps) %in% c("perOverlap")], tcell_overlaps)
+  tcell_myeloid_overlaps$program<-paste0(tcell_myeloid_overlaps$CellType, "_", tcell_myeloid_overlaps$program)
+  
+  ## Set order
+  tcell_myeloid_overlaps<- tcell_myeloid_overlaps[order(tcell_myeloid_overlaps$CellType, tcell_myeloid_overlaps$PearsonCorrelation),]
+  tcell_myeloid_overlaps$order<- 1:nrow(tcell_myeloid_overlaps)
+  
+  ## Plot
+  ggplot( tcell_myeloid_overlaps, aes(y=reorder(program, order), x=dummy, color=PearsonCorrelation, size=nOverlap))+
+    geom_point()+
+    scale_color_viridis_c()+
+    theme_classic()+
+    theme(axis.text.y = element_text(face="bold"),
+          axis.text.x = element_blank())+
+    ylab("")+
+    xlab("")+
+    geom_hline(yintercept = 4.5, linetype="dashed")
+  ggsave(paste0(figure_dir, "Overlap_sharedPedAdult_Tcell.Myeloid.pdf"), device="pdf", width=5, height=3)
 ```
 
 ## Merge genesets from ped/adult that are similar
@@ -323,6 +366,11 @@ saveRDS(final_PA_gene_df, file=paste0(analysis_dir, "markers_mergedPedAdult_assi
 merged_seurat<- readRDS(paste0("analysis/Merge_AssessIntegration/",cohort,"/adult_withMUV.FALSE/myeloid_seurat_Ped.AdultGBM.IDHMut_merged.Rds" ))
 final_PA_gene_list<-readRDS(paste0(analysis_dir, "markers_mergedPedAdult_assignMax_reidentify_pedRank", ped_rank, "_adultRank", adult_rank, ".Rds"))
 
+if(updateBCOR){
+  merged_seurat$NiceSubtype<- ifelse(merged_seurat$sampleid=="BT1478", "Hemispheric-HistoneWT", merged_seurat$NiceSubtype)
+  #merged_seurat$ShortSubtype<- ifelse(myeloid_seurat$sample=="BT1478", "Hemi-HistoneWT", merged_seurat$ShortSubtype)
+}
+
 ## Set colors
 colors_use<-c("purple","red", "navy","turquoise3",  "magenta", "olivedrab", "plum3", "gold")
 names(colors_use)<- c("IFN_TAM", "Inflammatory", "HypoxicTAM", "Monocytes", "Transitory_TAM", "Microglia", "IFN_Mo_TAM","SEPP1_Mo_TAM")
@@ -345,7 +393,50 @@ names(colors_use)<- c("IFN_TAM", "Inflammatory", "HypoxicTAM", "Monocytes", "Tra
     theme(axis.text = element_text(color="black", face="bold"),
           axis.title = element_text(color="black", face="bold"))
   ggsave(paste0(figure_dir, "AgeBreakdown_byMerged.RegeneratedPrograms.png"), width=5, height=6)
+  
+## Bd by age, with adult split by subtype
+  merged_seurat$tmp<- ifelse(merged_seurat$Age=="Adult", merged_seurat$NiceSubtype, "Ped")
+  df<-as.data.frame(table(merged_seurat$MaxProgram_PA_mergedGenesets, merged_seurat$tmp))
+  colnames(df)<-c("Program", "Age", "NCells")
+  df<- df %>% group_by(Age) %>% mutate(perCells=NCells/sum(NCells)) %>%as.data.frame()
+  
+  ## Plot
+  df$Program<- gsub("AdultSpecific_", "", gsub("Merged_", "", gsub("PedSpecific.", "",df$Program)))
+  df$Program<- factor(df$Program, 
+                      levels=rev(c("Monocytes", "Microglia", "SEPP1_Mo_TAM", "Inflammatory", 
+                                   "HypoxicTAM", "IFN_Mo_TAM", "Transitory_TAM", "IFN_TAM")))
+  ggplot(df, aes(x=Age, y=perCells, fill=Program))+
+    geom_bar(stat="identity", position="stack")+
+    theme_classic()+
+    scale_fill_manual(values=colors_use)+
+    ylab("Proportion of cells in program")+ xlab("")+
+    theme(axis.text = element_text(color="black", face="bold"),
+          axis.title = element_text(color="black", face="bold"))
+  ggsave(paste0(figure_dir, "AgeBreakdown_AdultBySubtpye_byMerged.RegeneratedPrograms.pdf"), device="pdf", width=5, height=5)
 
+## Plot breakdown by subtype
+  df<-as.data.frame(table(merged_seurat$MaxProgram_PA_mergedGenesets, merged_seurat$NiceSubtype))
+  colnames(df)<-c("Program", "Subtype", "NCells")
+  df<- df %>% group_by(Subtype) %>% mutate(perCells=NCells/sum(NCells)) %>%as.data.frame()
+  
+  ## add on age
+  df$Age<- plyr::mapvalues(df$Subtype, merged_seurat$NiceSubtype, merged_seurat$Age, warn_missing = FALSE)
+    
+  ## Plot
+  df$Program<- gsub("AdultSpecific_", "", gsub("Merged_", "", gsub("PedSpecific.", "",df$Program)))
+  df$Program<- factor(df$Program, 
+                      levels=rev(c("Monocytes", "Microglia", "SEPP1_Mo_TAM", "Inflammatory", "HypoxicTAM", "IFN_Mo_TAM", "Transitory_TAM", "IFN_TAM")))
+  ggplot(df, aes(x=Subtype, y=perCells, fill=Program))+
+    geom_bar(stat="identity", position="stack")+
+    theme_classic()+
+    scale_fill_manual(values=colors_use)+
+    ylab("Proportion of cells in program")+ xlab("")+
+    theme(axis.text = element_text(color="black", face="bold"),
+          axis.title = element_text(color="black", face="bold"),
+          axis.text.x = element_text(angle=45, hjust=1))+
+    facet_grid(cols=vars(Age), space="free_x", scale="free_x")
+  ggsave(paste0(figure_dir, "SubtypeBreakdown_byMerged.RegeneratedPrograms.png"), width=8, height=5)
+  
 ## Plot breakdown by age, by sample
   ## Proportion of programs in ped/adult  by sample
   df<- as.data.frame(table(merged_seurat$MaxProgram_PA_mergedGenesets, merged_seurat$sampleid))
@@ -356,7 +447,9 @@ names(colors_use)<- c("IFN_TAM", "Inflammatory", "HypoxicTAM", "Monocytes", "Tra
     
     ## Add on subtype- used for ordering
     df$Subtype<- plyr::mapvalues(df$Sample, merged_seurat$sampleid, merged_seurat$NiceSubtype, warn_missing = FALSE)
-    subtype_order<- unique(df$Subtype); names(subtype_order)<- 1:length(subtype_order)
+    subtype_order<- c("GBM", "IDHmut", "Hemispheric-BCOR", "Ependymoma", "Midline-HistoneWT", "Midline-H3K27M",
+                      "Hemispheric-HistoneWT", "Hemispheric-H3G34R/V")
+    names(subtype_order)<- 1:length(subtype_order)
     df$Order<- as.numeric(as.character(plyr::mapvalues(df$Subtype, subtype_order, names(subtype_order))))
     
     ## plot
@@ -370,7 +463,38 @@ names(colors_use)<- c("IFN_TAM", "Inflammatory", "HypoxicTAM", "Monocytes", "Tra
             axis.text.x = element_text(angle=45, hjust=1),
             axis.title = element_text(color="black", face="bold"))+
       facet_grid(cols=vars(Age), scales="free_x", space="free_x")
-    ggsave(paste0(figure_dir, "AgeBreakdown_byMerged.RegeneratedPrograms_Sample.png"), width=9, height=2.5)
+    ggsave(paste0(figure_dir, "AgeBreakdown_byMerged.RegeneratedPrograms_Sample.pdf"), device="pdf", width=9, height=2.5)
+
+## Plot breakdown by age, by sample- exclude samples with <10 cells
+  ## Proportion of programs in ped/adult  by sample
+  df<- as.data.frame(table(merged_seurat$MaxProgram_PA_mergedGenesets, merged_seurat$sampleid))
+  colnames(df)<- c("Program", "Sample", "Ncells")
+  samplesPF<- table(merged_seurat$sampleid)
+  df<- df[df$Sample %in% names(samplesPF)[samplesPF>10],]
+  
+    ## add on age
+    df$Age<- plyr::mapvalues(df$Sample, merged_seurat$sampleid, merged_seurat$Age, warn_missing = FALSE)
+    
+    ## Add on subtype- used for ordering
+    df$Subtype<- plyr::mapvalues(df$Sample, merged_seurat$sampleid, merged_seurat$NiceSubtype, warn_missing = FALSE)
+    subtype_order<- c("GBM", "IDHmut", "Hemispheric-BCOR", "Ependymoma", "Midline-HistoneWT", "Midline-H3K27M",
+                      "Hemispheric-HistoneWT", "Hemispheric-H3G34R/V")
+    names(subtype_order)<- 1:length(subtype_order)
+    df$Order<- as.numeric(as.character(plyr::mapvalues(df$Subtype, subtype_order, names(subtype_order))))
+    
+    ## plot
+    df<- df %>% group_by(Sample) %>% mutate(PerCells=Ncells/sum(Ncells)) %>% as.data.frame()
+    ggplot(df, aes(x=reorder(Sample,Order), y=PerCells, fill=Program))+
+      geom_bar(stat="identity", position="stack")+
+      theme_classic()+
+      scale_fill_manual(values=colors_use)+
+      ylab("Proportion of cells\nin program")+ xlab("")+
+      theme(axis.text = element_text(color="black", face="bold"),
+            axis.text.x = element_text(angle=45, hjust=1),
+            axis.title = element_text(color="black", face="bold"))+
+      facet_grid(cols=vars(Age), scales="free_x", space="free_x")
+    ggsave(paste0(figure_dir, "AgeBreakdown_byMerged.RegeneratedPrograms_SampleAtLeast10Cells.pdf"), device="pdf", width=8, height=2.5)
+    
     
 ## Plot UMAP by new annotations
 DimPlot(merged_seurat, group.by = "MaxProgram_PA_mergedGenesets" )+
@@ -432,30 +556,43 @@ ggsave(paste0(figure_dir, "UMAP_Ped.Adult_byMerged.RegeneratedPrograms.png"), wi
   ggsave(paste0(figure_dir, "Heatmap_topMarkers_MergedRegeneratedPedAdultMarkers_centeredBy", center_method, ".png"), width=15, height=10)
 ```
 
-## For visualization purposes: harmony integration --> plot UMAP of sample, program
+
+## For visualization purposes: rerun harmony integration 
 ```{r}
 merged_seurat<- readRDS(paste0("analysis/Merge_AssessIntegration/",cohort,"/adult_withMUV.FALSE/myeloid_seurat_Ped.AdultGBM.IDHMut_merged.Rds" ))
-
-## Set colors
-colors_use<-c("purple","red", "navy","turquoise3",  "magenta", "olivedrab", "plum3", "gold")
-names(colors_use)<- c("IFN_TAM", "Inflammatory", "HypoxicTAM", "Monocytes", "Transitory_TAM", "Microglia", "IFN_Mo_TAM","SEPP1_Mo_TAM")
 
 ## Rerun processing with harmony integration
 meta<- merged_seurat@meta.data
 merged_seurat<- RunFullSeurat(merged_seurat@assays$RNA@counts, RunHarmony = TRUE, samples=meta$sampleid)
 merged_seurat<- AddMetaData(merged_seurat, meta[,!colnames(meta) %in% colnames(merged_seurat@meta.data)])
 
+saveRDS(merged_seurat, 
+        file=paste0("analysis/Merge_AssessIntegration/",cohort,
+                    "/adult_withMUV.FALSE/myeloid_seurat_Ped.AdultGBM.IDHMut_merged_harmony.Rds" ))
+```
+
+
+## plot UMAP of sample, program
+```{r}
+merged_seurat<- readRDS(paste0("analysis/Merge_AssessIntegration/",cohort,
+                    "/adult_withMUV.FALSE/myeloid_seurat_Ped.AdultGBM.IDHMut_merged_harmony.Rds" ))
+
+## Set colors
+colors_use<-c("purple","red", "navy","turquoise3",  "magenta", "olivedrab", "plum3", "gold")
+names(colors_use)<- c("IFN_TAM", "Inflammatory", "HypoxicTAM", "Monocytes", "Transitory_TAM", "Microglia", "IFN_Mo_TAM","SEPP1_Mo_TAM")
+
+
 ## UMAP- sample, program
 DimPlot(merged_seurat, group.by = "Age")+
   scale_color_manual(values=c(Ped="red", Adult="navy"))+
   theme(legend.position = "bottom")
-ggsave(paste0(figure_dir, "UMAP_harmony_byAge.png"), width=7, height=7)
+ggsave(paste0(figure_dir, "UMAP_harmony_byAge.pdf"), device="pdf", width=7, height=7)
 
 DimPlot(merged_seurat, group.by="MaxProgram_PA_mergedGenesets")+
   scale_color_manual(values=colors_use)+
   ggtitle("")+
   theme(legend.position = "bottom")
-ggsave(paste0(figure_dir, "UMAP_harmony_byMergedRegeneratedPrograms.png"), width=7, height=7.3)
+ggsave(paste0(figure_dir, "UMAP_harmony_byMergedRegeneratedPrograms.pdf"), device="pdf", width=7, height=7.3)
 
 ## UMAP by microglia/macrophage gradient
 merged_seurat$MM_score<- merged_seurat$microglia_score - merged_seurat$macrophage_score
@@ -463,10 +600,37 @@ FeaturePlot(merged_seurat, features="MM_score")+
   scale_color_gradient2(low="green", mid="white", high="violetred")+
   ggtitle("macrophage to microglia")+
   theme(legend.position = "bottom")
-ggsave(paste0(figure_dir, "UMAP_harmony_byMacrophage.MicrogliaScore.png"), width=7, height=7.3)
+ggsave(paste0(figure_dir, "UMAP_harmony_byMacrophage.MicrogliaScore.pdf"), device="pdf", width=7, height=7.3)
 
-saveRDS(merged_seurat, 
-        file=paste0("analysis/Merge_AssessIntegration/",cohort,
-                    "/adult_withMUV.FALSE/myeloid_seurat_Ped.AdultGBM.IDHMut_merged_harmony.Rds" ))
+
+```
+
+## Export for sccoda
+```{r}
+data_dir<- "../../scCoda/data/"
+
+## By age
+  ## Breakdown of number of cells per program by sample
+  bd<- as.data.frame.matrix(table(merged_seurat$sampleid, merged_seurat$MaxProgram_PA_mergedGenesets))
+  bd$Sample<- rownames(bd)
+  
+  ## Add on age
+  bd$Subtype<- as.character(plyr::mapvalues(bd$Sample, merged_seurat$sampleid, merged_seurat$Age,warn_missing = FALSE))
+  
+  ## Output
+  write.csv(bd, file=paste0(data_dir, "pedOnly_nomuv63/Ped.Adult_Myeloid_NMFprograms_byCorrelation.csv"), row.names=FALSE)
+  
+## By subtype (for adult)
+  ## Breakdown of number of cells per program by sample
+  bd<- as.data.frame.matrix(table(merged_seurat$sampleid, merged_seurat$MaxProgram_PA_mergedGenesets))
+  bd$Sample<- rownames(bd)
+  
+  ## Add on age
+  bd$Subtype<-ifelse(bd$Sample %in% merged_seurat$sampleid[merged_seurat$Age=="Adult"],
+                     as.character(plyr::mapvalues(bd$Sample, merged_seurat$sampleid, merged_seurat$NiceSubtype,warn_missing = FALSE)),
+                     as.character(plyr::mapvalues(bd$Sample, merged_seurat$sampleid, merged_seurat$Age,warn_missing = FALSE)))
+  
+  ## Output
+  write.csv(bd, file=paste0(data_dir, "pedOnly_nomuv63/Ped.AdultSubtpyes_Myeloid_NMFprograms_byCorrelation.csv"), row.names=FALSE)
 ```
 

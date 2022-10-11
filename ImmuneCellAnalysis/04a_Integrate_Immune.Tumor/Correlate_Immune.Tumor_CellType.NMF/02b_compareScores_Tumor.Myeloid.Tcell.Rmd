@@ -24,10 +24,10 @@ library(ggpubr)
 library(randomcoloR)
 
 figure_dir_tmp<- paste0("figures/")
-analysis_dir_tmp<- paste0("analysis/")
+data_dir_tmp<- paste0("analysis/")
 
 if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp, recursive = TRUE)}
-if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp, recursive = TRUE)}
+if(!dir.exists(data_dir_tmp)){dir.create(data_dir_tmp, recursive = TRUE)}
 
 preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
 nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
@@ -36,20 +36,43 @@ source(nmf_helper)
 source(paste0(working_dir, "HelperFunctions.R"))
 ```
 
+## May need to remove BCOR tumors- not published yet. Set whether to do so (new figure/analysis folder)
+```{r}
+removeBCOR<- TRUE
+
+figure_dir_tmp<- ifelse(removeBCOR, paste0(figure_dir_tmp, "removeBCOR/"), figure_dir_tmp)
+analysis_dir_tmp<- ifelse(removeBCOR, paste0(data_dir_tmp, "removeBCOR/"), data_dir_tmp)
+
+if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp, recursive = TRUE)}
+if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp, recursive = TRUE)}
+```
+
 ## Set analysis/figure directories. Read in processed files with  mean scores and sample metadata
 processed in 01_Preprocess_proportionFiles.Rmd
 ```{r}
 cohort<- "pedOnly_nomuv63"
-figure_dir<- paste0(figure_dir_tmp, cohort, "/byScores/");analysis_dir<- paste0(analysis_dir_tmp, cohort, "/")
-if(!dir.exists(figure_dir)){dir.create(figure_dir)}; if(!dir.exists(analysis_dir)){dir.create(analysis_dir)}
+figure_dir<- paste0(figure_dir_tmp, cohort, "/byScores/")
+analysis_dir<-paste0(analysis_dir_tmp, cohort, "/")
+data_dir<-paste0(data_dir_tmp, cohort, "/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+if(!dir.exists(data_dir)){dir.create(analysis_dir)}
 
 
 ## Mean scores by sample
-score_list<- readRDS(paste0(analysis_dir, "program_scores_myeloid.cd4.cd8.tumor.Rds"))
+score_list<- readRDS(paste0(data_dir, "program_scores_myeloid.cd4.cd8.tumor.Rds"))
 
 
 ## Sample metadata
-sample_meta<- readRDS(paste0(analysis_dir, "all_sample_metadata.Rds"))
+sample_meta<- readRDS(paste0(data_dir, "all_sample_metadata.Rds"))
+```
+
+## Remove BCOR samples if needed
+```{r}
+if(removeBCOR){
+  sample_meta<- sample_meta[sample_meta$Subtype != "Hemispheric-BCOR",]
+  score_list<- lapply(score_list, function(x){x[x$Sample %in% sample_meta$Sample,]})
+}
 ```
 
 ## Reformat scores into single data frame
@@ -185,7 +208,7 @@ ggplot(pearson_df, aes(x=p1, y=p2, fill=PearsonCorrelation))+
   geom_tile(data = pearson_df[pearson_df$sig=="sig",], fill = NA, color = "black", size = .5) +
     geom_tile(data = pearson_df[pearson_df$sig=="verySig",], fill = NA, color = "black", size = 1.5) +
   xlab("") + ylab("")
-ggsave(paste0(figure_dir, "Heatmap_pearsonCorr_lmForSig_cd4.cd8.myeloid.tumor.Scores.png"), width=7.5, height=5)
+ggsave(paste0(figure_dir, "Heatmap_pearsonCorr_lmForSig_cd4.cd8.myeloid.tumor.Scores.pdf"),device="pdf", width=7.5, height=5)
 ```
 
 
@@ -263,26 +286,8 @@ ggplot(cor_lm_results, aes(x=independent_variable, y=dependent_variable, color=P
         axis.text=element_text(color="black", face="bold"))+
   ylab("")+ xlab("")+
   ggtitle(paste0(ind_data, " vs ", dep_data))
-ggsave(paste0(figure_dir_use,ind_data,".vs.", dep_data, "_modelWith",
+ggsave(paste0(figure_dir,ind_data,".vs.", dep_data, "_modelWith",
               paste(control_for, collapse = "."), ".png"), width=5, height=4)
-```
-
-## Heatmap with correlation for all
-```{r}
-## Add major cell type to program name
-all_scores<- lapply(names(score_list), function(x){
-  tmp<- score_list[[x]]
-  tmp$Program<- paste0(x, "_", tmp$Program)
-  tmp$CellType<-x
-  return(tmp)
-})
-names(all_scores)<- names(score_list)
-
-## Reformat into single df
-scores_df<- do.call("rbind", all_scores)
-
-test<- split(scores_df, f=scores_df$Sample)
-
 ```
 
 

@@ -53,6 +53,21 @@ if(!dir.exists(figure_dir)){dir.create(figure_dir)};if(!dir.exists(analysis_dir)
 annot_colors<- readRDS(paste0(analysis_dir, "annot_colors.Rds"))
 ```
 
+# Need to re-annotate BT1478 to non-BCOR; hemispheric, maybe GBM? Set to GBM for now, may update
+```{r}
+updateBCOR<-FALSE
+
+figure_dir<- ifelse(updateBCOR, paste0(figure_dir, "updateBCOR/"), figure_dir_tmp)
+#analysis_dir<- ifelse(removeBCOR, paste0(analysis_dir, "updateBCOR/"), data_dir_tmp)
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+#if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp, recursive = TRUE)}
+
+if(updateBCOR){
+  myeloid_seurat$NiceSubtype<- ifelse(myeloid_seurat$sample=="BT1478", "Hemispheric-HistoneWT", myeloid_seurat$NiceSubtype)
+  myeloid_seurat$ShortSubtype<- ifelse(myeloid_seurat$sample=="BT1478", "Hemi-HistoneWT", myeloid_seurat$ShortSubtype)
+}
+```
 
 
 ## Plot heatmaps of top marker gene expression
@@ -119,6 +134,7 @@ if(add_lines){
 
   
 ggsave(paste0(figure_dir, "Heatmap_TopNMFgenes_annotBy", annotation, "_rank", rank, ".png"), width=12, height=12)
+ggsave(paste0(figure_dir, "Heatmap_TopNMFgenes_annotBy", annotation, "_rank", rank, ".pdf"), device="pdf", width=12, height=12)
 
 
 ```
@@ -185,6 +201,7 @@ if(add_lines){
 
   
 ggsave(paste0(figure_dir, "Heatmap_TopNMFgenes_annotBy", annotation, "_rank", rank, "_centerBySubtype.png"), width=12, height=12)
+ggsave(paste0(figure_dir, "Heatmap_TopNMFgenes_annotBy", annotation, "_rank", rank, "_centerBySubtype.pdf"), device="pdf", width=12, height=12)
 ```
 ## UMAP with annotations
 ```{r}
@@ -192,7 +209,7 @@ ggsave(paste0(figure_dir, "Heatmap_TopNMFgenes_annotBy", annotation, "_rank", ra
 ## Setting this to "_harmony" will load in seurat object with harmony integration, but using all annotation/NMF/etc from non-integrated analysis
 use_harmony_forVis<- "_harmony" ## "_harmony" to use, "" to not use
 if(use_harmony_forVis=="_harmony"){
-  figure_dir_tmp<- paste0(figure_dir, "Harmony/"); if(!dir.exists(figure_dir)){dir.create(figure_dir)}
+  figure_dir_tmp<- paste0(figure_dir, "HarmonyInt/"); if(!dir.exists(figure_dir)){dir.create(figure_dir)}
   }else{figure_dir_tmp<- figure_dir}
 
 myeloid_seurat<-readRDS(paste0("../../01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/",integration, "/",
@@ -202,6 +219,7 @@ colors_use<-annot_colors[[paste0("rank", rank_use)]]
 
 DimPlot(myeloid_seurat, group.by = paste0("NMF_rank", rank_use, "_annotByAdult10X"))+scale_color_manual(values=colors_use)
 ggsave(paste0(figure_dir_tmp, "UMAP_byAdult10XAnnot_rank", rank_use, ".png"), width=6, height=4)
+ggsave(paste0(figure_dir_tmp, "UMAP_byAdult10XAnnot_rank", rank_use, ".pdf"), device="pdf", width=6, height=4)
 
 ## Plot each program one at a time
 seurat_tmp<- myeloid_seurat
@@ -257,9 +275,10 @@ ggsave(paste0(figure_dir, "GO_NMFrank", rank, "_10xAnnotated.png"), width=24, he
 
 ## Density plots
 ```{r}
+
 ## Read in scores for programs
-rank_use<-7
-all_scores<- readRDS(paste0(analysis_dir, "NMF_scores_annotByAdult10X_rank6-NA", ".Rds"))
+rank_use<-6
+all_scores<- readRDS(paste0(analysis_dir, "NMF_scores_annotByAdult10X_rank6-6", ".Rds"))
 scores<- all_scores[[paste0("rank", rank_use)]]
 
 ## Create df for plotting

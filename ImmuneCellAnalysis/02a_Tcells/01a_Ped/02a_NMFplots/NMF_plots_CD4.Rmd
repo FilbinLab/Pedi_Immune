@@ -74,6 +74,21 @@ celltype_colors<- readRDS(paste0("../../../plot_colors/Tcell.celltypes.Rds"))
 subtype_colors<-  readRDS("../../../plot_colors/Subtype.Rds")
 ```
 
+# Need to re-annotate BT1478 to non-BCOR; hemispheric, maybe GBM? Set to GBM for now, may update
+```{r}
+updateBCOR<- TRUE
+
+figure_dir<- ifelse(updateBCOR, paste0(figure_dir, "updateBCOR/"), figure_dir_tmp)
+#analysis_dir<- ifelse(removeBCOR, paste0(analysis_dir, "updateBCOR/"), data_dir_tmp)
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+#if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp, recursive = TRUE)}
+
+if(updateBCOR){
+  cd4_seurat$NiceSubtype<- ifelse(cd4_seurat$sample=="BT1478", "Hemispheric-HistoneWT", cd4_seurat$NiceSubtype)
+
+}
+```
 
 ## Subset to top markers for each nmf- top 10
 ```{r}
@@ -144,7 +159,7 @@ if(add_lines){
 }else{p}
 
   
-ggsave(paste0(figure_dir, "CD4_Heatmap_TopNMFgenes_annot_rank", rank,figure_append, ".png"), width=17, height=11)
+ggsave(paste0(figure_dir, "CD4_Heatmap_TopNMFgenes_annot_rank", rank,figure_append, ".png"), width=14, height=11)
 
 
 ```
@@ -248,7 +263,7 @@ program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnno
 cd4_seurat$tmp<- cd4_seurat@meta.data[[program_name]]
 
 ## remove GBM? Very few cells
-removeGBM<- TRUE
+removeGBM<- FALSE
 
 if(removeGBM){
   cd4_seurat_use<- subset(cd4_seurat, NiceSubtype != "Hemispheric-HistoneWT")
@@ -293,6 +308,28 @@ ggsave(paste0(figure_dir,filename, ".png"), width=5, height=4)
 
 ```
 
+## Programs by sample
+GBM only- for comparison to PD1 treated patient
+```{r}
+program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
+cd4_seurat$tmp<- cd4_seurat@meta.data[[program_name]]
+
+cd4_seurat_tmp<- subset(cd4_seurat, NiceSubtype== "Hemispheric-HistoneWT")
+df<- as.data.frame(table(cd4_seurat_tmp$tmp, cd4_seurat_tmp$sample))
+colnames(df)<-c("Program", "Sample", "NCells")
+df<- df %>% group_by(Sample) %>% mutate(perCells=NCells/sum(NCells)) %>% as.data.frame()
+
+ggplot(df, aes(x=Sample, y=perCells, fill=Program))+
+  geom_bar(stat="identity")+
+  scale_fill_manual(values=program_colors[names(program_colors) %in% unique(df$Program)])+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle=45, hjust=1),
+        axis.text = element_text(face="bold", color="black"),
+        axis.title = element_text(face="bold", color="black"))+
+  ylab("Proportion of cells")+xlab("")
+
+ggsave(paste0(figure_dir, "Breakdown_SampleByProgram_onlyGBM.png"), width=4, height=4)
+```
 
 ## Plot GOI+ Nature2020 genesets (and individual GOI from these genesets) for each program
 ```{r}
