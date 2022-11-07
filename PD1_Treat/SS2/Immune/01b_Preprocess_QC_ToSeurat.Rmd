@@ -9,6 +9,7 @@ output: html_document
 library(Seurat) 
 
 base_dir = "/Users/jlabelle/"
+base_dir = "C:/Users/jenna/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
 working_dir<- paste0(base_dir, 
                      "Dropbox (Partners HealthCare)/FilbinLab/",
