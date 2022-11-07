@@ -478,6 +478,60 @@ lapply(c("cytotoxic", "dysfunctional", "predysfunctional", "naive"), function(x)
 })
 ```
 
+
+## GO term overrepresentation
+```{r}
+## Read in markers generated above
+downSize<-FALSE
+filename<- ifelse(downSize, "markers_forNature2020Annot_byTumorType_downSample.Rds","markers_forNature2020Annot_byTumorType.Rds")
+marker_list<- readRDS(paste0(analysis_dir, filename))
+
+## Rename by tumor type + flatten to single df
+marker_list<- lapply(names(marker_list), function(x){
+  tmp<- marker_list[[x]]
+  tmp$cluster<- paste0(x, "_", gsub("[0-9]", "", tmp$cluster))
+  return(tmp)
+})
+marker_genes<- do.call("rbind", marker_list)
+
+OrgDb = "org.Hs.eg.db"
+dataset = "hsapiens_gene_ensembl"
+
+## Convert using biomart
+ensembl = useMart("ensembl",dataset="hsapiens_gene_ensembl")
+allOE_genes<-getBM(attributes='ensembl_gene_id', 
+                   filters = 'hgnc_symbol', 
+                   values = unique(c(rownames(glioma_cd8@assays$RNA@counts),
+                                     rownames(melanoma_cd8@assays$RNA@counts),
+                                     rownames(nsclc_cd8@assays$RNA@counts))), 
+                  mart = ensembl)
+
+## Subset to top markers
+marker_genes<-marker_genes %>% group_by(cluster) %>% top_n(n=50, wt=avg_log2FC) %>% as.data.frame()
+
+## Run GO: Convert marker genes to ensembl IDs too, then run OR analysis (GO)
+go_result = list()
+for (i in unique(marker_genes$cluster)){
+  print(i)
+  genes<- marker_genes[marker_genes$cluster==i, "gene"]
+  if(length(genes)!=1){
+    sigOE_genes = getBM(attributes='ensembl_gene_id', 
+                        filters = 'hgnc_symbol', 
+                        values=genes,
+                        mart = ensembl)$ensembl_gene_id
+    go_result[[i]] = go_analysis(sigOE_genes, allOE_genes)
+    }
+} 
+
+## Plot and save
+go_plots<- plotGO(go_result = go_result, n_terms = 15)
+cowplot::plot_grid(plotlist=go_plots, ncol=2)
+ggsave(paste0(figure_dir , "GO_NMF.png"), width=18, height=35)
+
+saveRDS(go_result, file=paste0(analysis_dir, "go_result.Rds"))
+```
+
+
 ## sccoda
 ```{r}
 data_dir<- "../../../scCoda/data/"
