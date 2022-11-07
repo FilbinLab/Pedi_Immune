@@ -64,7 +64,7 @@ if(adult_withMUV){
   load(paste0("../../01_Preprocessing/03_PreprocessAdultDatasets/", 
                                 "analysis/Preprocess_AdultMyeloid/", "GBMNeftel_IDHmut2018_myeloid_merged_seurat.Robj"))
   #adult_seurat<- gbm_idhmut_myeloid_seurat; rm(gbm_idhmut_myeloid_seurat)
-  adult_meta$NiceSubtype<- adult_meta$TumorType
+  adult_seurat$NiceSubtype<- adult_seurat$TumorType
 }
 
 ```
@@ -128,7 +128,7 @@ DimPlot(seurat_obj, label=TRUE)+NoLegend()
 ggsave(paste0(figure_dir, "UMAP_ByCluster_res0.5", figure_append, ".png"), width=6, height=6)
 
 DimPlot(seurat_obj, label=TRUE)+NoLegend()
-ggsave(paste0(figure_dir, "UMAP_ByCluster_res0.8", figure_append, ".png"), width=6, height=6)
+ggsave(paste0(figure_dir, "UMAP_ByCluster_res0.8", figure_append, ".pdf"), device="pdf",width=6, height=6)
 ```
 
 ## composition of clusters by age

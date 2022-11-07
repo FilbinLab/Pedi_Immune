@@ -50,19 +50,19 @@ if(!dir.exists(figure_dir)){dir.create(figure_dir)};if(!dir.exists(analysis_dir)
 ## adult
 load(paste0("../../01_Preprocessing/03_PreprocessAdultDatasets/", 
                                 "analysis/Preprocess_AdultMyeloid/", "GBMNeftel_IDHmut2018_myeloid_merged_seurat.Robj"))
-adult_seurat<- gbm_idhmut_myeloid_seurat; rm(gbm_idhmut_myeloid_seurat)
+#adult_seurat<- gbm_idhmut_myeloid_seurat; rm(gbm_idhmut_myeloid_seurat)
 
 ## ped
 ped_seurat<-readRDS(paste0(data_dir, "myeloid_seurat_noDC.B.Rds"))
 
 ## macrophage/myeloid marker genes
-gene_set_dir<- "../../../../../../Marker_genes/"
+gene_set_dir<- "../../../../../../Shared/Marker_genes/Immune/Published/"
 microglia_genes = read.table(paste0(gene_set_dir, "Microglia_markers.txt"))
 macrophage_genes = read.table(paste0(gene_set_dir, "Macrophage_markers.txt"))
 tam_genes = list("microglia" = microglia_genes$V1, "macrophage" = macrophage_genes$V1)
 
 ## motam/mgtam
-gene_set_dir<- "../../../../../../Marker_genes/"
+gene_set_dir<- "../../../../../../Shared/Marker_genes/Immune/Published/"
 gene_sets = read.csv(paste0(gene_set_dir, "Nature2021Movahedi_MoTAM.vs.MgTAM.csv"))
 gene_list<- split(gene_sets, f=gene_sets$cluster)
 gene_list<- lapply(gene_list, function(x){
@@ -248,14 +248,14 @@ ggplot(all_bins_df, aes(x=Bin, y=Subtype))+
  #geom_tile(aes(fill = as.factor(PercentCellsInBin)), colour = "white")+
   geom_raster(aes(fill = as.factor(PercentCellsInBin)), interpolate = TRUE)+
   #scale_fill_gradient2(low="white",  mid="yellow", high="red", midpoint = 5)+
-  scale_fill_manual(values=c(rep("white", color_bin),yellow_red(color_bin *4)))+
+  scale_fill_manual(values=c(rep("white", color_bin),yellow_red(color_bin *4),"red", "red"))+
   #facet_grid(rows=vars(Age), scale="free_y", space="free_y")+
   theme_classic()+
   theme(legend.position = "none",
         axis.text = element_text(color="black", face="bold"))+
   xlab("Microglia-like    - to -    Macrophage-like")+
   ylab("")
-ggsave(paste0(figure_dir, "Heatmap_macrophage.to.microglia_gradient.png"), width=7, height=2.5)
+ggsave(paste0(figure_dir, "Heatmap_macrophage.to.microglia_gradient.pdf"), device="pdf", width=7, height=2.5)
 ```
 
 

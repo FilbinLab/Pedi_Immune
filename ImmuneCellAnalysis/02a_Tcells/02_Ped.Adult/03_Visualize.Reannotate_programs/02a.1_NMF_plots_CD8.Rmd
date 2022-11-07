@@ -19,6 +19,8 @@ library(stringr)
 library(harmony)
 library(ggpubr)
 
+gc()
+
 base_dir = "/Users/jlabelle/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
 working_dir<- paste0(base_dir, 
@@ -74,7 +76,7 @@ celltype_colors<- readRDS(paste0("../../../plot_colors/Tcell.celltypes.Rds"))
 ```{r}
 updateBCOR<- TRUE
 
-figure_dir<- ifelse(removeBCOR, paste0(figure_dir, "updateBCOR/"), figure_dir_tmp)
+figure_dir<- ifelse(updateBCOR, paste0(figure_dir, "updateBCOR/"), figure_dir_tmp)
 #analysis_dir<- ifelse(removeBCOR, paste0(analysis_dir, "updateBCOR/"), data_dir_tmp)
 
 if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}

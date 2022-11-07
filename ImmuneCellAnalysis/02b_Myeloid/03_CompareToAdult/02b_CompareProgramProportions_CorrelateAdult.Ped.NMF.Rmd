@@ -22,6 +22,7 @@ library(biomaRt)
 library(stringr)
 library(ggpubr)
 library(ggVennDiagram)
+library(grid)
 
 base_dir = "/Users/jlabelle/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
@@ -113,10 +114,14 @@ marker_list<- c(ped_marker_list, adult_marker_list)
 
 ## score for marker list
 scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, marker_list)))
+
+saveRDS(scores, file=paste0(analysis_dir, "scores_pedRank", ped_rank, "_adultRank", adult_rank, ".Rds"))
 ```
 
 ## Correlate scores
 ```{r}
+#scores<- readRDS(paste0(analysis_dir, "scores_pedRank", ped_rank, "_adultRank", adult_rank, ".Rds"))
+
 ## Correlate and plot heatmap
 scores_factor_hc = clusterNmfFactors(scores)
 scores_factor_cor = scores_factor_hc$cor_coef[scores_factor_hc$hc_obj$order, scores_factor_hc$hc_obj$order]
@@ -128,17 +133,17 @@ scores_factor_cor$color<-ifelse(rownames(scores_factor_cor) %in% names(ped_marke
 ## Heatmap of correlations
 hm_colors = rev((brewer.pal(n=9, name="RdBu")))
 hm_colors = colorRampPalette(colors = hm_colors)
-p<-pheatmap(scores_factor_cor[,colnames(scores_factor_cor) != "color"], color = hm_colors(100),
+pheatmap(scores_factor_cor[,colnames(scores_factor_cor) != "color"], color = hm_colors(100),
          cluster_rows = F, cluster_cols = F,
          annotation_names_row = F, annotation_names_col =T,
          show_rownames = T, show_colnames = F,
-         #filename = paste0(figure_dir , "CorHeatmap.png"),
+         filename =paste0(figure_dir, "Cor_Ped.rank", ped_rank,"_Adult.rank", adult_rank,  ".pdf"),
          width = 10, height = 6)
  
 cols=scores_factor_cor[order(match(rownames(scores_factor_cor), p$gtable$grobs[[2]]$label)), ]$color
 p$gtable$grobs[[2]]$gp=gpar(col=cols)
  
-png(filename= paste0(figure_dir, "Cor_Ped.rank", ped_rank,"_Adult.rank", adult_rank,  ".png"), width = 500, height = 300)
+pdf(paste0(figure_dir, "Cor_Ped.rank", ped_rank,"_Adult.rank", adult_rank,  ".pdf"),  width = 500, height = 300)
 p
 dev.off()
 
@@ -271,6 +276,7 @@ scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, c(adult_10X
 ## Correlate and plot heatmap
 scores_factor_hc = clusterNmfFactors(scores)
 scores_factor_cor = scores_factor_hc$cor_coef[scores_factor_hc$hc_obj$order, scores_factor_hc$hc_obj$order]
+
  
 ## Add on column for color
 scores_factor_cor<- as.data.frame(scores_factor_cor)
@@ -282,11 +288,11 @@ scores_factor_cor$color<-ifelse(grepl("PedSpecific", rownames(scores_factor_cor)
 ## Heatmap of correlations
 hm_colors = rev((brewer.pal(n=9, name="RdBu")))
 hm_colors = colorRampPalette(colors = hm_colors)
-p<-pheatmap(scores_factor_cor[,colnames(scores_factor_cor) != "color"], color = hm_colors(100),
+pheatmap(scores_factor_cor[,colnames(scores_factor_cor) != "color"], color = hm_colors(100),
          cluster_rows = F, cluster_cols = F,
          annotation_names_row = F, annotation_names_col =T,
          show_rownames = T, show_colnames = F,
-         #filename = paste0(figure_dir , "CorHeatmap.png"),
+         filename = paste0(figure_dir, "Cor_Ped.rank", ped_rank,"_Adult.rank", adult_rank,  "_Adult10X.pdf"),
          width = 10, height = 6)
  
 cols=scores_factor_cor[order(match(rownames(scores_factor_cor), p$gtable$grobs[[2]]$label)), ]$color
@@ -306,6 +312,8 @@ dev.off()
 names(PA_gene_list)<- gsub("AdultSpecific.4", "AdultSpecific_Transitory_TAM",
                            gsub("AdultSpecific.2", "AdultSpecific_IFN_Mo_TAM", gsub("StressResponse", "Microglia", names(PA_gene_list))))
 saveRDS(PA_gene_list, file=paste0(analysis_dir, "pedAdultmerged_pedAdultspecific_geneList_pedRank", ped_rank, "_adultRank", adult_rank, ".Rds"))
+
+saveRDS(scores, file=paste0(analysis_dir, "scores_Adult10X_pedRank_", ped_rank, "_adultRank", adult_rank, ".Rds"))
 ```
 
 
@@ -435,7 +443,7 @@ names(colors_use)<- c("IFN_TAM", "Inflammatory", "HypoxicTAM", "Monocytes", "Tra
           axis.title = element_text(color="black", face="bold"),
           axis.text.x = element_text(angle=45, hjust=1))+
     facet_grid(cols=vars(Age), space="free_x", scale="free_x")
-  ggsave(paste0(figure_dir, "SubtypeBreakdown_byMerged.RegeneratedPrograms.png"), width=8, height=5)
+  ggsave(paste0(figure_dir, "SubtypeBreakdown_byMerged.RegeneratedPrograms.pdf"), device="pdf", width=8, height=5)
   
 ## Plot breakdown by age, by sample
   ## Proportion of programs in ped/adult  by sample
@@ -553,7 +561,7 @@ ggsave(paste0(figure_dir, "UMAP_Ped.Adult_byMerged.RegeneratedPrograms.png"), wi
 
   
     
-  ggsave(paste0(figure_dir, "Heatmap_topMarkers_MergedRegeneratedPedAdultMarkers_centeredBy", center_method, ".png"), width=15, height=10)
+  ggsave(paste0(figure_dir, "Heatmap_topMarkers_MergedRegeneratedPedAdultMarkers_centeredBy", center_method, ".pdf"),device="pdf", width=15, height=10)
 ```
 
 

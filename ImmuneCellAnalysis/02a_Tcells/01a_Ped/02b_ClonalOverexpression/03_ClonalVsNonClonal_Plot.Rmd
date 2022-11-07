@@ -95,7 +95,7 @@ for(analysis in analysis_names){
       ylab("Expression background Z score")+
       xlab("CV background Z score")
     
-    ggsave(paste0(figure_dir, analysis, "_ExprCVZscores_GOI.outliers_editedFigure.png"), width=6, height=4.5)
+    ggsave(paste0(figure_dir, analysis, "_ExprCVZscores_GOI.outliers_editedFigure.pdf"), device="pdf", width=6, height=4.5)
     
   ## 3. Plot top 20 genes in DotPlot
     ## merge clonal/nonclonal seurat objects
