@@ -1,0 +1,466 @@
+---
+title: "ProjectBroadAnnots.Rmd"
+author: "Jenna LaBelle"
+date: "10/07/22"
+output: html_document
+---
+
+## Project "broad" (T cell and myeloid) and "detailed" (CD4, CD8, DC, Monocyte, Bcell) annotations from the full immune cohort to merged tenx patients (both treated and untreated)
+
+```{r}
+library(Seurat) 
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/tenX/withPD1TreatedTenX/")
+
+analysis_dir<- paste0(working_dir, "/analysis/project_broad.detailed_annot/")
+figure_dir<- paste0(working_dir, "/figures/project_broad.detailed_annot/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+```
+
+## Helper functions
+```{r}
+## Helper function to identify markers, top markers
+my_get_markers<- function(seurat, n_top=10, ident, excludeProgram=NULL){
+  seurat@meta.data[["ident"]]<-seurat@meta.data[[ident]]
+  seurat<- SetIdent(seurat, value=seurat$ident)
+  if(!is.null(excludeProgram)){
+    seurat<- subset(seurat, ident != excludeProgram)
+  }
+  all_markers<- FindAllMarkers(seurat, min.pct = 0.2, logfc.threshold = 0.5)
+  markers_filtered<- all_markers[all_markers$p_val_adj<0.05,]
+  top_markers<- markers_filtered %>% group_by(cluster) %>% top_n(n=n_top, wt=avg_log2FC) %>% as.data.frame()
+  
+  return(list(filtered_markers=markers_filtered,
+              top_markers=top_markers))
+}
+
+## Helper function to run standard seurat projection from reference --> query
+my_project_seurat<- function(reference_seurat, query_seurat, reduction="pcaproject",
+                             reference_annotation, prediction_colNames=NULL){
+  seurat_list<-list(full=reference_seurat, tenx=query_seurat)
+  
+  ## Transfer anchors and predict
+  transferAnchors<-FindTransferAnchors(reference = seurat_list$full, query=seurat_list$tenx,
+                                       reduction = reduction)
+  
+  predictions <- TransferData(anchorset = transferAnchors, 
+                              refdata =reference_seurat@meta.data[[reference_annotation]],
+                              weight.reduction = reduction)
+  
+  predictions_final<- predictions$predicted.id; names(predictions_final)<- rownames(predictions)
+  
+  ## Add to query seurat object
+  if(is.null(prediction_colNames)){
+      query_seurat<- AddMetaData(query_seurat, predictions, col.name=c("Program_projected", 
+                                                         paste0(gsub("prediction.score.", "",
+                                                                     colnames(predictions)[2:ncol(predictions)]),
+                                                                "_Programscore_projected")))
+  }else{
+    query_seurat<- AddMetaData(query_seurat, predictions, col.name=prediction_colNames)
+  }
+  return(query_seurat)
+
+  
+                             }
+
+
+## Helper for barchart by program proportion
+my_barchart_programProp<- function(seurat, grouping_variable="sample", coloring_variable,
+                                   colors){
+  df<- as.data.frame(table(seurat@meta.data[[grouping_variable]], seurat@meta.data[[coloring_variable]]))
+  colnames(df)<- c("Sample", "Program", "NCells")
+  df<- df %>% group_by(Sample) %>% mutate(perCells=NCells/sum(NCells)) %>% as.data.frame()
+  ggplot(df, aes(x=Sample, y=perCells, fill=Program))+
+    geom_bar(stat="identity")+
+    scale_fill_manual(values=colors[names(colors) %in% df$Program])+
+    theme_classic()
+                                   }
+## Order features for plotting
+## input should be of the format from seurat's FindAllMarkers
+my_orderFeatures_forDotplot<- function(markers){
+      markers$cluster<- as.character(markers$cluster)
+      markers$cluster<- factor(markers$cluster, 
+                                            levels=unique(markers$cluster)[order(unique(markers$cluster))])
+      markers$gene<- factor(markers$gene, levels=markers$gene[order(markers$cluster)])
+      markers<- markers[order(markers$gene),]
+      return(markers)
+}
+
+
+
+## Helper function for dotplot of markers of interest
+my_dotplot<- function(seurat, grouping_variable, features){
+  seurat@meta.data[["tmp"]]<- seurat@meta.data[[grouping_variable]]
+  DotPlot(seurat, group.by = "tmp", features=features)+
+    coord_flip()+
+    theme(axis.text.x = element_text(angle=45, hjust=1))+
+    scale_color_gradient2(low="blue", mid="white", high="red")
+}
+  
+## Helper for plotting histogram of max score
+## Helps to determine reasonable "Score too low" threshold
+my_histMaxScores<- function(seurat, grouping_variable,score_variable, colors){
+  seurat@meta.data[["grouping_variable"]]<- seurat@meta.data[[grouping_variable]]
+  seurat@meta.data[["score_variable"]]<- seurat@meta.data[[score_variable]]
+  cowplot::plot_grid(plotlist=lapply(unique(seurat$grouping_variable), function(x){
+    tmp<- subset(seurat, grouping_variable==x)
+    ggplot(tmp@meta.data, aes(x=score_variable, fill=grouping_variable))+
+      geom_histogram()+
+      scale_fill_manual(values=colors[x])+
+      theme_classic()+
+      theme(legend.position = "none")+
+      ggtitle(x)
+  }))
+}
+
+
+```
+
+
+## Load seurat objects: tenx (processed in 01_Preprocessing.Rmd) and full immune cohort (both myeloid and t cells)
+```{r}
+full_cohort_dir<- "../../"
+data_dir<- "analysis/merge/"
+
+tenx_seurat<- readRDS(paste0(data_dir, "treated_untreated_merged_harmony_seurat.Rds"))
+full_seurat<- readRDS(paste0(full_cohort_dir,
+                             "01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/pedOnly_nomuv63/",
+                             "tcell.myeloid_seurat_harmony.Rds"))
+full_tcell_seurat<- readRDS(paste0(full_cohort_dir,
+                                   "02a_Tcells/02_Ped.Adult/03_Visualize.Reannotate_programs/analysis/Reannotate_programs/",
+                                   "rank8_sharedByunion/",
+                                   "ped_seurat_tcell_harmony.Rds"))
+full_myeloid_seurat<- readRDS(paste0(full_cohort_dir,
+                                     "01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/",
+                                     "pedOnly_nomuv63/",
+                                     "myeloid_seurat_harmony.Rds"))
+
+## Colors 
+immune_colors<- readRDS(paste0(full_cohort_dir, "/plot_colors/ImmuneCell.celltypes.Rds"))
+treat_colors<- c(treated="purple", untreated="orange")
+```
+
+
+## Projection of myeloid/tcell annotations with pcproject 
+```{r}
+tenx_seurat<- my_project_seurat(full_seurat, tenx_seurat, reference_annotation = "broad_annot",
+                               prediction_colNames = c("broad_annot_projected", "Tcell_score_projected", 
+                                                             "Myeloid_score_projected", "max_score_projected"))
+
+## plot
+DimPlot(tenx_seurat, group.by="broad_annot_projected", pt.size = 1, label=TRUE, label.size = 6)+ NoLegend()+
+  scale_color_manual(values=immune_colors[names(immune_colors) %in% tenx_seurat$broad_annot_projected])
+ggsave(paste0(figure_dir, "UMAP_broadAnnot_projectedFromFull.png"), width=6, height=6)
+
+## Confirm high expression of myeloid/tcell markers by predicted broad annotation
+cowplot::plot_grid(plotlist=lapply(c("CSF1R", "CD3G", "CD8A", "CD4"), function(x){
+  VlnPlot(tenx_seurat, features=x, group.by = "broad_annot_projected")+ NoLegend()+
+    scale_fill_manual(values=immune_colors[names(immune_colors) %in% tenx_seurat$broad_annot_projected])+
+    xlab("")
+}), ncol=4)
+ggsave(paste0(figure_dir, "Vln_broadMarkers_projectedFromFull.png"), width=12, height=4)
+
+FeaturePlot(tenx_seurat, features=c("CSF1R", "CD3G", "CD8A", "CD4"))
+
+## Proportion
+my_barchart_programProp(tenx_seurat, coloring_variable = "broad_annot_projected", colors=immune_colors)
+ggsave(paste0(figure_dir, "Breakdown_broad_bySample.png"), width=4, height=4)
+
+saveRDS(tenx_seurat, file=paste0(data_dir, "treated_untreated_merged_harmony_seurat.Rds"))
+```
+
+## Split into myeloid/tcell seurat objects, rerun processing
+```{r}
+tenx_seurat<- readRDS(paste0(data_dir, "treated_untreated_merged_harmony_seurat.Rds"))
+
+## Myeloid
+myeloid_tenx<- subset(tenx_seurat, broad_annot_projected=="Myeloid")
+myeloid_tenx_meta<- myeloid_tenx@meta.data
+myeloid_tenx<- RunFullSeurat(myeloid_tenx@assays$RNA@counts, samples= myeloid_tenx$treatment, RunHarmony = TRUE)
+myeloid_tenx<- AddMetaData(myeloid_tenx, myeloid_tenx_meta[,!colnames(myeloid_tenx_meta) %in% colnames(myeloid_tenx@meta.data)])
+
+## Tcell
+tcell_tenx<- subset(tenx_seurat, broad_annot_projected=="Tcell")
+tcell_tenx_meta<- tcell_tenx@meta.data
+tcell_tenx<- RunFullSeurat(tcell_tenx@assays$RNA@counts, samples= tcell_tenx$treatment, RunHarmony = TRUE)
+tcell_tenx<- AddMetaData(tcell_tenx, tcell_tenx_meta[,!colnames(tcell_tenx_meta) %in% colnames(tcell_tenx@meta.data)])
+
+## Plot by treatment
+DimPlot(tcell_tenx, group.by = "treatment") + 
+  scale_color_manual(values=treat_colors)
+ggsave(paste0(figure_dir, "UMAP_Tcell_integrated_byTreatment.png"), width=6, height=5)
+
+DimPlot(myeloid_tenx, group.by = "treatment") + 
+  scale_color_manual(values=treat_colors)
+ggsave(paste0(figure_dir, "UMAP_Myeloid_integrated_byTreatment.png"), width=6, height=5)
+
+saveRDS(myeloid_tenx, file=paste0(analysis_dir, "myeloid_tenx_seurat.Rds"))
+saveRDS(tcell_tenx, file=paste0(analysis_dir, "tcell_tenx_seurat.Rds"))
+```
+
+## Projection of DC/BC/Monocyte annotations for myeloid cells with pcproject 
+```{r}
+myeloid_tenx<- readRDS(paste0(analysis_dir, "myeloid_tenx_seurat.Rds"))
+
+
+myeloid_tenx<- my_project_seurat(full_myeloid_seurat, myeloid_tenx, reference_annotation = "detailed_annot",
+                                prediction_colNames =c("detailed_annot_projected", "Myeloid_score_projected", 
+                                                             "Bcell_score_projected", "DC_score_projected",
+                                                             "max_Detailed_score_projected") )
+
+
+## plot
+DimPlot(myeloid_tenx, group.by="detailed_annot_projected", pt.size = 1, label=TRUE, label.size = 6)+ NoLegend()+
+  scale_color_manual(values=immune_colors[names(immune_colors) %in% myeloid_tenx$detailed_annot_projected])
+ggsave(paste0(figure_dir, "UMAP_myeloid_detailedAnnot_projectedFromFull.png"), width=6, height=6)
+
+## No Bcells or dendritic cells predicted based on projection- outlier clusters suggest could be different cell types?
+## Result: outlier clusters seem to be monocytes and CD3+ monocytes. Detailed annotations not updated
+FeaturePlot(myeloid_tenx, features=c( "CSF1R",  "CD207", "MS4A1", "CD3G"))
+ggsave(paste0(figure_dir, "UMAP_myeloid_detailedAnnotMarkers.png"), width=7, height=6)
+
+  ## Reduce resolution
+  myeloid_tenx<- FindClusters(myeloid_tenx, resolution = 0.2)
+  
+  ## Merge clusters ( main myeloid cluster)
+  myeloid_tenx$merged_cluster<- ifelse(myeloid_tenx$seurat_clusters %in% c(0, 2, 1), 0, myeloid_tenx$seurat_clusters)
+  
+  ## Find markers
+  myeloid_tenx<- SetIdent(myeloid_tenx, value = myeloid_tenx$merged_cluster)
+  all_markers<- FindAllMarkers(myeloid_tenx, min.pct = 0.5, logfc.threshold = 0.25)
+  filtered_markers<- all_markers[all_markers$p_val_adj<0.05, ]
+  top_markers<- filtered_markers %>% group_by(cluster) %>% top_n(n=10, wt=avg_log2FC) %>% as.data.frame()
+  
+  ## Plot top marker genes- cluster 4 is CD3+ monocytes/macrophages 
+  myeloid_tenx$expressCD3<- ifelse(myeloid_tenx$merged_cluster==4, "Yes", "No")
+  FeaturePlot(myeloid_tenx, features=c("P2RY12", "CD3E", "LILRA5", "NEAT1"))
+  ggsave(paste0(figure_dir, "Myeloid_identifyMisassignedTcells.png"), width=7, height=6)
+  
+
+
+
+## Save with annotations
+saveRDS(myeloid_tenx, file=paste0(analysis_dir, "myeloid_tenx_seurat.Rds"))
+
+## Remove BC, rerun clustering, and save
+myeloid_tenx_noDC.B<- subset(myeloid_tenx, detailed_annot_projected_DCmanual=="Myeloid")
+myeloid_tenx_noDC.B_meta<- myeloid_tenx_noDC.B@meta.data
+myeloid_tenx_noDC.B<- RunFullSeurat(myeloid_tenx_noDC.B@assays$RNA@counts, RunHarmony = TRUE, samples=myeloid_tenx_noDC.B$treatment)
+myeloid_tenx_noDC.B<- AddMetaData(myeloid_tenx_noDC.B, myeloid_tenx_noDC.B_meta[,!colnames(myeloid_tenx_noDC.B_meta) %in% 
+                                                                               colnames(myeloid_tenx_noDC.B@meta.data)])
+saveRDS(myeloid_tenx_noDC.B, file=paste0(analysis_dir, "myeloid_tenx_noDC.B_seurat.Rds"))
+
+
+```
+
+
+
+
+## Projection of CD4/CD8 annotations for T cells with pcproject 
+Note that for CD4, projection of annotations clearly mis-annotates a few CD8 T cells. After projection and subsetting to CD4/CD8, these mis-annotated CD8 T cells are reassigned as CD8 and added to rest of CD8 T cells (based on projection)
+
+Thus, final CD4/CD8 annotations are based on a combination of projection and manual assignement
+
+## Projection based annotation
+```{r}
+tcell_tenx<- readRDS(paste0(analysis_dir, "tcell_tenx_seurat.Rds"))
+
+tcell_tenx<- my_project_seurat(full_tcell_seurat, tcell_tenx, reference_annotation = "detailed_annot_byNMFrank8_mergedByunion",
+                                prediction_colNames =c("detailed_annot_projected", "CD4_score_projected", 
+                                                             "CD8_score_projected", "max_Detailed_score_projected"))
+
+
+## plot
+DimPlot(tcell_tenx, group.by="detailed_annot_projected", pt.size = 1, label=TRUE, label.size = 6)+ NoLegend()+
+  scale_color_manual(values=immune_colors[names(immune_colors) %in% tcell_tenx$detailed_annot_projected])
+ggsave(paste0(figure_dir, "UMAP_Tcell_detailedAnnot_projectedFromFull.png"), width=6, height=6)
+
+## Confirm high expression of tcell markers by predicted detailed annotation
+cowplot::plot_grid(plotlist=lapply(c( "CD3G", "CD8A", "CD4"), function(x){
+  VlnPlot(tcell_tenx, features=x, group.by = "detailed_annot_projected")+ NoLegend()+
+    scale_fill_manual(values=immune_colors[names(immune_colors) %in% tcell_tenx$detailed_annot_projected])+
+    xlab("")
+}), ncol=3)
+ggsave(paste0(figure_dir, "Vln_Tcell_detailedMarkers_projectedFromFull.png"), width=9, height=4)
+
+## Seems to be a few CD8 mis-annotated as CD4 based on markers?
+FeaturePlot(tcell_tenx, features=c("CD3G", "CD4", "CD8A"))
+ggsave(paste0(figure_dir, "UMAP_Tcell_detailedMarkers.png"), width=7, height=6)
+
+## Subset to CD8, recluster
+cd8_tenx<- subset(tcell_tenx, detailed_annot_projected=="CD8")
+cd8_tenx_meta<- cd8_tenx@meta.data
+cd8_tenx<- RunFullSeurat(cd8_tenx@assays$RNA@counts, samples=cd8_tenx$treatment, RunHarmony = TRUE)
+cd8_tenx<- AddMetaData(cd8_tenx, cd8_tenx_meta[,!colnames(cd8_tenx_meta) %in% colnames(cd8_tenx@meta.data)])
+
+## Subset to CD4, recluster
+cd4_tenx<- subset(tcell_tenx, detailed_annot_projected=="CD4") 
+cd4_tenx_meta<- cd4_tenx@meta.data
+cd4_tenx<- RunFullSeurat(cd4_tenx@assays$RNA@counts, samples=cd4_tenx$treatment, RunHarmony = TRUE)
+cd4_tenx<- AddMetaData(cd4_tenx, cd4_tenx_meta[,!colnames(cd4_tenx_meta) %in% colnames(cd4_tenx@meta.data)])
+
+```
+
+## Correct projection-based annotation with manual marker-based annotation
+## NOTE that unlike full SS2 cohort, seems to exist a real "double positive" T cell subset. Must be technical, but difficult to annotate correctly. From both CD4 and CD8, 
+## CD4
+```{r}
+## CD4 seems to have a few CD8 based on marker genes- re-annotate based on marker genes (need to increase resolution)
+FeaturePlot(cd4_tenx, features=c("CD3G", "CD4", "CD8A"))
+ggsave(paste0(figure_dir, "UMAP_CD4_detailedAnnotMarkers_preReannotation.png"), width=7, height=6)
+
+## increase resolution
+cd4_tenx<-FindClusters(cd4_tenx, resolution=1)
+
+## Identify CD8 clusters
+VlnPlot(cd4_tenx, features=c("CD4", "CD8A")) + DimPlot(cd4_tenx, label=TRUE) +FeaturePlot(cd4_tenx, features="CD8A")
+ggsave(paste0(figure_dir, "CD4_identifyCD8_preReannotation.png"), width=8, height=8)
+
+## Clusters 6 and 7 are clearly CD8. Reassign.
+cd4_tenx$detailed_annot_manual<- ifelse(cd4_tenx$RNA_snn_res.1 %in% c(6,7), "CD8", "CD4")
+
+## Clusters 9 and 10 contain mixture. Subcluster.
+cd4_unclearClusters<- SplitObject(subset(cd4_tenx, RNA_snn_res.1 %in% c(9, 10)), "RNA_snn_res.1"  )
+cd4_unclearCluster<-lapply(cd4_unclearClusters, function(x){
+  RunFullSeurat(x@assays$RNA@counts, RunHarmony = TRUE, samples=x$treatment,
+                                   pca_dims = ncol(x) - 1)
+}) 
+lapply(cd4_unclearClusters, function(x){
+  x<- FindClusters(x, resolution=1)
+  FeaturePlot(x, features=c("CD4", "CD8B")) + DimPlot(x, label=TRUE) + VlnPlot(x, features=c("CD4", "CD8A"))
+})
+
+## Clusters 9 and 10 contain mixture- unclear based on subcluster. assign by CD8A/CD4 expression
+cd4_unclearClusters<-subset(cd4_tenx, RNA_snn_res.1 %in% c(9, 10))
+cd8_expr<- as.data.frame(t(as.data.frame(cd4_unclearClusters@assays$RNA@data[c("CD8A", "CD8B"),])))
+cd4_unclearClusters$detailed_annot_manual<- ifelse(rowSums(cd8_expr) > 0, "CD8", "CD4")
+
+## Add manual detailed annotation to full cd4
+cd4_tenx$detailed_annot_manual<- ifelse(colnames(cd4_tenx) %in% colnames(cd4_unclearClusters),
+                                        as.character(plyr::mapvalues(colnames(cd4_tenx),
+                                                                     colnames(cd4_unclearClusters),
+                                                                     cd4_unclearClusters$detailed_annot_manual)),
+                                        cd4_tenx$detailed_annot_manual)
+DimPlot(cd4_tenx, group.by = "detailed_annot_manual")+
+  scale_color_manual(values=immune_colors[c("CD4", "CD8")])
+ggsave(paste0(figure_dir, "UMAP_CD4_reAnnotatedCD8.png"), width=6, height=5)
+
+## Add "CD4" CD8 T cells to rest of CD8 and recluster
+cd4_actuallyCD8<- subset(cd4_tenx, detailed_annot_manual=="CD8")
+cd4_actuallyCD8@meta.data<- cd4_actuallyCD8@meta.data[,colnames(cd4_actuallyCD8@meta.data) %in%
+                                                        colnames(cd8_tenx@meta.data)]
+cd8_tenx<- merge(cd8_tenx, cd4_actuallyCD8)
+cd8_tenx_meta<- cd8_tenx@meta.data
+cd8_tenx<- RunFullSeurat(cd8_tenx@assays$RNA@counts, samples=cd8_tenx$treatment, RunHarmony = TRUE)
+cd8_tenx<- AddMetaData(cd8_tenx, cd8_tenx_meta[,!colnames(cd8_tenx_meta) %in% colnames(cd8_tenx@meta.data)])
+
+## Remove CD8 T cells from "CD4" and recluster
+cd4_tenx<- subset(cd4_tenx, detailed_annot_manual=="CD4")
+cd4_tenx_meta<- cd4_tenx@meta.data
+cd4_tenx<- RunFullSeurat(cd4_tenx@assays$RNA@counts, samples=cd4_tenx$treatment, RunHarmony = TRUE)
+cd4_tenx<- AddMetaData(cd4_tenx, cd4_tenx_meta[,!colnames(cd4_tenx_meta) %in% colnames(cd4_tenx@meta.data)])
+
+```
+
+## Correct projection-based annotation with manual marker-based annotation
+## CD8
+```{r}
+## CD8 seems to have a few CD4 based on marker genes- re-annotate based on marker genes (need to increase resolution)
+FeaturePlot(cd8_tenx, features=c("CD3G", "CD4", "CD8A"))
+ggsave(paste0(figure_dir, "UMAP_CD8_detailedAnnotMarkers_preReannotation.png"), width=7, height=6)
+
+## increase resolution
+cd8_tenx<-FindClusters(cd8_tenx, resolution=2)
+
+## Identify CD4 clusters
+VlnPlot(cd8_tenx, features=c("CD4", "CD8A")) + DimPlot(cd8_tenx, label=TRUE) +FeaturePlot(cd8_tenx, features="CD4")
+ggsave(paste0(figure_dir, "CD8_identifyCD4_preReannotation.png"), width=8, height=8)
+
+## Clusters 13 and 8 are clearly CD8. Reassign.
+cd8_tenx$detailed_annot_manual<- ifelse(cd8_tenx$RNA_snn_res.2 %in% c(8,13), "CD8", "CD4")
+
+## Clusters 7, 9 12 contain mixture. Subcluster.
+cd8_unclearClusters<- SplitObject(subset(cd8_tenx, RNA_snn_res.2 %in% c(7, 9, 12)), "RNA_snn_res.2"  )
+cd8_unclearClusters<-lapply(cd8_unclearClusters, function(x){
+  print(unique(x$RNA_snn_res.2))
+  RunFullSeurat(x@assays$RNA@counts, RunHarmony = TRUE, samples=x$treatment,
+                                   pca_dims = ncol(x) - 1)
+}) 
+lapply(cd8_unclearClusters, function(x){
+  x<- FindClusters(x, resolution=1)
+  FeaturePlot(x, features=c("CD4", "CD8B")) + DimPlot(x, label=TRUE) + VlnPlot(x, features=c("CD4", "CD8A"))
+})
+
+## Clusters 9 and 10 contain mixture- unclear based on subcluster. assign by CD8A expression
+cd4_unclearClusters<-subset(cd4_tenx, RNA_snn_res.1 %in% c(9, 10))
+cd8_expr<- as.data.frame(t(as.data.frame(cd4_unclearClusters@assays$RNA@data[c("CD8A", "CD8B"),])))
+cd4_unclearClusters$detailed_annot_manual<- ifelse(rowSums(cd8_expr) > 0, "CD8", "CD4")
+
+## Add manual detailed annotation to full cd4
+cd4_tenx$detailed_annot_manual<- ifelse(colnames(cd4_tenx) %in% colnames(cd4_unclearClusters),
+                                        as.character(plyr::mapvalues(colnames(cd4_tenx),
+                                                                     colnames(cd4_unclearClusters),
+                                                                     cd4_unclearClusters$detailed_annot_manual)),
+                                        cd4_tenx$detailed_annot_manual)
+DimPlot(cd4_tenx, group.by = "detailed_annot_manual")+
+  scale_color_manual(values=immune_colors[c("CD4", "CD8")])
+ggsave(paste0(figure_dir, "UMAP_CD4_reAnnotatedCD8.png"), width=6, height=5)
+
+## Add "CD4" CD8 T cells to rest of CD8 and recluster
+cd4_actuallyCD8<- subset(cd4_tenx, detailed_annot_manual=="CD8")
+cd4_actuallyCD8@meta.data<- cd4_actuallyCD8@meta.data[,colnames(cd4_actuallyCD8@meta.data) %in%
+                                                        colnames(cd8_tenx@meta.data)]
+cd8_tenx<- merge(cd8_tenx, cd4_actuallyCD8)
+cd8_tenx_meta<- cd8_tenx@meta.data
+cd8_tenx<- RunFullSeurat(cd8_tenx@assays$RNA@counts, samples=cd8_tenx$treatment, RunHarmony = TRUE)
+cd8_tenx<- AddMetaData(cd8_tenx, cd8_tenx_meta[,!colnames(cd8_tenx_meta) %in% colnames(cd8_tenx@meta.data)])
+
+## Remove CD8 T cells from "CD4" and recluster
+cd4_tenx<- subset(cd4_tenx, detailed_annot_manual=="CD4")
+cd4_tenx_meta<- cd4_tenx@meta.data
+cd4_tenx<- RunFullSeurat(cd4_tenx@assays$RNA@counts, samples=cd4_tenx$treatment, RunHarmony = TRUE)
+cd4_tenx<- AddMetaData(cd4_tenx, cd4_tenx_meta[,!colnames(cd4_tenx_meta) %in% colnames(cd4_tenx@meta.data)])
+```
+
+
+
+
+```{r}
+
+## Update CD4/CD8 annotations in full tcells dataset
+tcell_tenx$detailed_annot_projected_manual<- ifelse(colnames(tcell_tenx) %in% colnames(cd4_tenx), "CD4",
+                                             ifelse(colnames(tcell_tenx) %in% colnames(cd8_tenx), "CD8", "issue"))
+
+## Confirm finalized annotations
+cowplot::plot_grid(plotlist=lapply(c("CD4", "CD8A"), function(x){
+  VlnPlot(tcell_tenx, group.by = "detailed_annot_projected_manual", features=x)+NoLegend()+
+    scale_fill_manual(values=immune_colors[names(immune_colors) %in% tcell_tenx$detailed_annot_projected_manual])
+}))
+ggsave(paste0(figure_dir, "Vln_Tcells_detailedAnnot_projected_manual.png"), width=6, height=4)
+
+DimPlot(tcell_tenx, group.by = "detailed_annot_projected_manual")+
+  scale_color_manual(values=immune_colors[names(immune_colors) %in% tcell_tenx$detailed_annot_projected_manual])
+ggsave(paste0(figure_dir, "UMAP_Tcells_detailedAnnot_projected_manual.png"), width=6, height=5)
+
+
+  
+
+
+## save
+saveRDS(cd4_tenx, file=paste0(analysis_dir, "cd4_tenx_seurat.Rds"))
+saveRDS(cd8_tenx, file=paste0(analysis_dir, "cd8_tenx_seurat.Rds"))
+saveRDS(tcell_tenx, file=paste0(analysis_dir, "tcell_tenx_seurat.Rds"))
+```
+

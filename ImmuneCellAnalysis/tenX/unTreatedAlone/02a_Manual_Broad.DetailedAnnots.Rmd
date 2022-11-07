@@ -1,0 +1,165 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+## broad annotation (myeloid, tcell) + detailed (cd4, cd8) based on marker gene expression
+NO LONGER IN USE
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+
+base_dir = "/Users/jlabelle/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/tenX/unTreatedAlone/")
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+library(Matrix)
+
+analysis_dir<- "analysis/manual_broad.detailed_annot/"
+figure_dir<- "figures/manual_broad.detailed_annot/"
+data_dir<- "data/"
+
+marker_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/Marker_genes/")
+hkgenes <- read.table(paste0(marker_dir, "tirosh_house_keeping.txt"), skip = 2)
+hkgenes <- as.vector(hkgenes$V1)
+```
+
+## seurat object with all filtered cells
+```{r}
+data_dir<- "analysis/Preprocessing/"
+seurat_obj<- readRDS(paste0(data_dir, "immune_seurat_obj.Rds"))
+```
+
+
+## Identify myeloid/Tcells
+```{r}
+## subset to just CD3 (may not all be tcells though)
+seurat_cd3<- subset(seurat_obj, sample=="E167CD35resub")
+seurat_cd3_meta<- seurat_cd3@meta.data
+seurat_cd3<- RunFullSeurat_Immune(seurat_cd3@assays$RNA@counts, seurat_cd3$sample)
+seurat_cd3<- AddMetaData(seurat_cd3, seurat_cd3_meta[,!colnames(seurat_cd3_meta) %in% colnames(seurat_cd3@meta.data)])
+
+## Determine "true" t cells, myeloid cells, other
+FeaturePlot(seurat_cd3, features = c("CD3G", "CSF1R", "GFAP"), ncol=3)
+ggsave(paste0(figure_dir, "UMAP_CD3_ByTcell.Myeloid.AC_markers.png"), width=12, height=4)
+
+VlnPlot(seurat_cd3, group.by = "seurat_clusters", features = c("CD3G", "CD3E", "CSF1R", "GFAP"), ncol=4)
+ggsave(paste0(figure_dir, "Vln_CD3_ByTcell.Myeloid.AC_markers.png"), width=12, height=4)
+
+DimPlot(seurat_cd3, label=TRUE)+NoLegend()
+ggsave(paste0(figure_dir, "UMAP_CD3_seurat.clusters.png"), width=6, height=6)
+
+## Assign tcell/myeloid/other (likely tumor) cells:
+annots<- as.character(unique(seurat_cd3$seurat_clusters)); annots<- annots[order(annots)]
+names(annots)<- c("Tcell", "Tcell", "Tcell", "Tcell", "Myeloid", "Tcell", "Tcell", "Tcell")
+seurat_cd3$broad_annot<- plyr::mapvalues(seurat_cd3$seurat_clusters, annots, names(annots))
+
+  ## Marker genes between tcell/myeloid/other to help determine "other"- seems to be astrocytes
+  seurat_cd3<-SetIdent(seurat_cd3, value = seurat_cd3$broad_annot)
+  all_markers<- FindAllMarkers(seurat_cd3, min.pct = 0.2)
+  all_markers_filtered<- all_markers[all_markers$p_val_adj<0.05 & all_markers$avg_log2FC>0.5,]
+
+## Plot by broad annotation  
+DimPlot(seurat_cd3, group.by = "broad_annot", label=TRUE, label.size = 8)+NoLegend()+
+  scale_color_manual(values=c(Tcell="cadetblue4", Myeloid="gold3",AC="violetred"))
+ggsave(paste0(figure_dir, "UMAP_CD3_broadAnnot.png"), width=6, height=6)
+
+## Split by broad annotation, run seurat pipeline for each
+tcell_seurat<- subset(seurat_cd3, broad_annot=="Tcell")
+tcell_meta<- tcell_seurat@meta.data
+tcell_seurat<- RunFullSeurat_Immune(tcell_seurat@assays$RNA@counts, samples=tcell_meta$sampleid)
+
+myeloid_seurat<- subset(seurat_cd3, broad_annot=="Myeloid")
+myeloid_meta<- myeloid_seurat@meta.data
+myeloid_seurat<- RunFullSeurat_Immune(myeloid_seurat@assays$RNA@counts, samples=myeloid_meta$sampleid)
+
+
+saveRDS(seurat_cd3, file=paste0(analysis_dir, "seurat_cd3.Rds"))
+saveRDS(tcell_seurat, file=paste0(analysis_dir, "seurat_tcell.Rds"))
+saveRDS(myeloid_seurat, file=paste0(analysis_dir, "seurat_myeloid.Rds"))
+```
+
+
+## Within tcells, identify cd4 and cd8 populations
+```{r}
+tcell_seurat<- readRDS(paste0(analysis_dir, "seurat_tcell.Rds"))
+
+## Plot by cd4/cd8 markers
+FeaturePlot(tcell_seurat, features=c("CD3G", "CD4", "CD8A"), ncol = 3)
+ggsave(paste0(figure_dir, "UMAP_Tcells_byCD4.CD8.png"), width=15, height=5)
+
+VlnPlot(tcell_seurat, features=c("CD3G","CD3E", "CD4", "CD8A"), ncol = 4)
+ggsave(paste0(figure_dir, "Vln_Tcells_byCD4.CD8.png"), width=12, height=4)
+
+DimPlot(tcell_seurat, label=TRUE)+NoLegend()
+ggsave(paste0(figure_dir, "UMAP_Tcells_bySeuratClusters.png"), width=6, height=5)
+
+## Clusters 6,8 show no expression of either cd4/cd8, but mostly express cd3?
+unclearClusters_seurat<- subset(tcell_seurat, seurat_clusters %in% c(6,8))
+unclearClusters_rerun<- RunFullSeurat_Immune(unclearClusters_seurat@assays$RNA@counts, unclearClusters_seurat$sampleid)
+DimPlot(unclearClusters_rerun)
+
+## Cluster 6 shows no expression of CD3G- markers?
+all_markers<- FindAllMarkers(tcell_seurat, min.pct = 0.2)
+all_markers_filtered<- all_markers[all_markers$p_val_adj<0.05,]
+VlnPlot(unclearClusters_rerun, features = c("CD3G","CD3E", "CD4", "CD8A"), ncol=4)
+
+  ## Still no expression of cd4/cd8. Annotate in cell-wise manner, remove any cells with 0 expression for both
+  cd4.cd8_expr<- as.data.frame(t(unclearClusters_rerun@assays$RNA@counts[c("CD4", "CD8A"),]))
+  cd4.cd8_expr<- cd4.cd8_expr[rowSums(cd4.cd8_expr)>0,] ## only keeps 39 cells
+  cd4.cd8_expr$detailed_annot<- ifelse(cd4.cd8_expr$CD4>cd4.cd8_expr$CD8A, "CD4", "CD8")
+  cellsRemove<- colnames(unclearClusters_rerun)[!colnames(unclearClusters_rerun) %in% rownames(cd4.cd8_expr)] ## 146 cells
+  
+## Remove the 146 cells with unclear cd4/cd8 annotations, then rerun seurat
+cells_keep<-colnames(tcell_seurat)[!colnames(tcell_seurat) %in% cellsRemove]
+tcell.cd4.cd8_seurat<- subset(tcell_seurat, cells = cells_keep)
+tcell.cd4.cd8_seurat<- RunFullSeurat_Immune(tcell.cd4.cd8_seurat@assays$RNA@counts, tcell.cd4.cd8_seurat$sampleid)
+
+
+## Re-annotate by cd4/cd8
+FeaturePlot(tcell.cd4.cd8_seurat, features=c("CD3G", "CD4", "CD8A"), ncol = 3)
+ggsave(paste0(figure_dir, "UMAP_Tcells_unclearRemoved_byCD4.CD8.png"), width=15, height=5)
+
+VlnPlot(tcell.cd4.cd8_seurat, features=c("CD3G","CD3E", "CD4", "CD8A"), ncol = 4)
+ggsave(paste0(figure_dir, "Vln_Tcells_unclearRemoved_byCD4.CD8.png"), width=12, height=4)
+
+DimPlot(tcell.cd4.cd8_seurat, label=TRUE)+NoLegend()
+ggsave(paste0(figure_dir, "UMAP_Tcells_unclearRemoved_bySeuratClusters.png"), width=6, height=5)
+
+## Add annotations
+annots<- as.character(unique(tcell.cd4.cd8_seurat$seurat_clusters)); annots<- annots[order(annots)]
+names(annots)<- c("CD4", "CD4", "CD4", "CD8", "CD8")
+tcell.cd4.cd8_seurat$detailed_annot<- plyr::mapvalues(tcell.cd4.cd8_seurat$seurat_clusters, annots, names(annots))
+
+DimPlot(tcell.cd4.cd8_seurat, group.by = "detailed_annot")+
+  scale_color_manual(values=c(CD4="navy", 
+                              CD8="cadetblue3"))
+ggsave(paste0(figure_dir, "UMAP_Tcell_unclearRemoved_byCD4.CD8Annot.png"), width=6, height=5)
+
+## Subset to cd4/cd8, run pipeline
+cd8_seurat<- subset(tcell.cd4.cd8_seurat, detailed_annot=="CD8")
+cd8_seurat<- RunFullSeurat_Immune(cd8_seurat@assays$RNA@counts, cd8_seurat$sampleid)
+
+cd4_seurat<- subset(tcell.cd4.cd8_seurat, detailed_annot=="CD4")
+cd4_seurat<- RunFullSeurat_Immune(cd4_seurat@assays$RNA@counts, cd4_seurat$sampleid)
+
+saveRDS(cd8_seurat, file=paste0(analysis_dir, "seurat_cd8.Rds"))
+saveRDS(cd4_seurat, file=paste0(analysis_dir, "seurat_cd4.Rds"))
+saveRDS(tcell.cd4.cd8_seurat, file=paste0(analysis_dir,"seurat_tcell_unclearRemoved.Rds"))
+```
+
+## Plot myeloid/tcell annotated cells with rest of cells (astrocytes)- just for summary purposes
+```{r}
+data_dir<- "analysis/Preprocessing/"
+seurat_obj<- readRDS(paste0(data_dir, "immune_seurat_obj.Rds"))
+immune_seurat<- readRDS(paste0(analysis_dir, "seurat_cd3.Rds"))
+
+## Add annotations on
+
+```
+

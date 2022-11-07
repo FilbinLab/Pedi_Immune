@@ -1,0 +1,241 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+## Preprocess matrices to seurat object
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+
+base_dir = "/Users/jlabelle/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/tenX/unTreatedAlone/")
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+library(Matrix)
+
+analysis_dir<- "analysis/Preprocessing/"
+figure_dir<- "figures/Preprocessing/"
+data_dir<- "data/"
+
+marker_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/Marker_genes/")
+hkgenes <- read.table(paste0(marker_dir, "tirosh_house_keeping.txt"), skip = 2)
+hkgenes <- as.vector(hkgenes$V1)
+```
+
+## Read in matrixes- 1 per sample
+```{r}
+matrix_dirs<- list.files(data_dir)
+
+## Remove TCR/VDJ directories- analyzed separately
+matrix_dirs<- matrix_dirs[!grepl("TCR", matrix_dirs)]
+matrix_dirs<- matrix_dirs[!grepl("VDJ", matrix_dirs)]
+
+all_matrix<- lapply(matrix_dirs, function(x){
+  matrix_dir<- paste0(data_dir, x)
+  print(matrix_dir)
+  barcode.path <- paste0(matrix_dir, "/barcodes.tsv.gz")
+  features.path <- paste0(matrix_dir, "/features.tsv.gz")
+  matrix.path <- paste0(matrix_dir, "/matrix.mtx.gz")
+  mat <- readMM(file = matrix.path)
+  feature.names = read.delim(features.path,
+                             header = FALSE,
+                             stringsAsFactors = FALSE)
+  barcode.names = read.delim(barcode.path,
+                             header = FALSE,
+                             stringsAsFactors = FALSE)
+  colnames(mat) = barcode.names$V1
+  rownames(mat) = feature.names$V2
+  return(mat)
+})
+names(all_matrix)<- matrix_dirs
+
+```
+
+## Make simple metadata for each matrix- cells + sample
+```{r}
+all_meta<- lapply(names(all_matrix), function(x){
+  matrix<- all_matrix[[x]]
+  meta<- data.frame(cell=colnames(matrix), sample=rep(x, ncol(matrix)))
+  return(meta)
+})
+```
+
+## Merge cm and meta into single matrix. Save
+```{r}
+meta<- do.call("rbind", all_meta)
+
+## Check that gene names match exactly between all 3 count matrixes
+cm_1<- all_matrix[[1]]; nrow(cm_1)
+lapply(all_matrix[2:length(all_matrix)], function(x){sum(rownames(x)==rownames(cm_1))})
+cm<- do.call("cbind", all_matrix)
+
+sum(colnames(cm)==meta$cell); nrow(meta); ncol(cm)
+
+saveRDS(cm, file=paste0(analysis_dir, "raw_cm.Rds"))
+saveRDS(meta, file=paste0(analysis_dir, "raw_meta.Rds"))
+```
+
+## Create seurat object, do initial QC
+```{r}
+cm<- readRDS(paste0(analysis_dir, "raw_cm.Rds"))
+meta<- readRDS(paste0(analysis_dir, "raw_meta.Rds"))
+
+seurat_raw<- RunFullSeurat(cm=cm, RunHarmony = FALSE, samples=meta$sample)
+
+
+## Identify # of HK genes
+sep_seurat<- list()
+for(i in unique(seurat_raw$sample)){
+  print(i)
+  gcdata<- subset(seurat_raw, sample ==i)
+  
+  hkgenes.notfound.indices <- which(!hkgenes %in% rownames(gcdata))  
+  if (length(hkgenes.notfound.indices)) {
+    message = paste0(paste0(hkgenes[hkgenes.notfound.indices], collapse = " "), " housekeeping genes were not found in sample ", i)
+    print(message)
+  }
+  
+  # Get number of expressed housekeeping genes.
+  hkgenes.found <- hkgenes[-hkgenes.notfound.indices]  # remove hkgenes that were not found
+  gcdata[["nHK_RNA"]] <- Matrix::colSums(gcdata[['RNA']]@data[hkgenes.found, ] > 0)
+  
+  # Get number of expressed housekeeping genes.
+  hkgenes.found <- hkgenes[-hkgenes.notfound.indices]  # remove hkgenes that were not found
+  gcdata[["nHK_RNA"]] <- Matrix::colSums(gcdata[['RNA']]@data[hkgenes.found, ] > 0)
+  
+  ## Get percentage of mito genes
+  gcdata[["percent_mito"]] <- PercentageFeatureSet(gcdata, pattern = "^MT-")
+  sep_seurat[[i]]<- gcdata
+  
+}
+
+seurat_hk <- merge(x = sep_seurat[[1]], y = sep_seurat[2:length(sep_seurat)], add.cell.ids = NULL)
+seurat_raw$nHK_RNA<- as.numeric(plyr::mapvalues(colnames(seurat_raw), colnames(seurat_hk), seurat_hk$nHK_RNA))
+seurat_raw$perMito<- as.numeric(plyr::mapvalues(colnames(seurat_raw), colnames(seurat_hk), seurat_hk$percent_mito))
+
+## QC plots
+p1<-DimPlot(seurat_raw, group.by="sample", label=TRUE)+NoLegend()
+p2<- VlnPlot(seurat_raw, features = "nFeature_RNA", group.by="sample")+NoLegend()
+p3<- VlnPlot(seurat_raw, features="perMito", group.by="sample")+NoLegend()
+p4<- VlnPlot(seurat_raw, features="nHK_RNA", group.by="sample")+NoLegend()
+
+
+p1+p2+p3+p4
+ggsave(paste0(figure_dir, "qc/", "nFeature.Count_BySample.png"), width=8, height=10)
+saveRDS(seurat_raw, file=paste0(analysis_dir, "raw_seurat.Rds"))
+```
+
+## Plot histogram of nFeature/nHK/nMitochondrial to determine good cutoff
+```{r}
+df<- seurat_raw@meta.data
+p1<- ggplot(df, aes(x=nFeature_RNA, fill=sample))+geom_histogram()+ggtitle("nFeatures")
+p2<- ggplot(df, aes(x=nHK_RNA, fill=sample))+ geom_histogram()+ggtitle("n HK genes")+theme(legend.position = "none")
+p3<- ggplot(df, aes(x=nCount_RNA, fill=sample))+ geom_histogram() + ggtitle("nCounts")
+p4<- ggplot(df, aes(x=perMito, fill=sample))+ geom_histogram() + ggtitle("percent mito")+theme(legend.position = "none")
+p1+p2+p3+p4
+ggsave(paste0(figure_dir, "Histogram_Features.Counts.HK.Mito_noTCR.png"), width=10, height=8)
+```
+
+
+
+
+## Filter cells by nFeature + nHK
+```{r}
+seurat_raw<- readRDS(paste0(analysis_dir, "raw_seurat.Rds"))
+
+## Filter 
+seurat_obj_filt <- subset(seurat_raw, subset = nFeature_RNA > 500  & nHK_RNA > 20)
+seurat_raw$PF<- ifelse(colnames(seurat_raw) %in% colnames(seurat_obj_filt), "Pass", "Fail")
+
+df<- seurat_raw@meta.data
+df<- as.data.frame(table(df$sample, df$PF))
+colnames(df)<- c("Sample", "PF", "nCells")
+ggplot(df, aes(x=Sample, y=nCells, fill=PF))+
+  geom_bar(stat="identity", position="stack")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))+
+  ggtitle("nFeature_RNA > 500\nnHK_RNA > 20")+
+  xlab("")
+ggsave(paste0(figure_dir, "PF_BySample_nFeature.nHK.png"), width=3, height=3)
+
+## rerun processing for filtered seurat
+seurat_filt_meta<- seurat_obj_filt@meta.data
+seurat_obj_filt<- RunFullSeurat(seurat_obj_filt@assays$RNA@counts, RunHarmony = FALSE, samples=seurat_filt_meta$sample)
+seurat_obj_filt<- AddMetaData(seurat_obj_filt, seurat_filt_meta[,!colnames(seurat_filt_meta) %in%
+                                                                  colnames(seurat_obj_filt@meta.data)])
+
+saveRDS(seurat_obj_filt, file=paste0(analysis_dir, "seurat_obj.Rds"))
+
+```
+
+## Remove tumor cells (no CD45 expression)
+```{r}
+seurat_obj<- readRDS(paste0(analysis_dir, "seurat_obj.Rds"))
+
+## Reduce resolution to simplify filtering
+seurat_obj<- FindClusters(seurat_obj, resolution = 0.1)
+VlnPlot(seurat_obj, features="PTPRC") + DimPlot(seurat_obj, label=TRUE)
+ggsave(paste0(figure_dir, "all_cells_CD45expression.png"), width=4, height=8)
+
+## Assign cells as tumor or immune
+seurat_obj$tumor_immune_cell_type<- ifelse(seurat_obj$RNA_snn_res.0.1 %in% c(1,5), "Immune", "Tumor")
+VlnPlot(seurat_obj, features="PTPRC", group.by = "tumor_immune_cell_type")
+DimPlot(seurat_obj, group.by = "tumor_immune_cell_type")
+
+## Subset to immune and recluster
+immune_seurat<- subset(seurat_obj, tumor_immune_cell_type == "Immune")
+immune_meta<- immune_seurat@meta.data
+immune_seurat<- RunFullSeurat(immune_seurat@assays$RNA@counts, RunHarmony = FALSE, samples=immune_meta$sample)
+immune_seurat<- AddMetaData(immune_seurat, immune_meta[,!colnames(immune_meta) %in% colnames(immune_seurat@meta.data)])
+
+## Subset to tumor and recluster
+tumor_seurat<- subset(seurat_obj, tumor_immune_cell_type == "Tumor")
+tumor_meta<- tumor_seurat@meta.data
+tumor_seurat<- RunFullSeurat(tumor_seurat@assays$RNA@counts, RunHarmony = FALSE, samples=tumor_meta$sample)
+tumor_seurat<- AddMetaData(tumor_seurat, tumor_meta[,!colnames(tumor_meta) %in% colnames(tumor_seurat@meta.data)])
+
+## Save all
+saveRDS(seurat_obj, file=paste0(analysis_dir, "seurat_obj.Rds"))
+saveRDS(immune_seurat, file=paste0(analysis_dir, "immune_seurat_obj.Rds"))
+saveRDS(tumor_seurat, file=paste0(analysis_dir, "tumor_seurat_obj.Rds"))
+```
+
+## Remove low quality (high mitochondrial gene expression) cluster from immune cells
+```{r}
+immune_seurat<- readRDS(paste0(analysis_dir, "immune_seurat_obj.Rds"))
+
+FeaturePlot(immune_seurat, features=c("nHK_RNA", "perMito"))
+ggsave(paste0(figure_dir, "UMAP_immune_lowQualCluster.png"), width=7, height=3)
+
+## Remove low qual cluster
+immune_seurat<- subset(immune_seurat, seurat_clusters != 6)
+immune_meta<- immune_seurat@meta.data
+immune_seurat<- RunFullSeurat(immune_seurat@assays$RNA@counts, RunHarmony = FALSE, samples=immune_seurat$sample)
+immune_seurat<- AddMetaData(immune_seurat, immune_meta[,!colnames(immune_meta) %in% immune_seurat@meta.data])
+
+saveRDS(immune_seurat, file=paste0(analysis_dir, "immune_seurat_removeLowQual.Rds"))
+```
+
+
+
+## Convert scale to TPM- to match with SS2 
+May not make a difference for projection, but likely best to have identical scale for raw counts when comparing SS2/tenX
+```{r}
+seurat_obj<- readRDS(paste0(analysis_dir, "immune_seurat_removeLowQual.Rds"))
+seurat_meta<- seurat_obj@meta.data
+
+## Convert to CPM
+cm<- seurat_obj@assays$RNA@counts
+cm<- apply(cm, 2, function(x){x/sum(x) * 1e06})
+
+## Rerun clustering (just so processing is completely identical to ss2)
+seurat_obj<- RunFullSeurat(cm, RunHarmony = FALSE, samples=seurat_obj$sample)
+seurat_obj<- AddMetaData(seurat_obj, seurat_meta[,!colnames(seurat_meta) %in% colnames(seurat_obj@meta.data)])
+
+saveRDS(seurat_obj, file=paste0(analysis_dir, "immune_seurat_removeLowQual.Rds"))
+```
