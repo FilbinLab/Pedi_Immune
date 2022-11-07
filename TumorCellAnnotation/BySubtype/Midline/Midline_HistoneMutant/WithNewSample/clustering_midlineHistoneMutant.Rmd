@@ -46,7 +46,6 @@ if(file.exists(seurat_filename)){
   load(seurat_filename)
 }
 
-seurat_obj<-seurat_obj_annot
 ```
 
 ## Load counts and metadata for initiating seurat object
@@ -430,14 +429,17 @@ save(go_result, file=paste0(seurat_analysis_folder,  "go_result_Resolution0.5.Ro
 ```
 
 
-## ORA with ependymoma genesets
+## ORA with midline genesets
 ## Compare with metaprograms from previously defined metaprograms from ependymoma
 ```{r}
+load(paste0(seurat_analysis_folder,"all_markers_Theta0.5.Robj"))
+
 all_markers_list<-split(all_markers_filtered, all_markers_filtered$cluster )
 all_markers_list<-lapply(all_markers_list, function(x){x$gene})
 names(all_markers_list)<-paste0("Cluster", names(all_markers_list))
 
-midline_genesets<-readRDS(paste0(nmf_analysis_folder,"midlinePreviousPrograms_OC.AC.OPC.MES1.rds"))
+data_dir<- "/Users/jlabelle/Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/PublishedDatasets/FilbinPublishedDatasets/Metaprograms/"
+midline_genesets<-readRDS(paste0(data_dir,"midlinePreviousPrograms_OC.AC.OPC.MES1.rds"))
 
 
 tmp2 = sapply(all_markers_list, function(x){
@@ -835,3 +837,47 @@ seurat_obj<- subset(seurat_obj, sample %in% ped_samples)
 save(seurat_obj, file=paste0(seurat_analysis_folder, "seurat_obj_Cluster6Removed.Robj"))
 save(adult_seurat, file=paste0(seurat_analysis_folder, "seurat_obj_adultSamples.Robj"))
 ```
+
+## Plot tumor annotation reasoning (for supplemental figure)
+```{r}
+## Load seurat object + marker genes used as reference
+load(paste0(seurat_analysis_folder, "seurat_obj_Cluster6Removed.Robj"))
+data_dir<- "/Users/jlabelle/Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/PublishedDatasets/FilbinPublishedDatasets/Metaprograms/"
+midline_genesets<-readRDS(paste0(data_dir,"midlinePreviousPrograms_OC.AC.OPC.MES1.rds"))
+
+## Consistent colors across all tumors
+tumor_colors<- c(`OPC-like`="violetred", Cycling="gold", `OC-like`="turquoise", `AC-like`="olivedrab")
+
+## Simplify all OPC-like to one
+seurat_obj$ManualAnnot_simple<- ifelse(grepl("OPC", seurat_obj$ManualAnnot), "OPC-like", 
+                                       gsub("G2M", "Cycling",
+                                            gsub("S-Phase", "Cycling", as.character(seurat_obj$ManualAnnot))))
+
+
+## Add module score for reference genes- actually used fisher's exact test originally
+seurat_obj<- AddModuleScore(seurat_obj, midline_genesets, name=names(midline_genesets))
+colnames(seurat_obj@meta.data)<-c(colnames(seurat_obj@meta.data)[1:(ncol(seurat_obj@meta.data) - length(midline_genesets))],
+                                  names(midline_genesets))
+
+## UMAP of clusters
+DimPlot(seurat_obj, group.by = "RNA_snn_res.0.5", label=TRUE)+NoLegend()
+ggsave(paste0(seurat_fig_folder, "SuppFigure_UMAP_clusters.png"), width=6, height=6)
+
+## Plot scores + marker genes
+seurat_obj$RNA_snn_res.0.5<- factor(seurat_obj$RNA_snn_res.0.5, levels=c(4,3,6,5,0,2,1))
+DotPlot(seurat_obj, group.by = "RNA_snn_res.0.5", features=c("AC_like", "MES1","Cycling", "OC_like",  "OPC_like",  "OPC_like_variable",
+                                                                "CLU","GFAP","ALDOC", "TOP2A","CDK6","MCM5", "MOG", "PLP1","TF", "PDGFRA", "OLIG1", "OLIG2"))+
+  theme(axis.text.x = element_text(angle=45, hjust=1))+
+  scale_color_gradient2(low="blue", mid="white", high="red")
+ggsave(paste0(seurat_fig_folder, "SuppFigure_SupportFinalAnnotations.png"), width=8, height=4)
+
+## Final annotations used
+DimPlot(seurat_obj, group.by = "ManualAnnot_simple", label=TRUE)+NoLegend()+
+  scale_color_manual(values=tumor_colors)
+ggsave(paste0(seurat_fig_folder, "SuppFigure_UMAP_FinalAnnot.png"), width=6, height=6)
+
+
+
+```
+
+
