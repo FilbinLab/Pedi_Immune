@@ -181,7 +181,7 @@ for(cohort in names(surv_res_list)){
 
 ## Run survival analysis: GOI
 ```{r}
-genesets_test<- c("KLRB1", "PTGER2", "SELPLG", "GNLY", "PDCD1")
+genesets_test<-c("KLRB1", "PTGER2", "SELPLG", "GNLY", "PDCD1", "SPI1")
 
 surv_obj_list<- lapply(surv_obj_list_allCellTypes, function(x){x$GOI})
 surv_obj_list<-surv_obj_list[unlist(lapply(surv_obj_list, function(x){!is.null(x)}))]

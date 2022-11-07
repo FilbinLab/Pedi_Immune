@@ -425,6 +425,7 @@ ggplot(mean_prop_byCohort_byCellType$myeloid, aes(x=cohort, y=meanProp, fill=Pro
 ```{r}
 cb_program_norm_list<- readRDS(paste0(analysis_dir, "CiberSortRes_normByCellType_TCGA.CBTN.DFCI.EPN.Rds"))
 
+
 ## Settings
 quant_split_thresh<- .5
 
@@ -478,7 +479,7 @@ names(clinical_split_list)<- names(cb_program_norm_list)
 ## If GOI expression information exists for cohort- split high/low, merge with survival, add on
 ```{r}
 ## Load in mean expression of GOI for each cohort
-goi_list<- readRDS(paste0(analysis_dir, "TPM_GOI_CBTN.DFCI.TCGA.Rds"))
+goi_list<- readRDS(paste0(analysis_dir, "../TPM_GOI_CBTN.DFCI.TCGA.Rds"))
 quant_split_thresh<- .5
 
 ## Cycle through cohorts, split into high/low for each goi
@@ -503,6 +504,8 @@ names(goi_highlow)<- names(goi_list)
 clinical_split_list$CBTN_All$GOI<- goi_highlow$CBTN_All
 clinical_split_list$DFCI$GOI<- goi_highlow$DFCI
 clinical_split_list$TCGA_IDHmutAYA$GOI<- goi_highlow$TCGA_IDHmutAYA
+clinical_split_list$CBTN_WT$GOI<- goi_highlow$CBTN_All[goi_highlow$CBTN_All$Sample %in% clinical_split_list$CBTN_WT$cd8$Sample,]
+clinical_split_list$CBTN_K27M$GOI<- goi_highlow$CBTN_All[goi_highlow$CBTN_All$Sample %in% clinical_split_list$CBTN_K27M$cd8$Sample,]
 ```
 
 ## Save each cohort separately

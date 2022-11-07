@@ -309,13 +309,14 @@ write.table(epn_log, file = paste0(analysis_dir_use, "EPN_microarrayLog2_cm.txt"
 ```{r}
 data_dir<- "/Users/jlabelle/Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/PublishedDatasets/BulkRNAseq/"
 
-goi<- c("KLRB1", "PTGER2", "SELPLG", "GNLY", "PDCD1")
+goi<- c("KLRB1", "PTGER2", "SELPLG", "GNLY", "PDCD1", "SPI1")
 
 goi_list<- list()
 
 ## CBTN: HGG+DIPG, WT and K27M available
 tpm<- readRDS(paste0(data_dir, "CBTN/tpm_allSamples_processed.Rds"))
 goi_list[["CBTN_All"]]<- tpm[goi,]
+
 
 ## DFCI (HGG, Frank/Mimi)
 load(paste0(data_dir, "HGG_FrankMimi/HGGPed_tpm.Robj"))
