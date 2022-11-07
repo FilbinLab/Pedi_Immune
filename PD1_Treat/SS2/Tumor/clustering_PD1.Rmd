@@ -37,9 +37,9 @@ col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_co
 
 ## Load pre-computed seurat object 
 ```{r load-seurat-obj}
-seurat_filename = paste0(seurat_analysis_folder, "seurat_obj.Robj")
+seurat_filename = paste0(seurat_analysis_folder, "seurat_obj.Rds")
 if(file.exists(seurat_filename)){
-  load(seurat_filename)
+  seurat_obj<- readRDS(seurat_filename)
 }
 ```
 
@@ -163,7 +163,7 @@ ggsave("UMAP_clustering_VaryResolution.jpg", path=seurat_fig_folder, width=15, h
 table(Idents(seurat_obj))
 
 ## Save the seurat object
-save(seurat_obj, file = paste0(seurat_analysis_folder, "seurat_obj.Robj"))
+saveRDS(seurat_obj, file = paste0(seurat_analysis_folder, "seurat_obj.Rds"))
 ```
 
 ## UMAP plot colored by clustering and samples
