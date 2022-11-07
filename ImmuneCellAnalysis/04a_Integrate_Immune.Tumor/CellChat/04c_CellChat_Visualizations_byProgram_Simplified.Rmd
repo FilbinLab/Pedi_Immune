@@ -1,0 +1,161 @@
+---
+title: "Plot cellchat"
+output: html_document
+---
+
+## Plot cell chat results between immune programs, tumor cell types
+
+```{r}
+library(CellChat)
+library(NMF)
+library(circlize)
+library(patchwork)
+library(Seurat) 
+library(ggh4x)
+library(ggalluvial)
+
+options(stringsAsFactors = FALSE)
+
+base_dir = "/Users/jlabelle/"
+script_dir = paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/")
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/04a_Integrate_Immune.Tumor/CellChat/")
+analysis_dir<- paste0(working_dir, "/analysis/byProgram/")
+figure_dir<- paste0(working_dir, "/figures/byProgram_Simplified/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir)}
+
+cellchatHelper<- paste0(script_dir, "CellChat_HelperFunctions.R")
+source(cellchatHelper)
+
+setwd(working_dir)
+
+## Load in list of all cell types across all subtypes
+nCellTypes<- readRDS( "analysis/nCellTypes_bySample.Rds")
+
+
+library(RColorBrewer)
+myPalette <- colorRampPalette(rev(brewer.pal(11, "Spectral")))
+```
+
+## Settings
+```{r}
+## Remove BCOR?
+remove_bcor<- TRUE
+
+## Remove epn?
+remove_epn<- TRUE
+
+## Just epn (for supplemental)
+just_epn<- FALSE
+
+## Set new figure dir
+if(remove_bcor & remove_epn & !just_epn){
+  figure_dir_use<- paste0(figure_dir, "removeBCOR.EPN/")
+  if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
+} else if(just_epn){
+  figure_dir_use<- paste0(figure_dir, "onlyEPN/")
+  if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
+}
+print(paste0("FIGURE DIRECTORY IN USE: ", figure_dir_use))
+```
+
+## Load in LR results for all analyses (already merged)
+```{r}
+allLRs<- readRDS(paste0(analysis_dir, "all_LRs.Rds")) 
+
+## Subset to just sig- by pvalue and prob
+sigLRs<- allLRs[allLRs$pvalue<=0.1 & allLRs$Prob>0,]
+
+## Add spacing to subtypes for better plotting
+sigLRs$Subtype<- gsub("Histone", "\nHistone\n", gsub("Ependymoma", "EPN", sigLRs$Subtype))
+
+## Remove bcor/epn if needed
+if(remove_bcor){
+  sigLRs<- sigLRs[sigLRs$Subtype != "hemiBCOR",]
+}
+
+if(remove_epn & !just_epn){
+  sigLRs<- sigLRs[sigLRs$Subtype != "EPN",]
+}
+
+if(just_epn){
+  sigLRs<- sigLRs[sigLRs$Subtype == "EPN",]
+}
+
+```
+
+
+
+## 2 layers of cell type classification:
+"major" cell type = CD4, CD8, Myeloid, or Tumor
+"minor" cell type = Tumor cell type (AC-like, OPC-like), myeloid program, CD4 program, CD8 program
+  
+
+## Set minor cell types within major cell type, add onto sigLRs
+```{r}
+cd4_types<- unique(sigLRs$sender)[grepl("CD4", unique(sigLRs$sender))]
+cd8_types<- unique(sigLRs$sender)[grepl("CD8", unique(sigLRs$sender))]
+myeloid_types<- c("IFN_TAM", "Monocytes", "Inflammatory", "Hypoxic_TAM", "Stress_Response", "SEPP1_Mo_TAM")
+tumor_types<- unique(sigLRs$sender)[!unique(sigLRs$sender) %in% c(cd4_types, cd8_types, myeloid_types)]
+
+sigLRs$sender_major<- ifelse(sigLRs$sender %in% tumor_types, "Tumor",
+                      ifelse(sigLRs$sender %in% myeloid_types, "Myeloid",
+                      ifelse(sigLRs$sender %in% cd4_types, "CD4", "CD8")))
+sigLRs$receiver_major<- ifelse(sigLRs$receiver %in% tumor_types, "Tumor",
+                        ifelse(sigLRs$receiver %in% myeloid_types, "Myeloid",
+                        ifelse(sigLRs$receiver %in% cd4_types, "CD4", "CD8")))
+
+## Add \n to minor cell types for better plotting
+sigLRs$sender<- gsub("_", "\n", sigLRs$sender)
+sigLRs$receiver<- gsub("_", "\n", sigLRs$receiver)
+```
+
+## Simpliifed river plots needed:
+tumor/myeloid/cd4/cd8
+simplified tumor (ac, opc, oc, cycling)/myeloid
+
+## Tumor/myeloid/cd4/cd8
+```{r}
+## Simplify sender to major cell type
+sigLRs_tmp<- sigLRs
+sigLRs_tmp$sender<- sigLRs$sender_major
+sigLRs_tmp$receiver<- sigLRs$receiver_major
+
+
+my_sankeyPlot(process_LR_forSankeyPlot(sigLRs_tmp, 
+                                       c("Myeloid", "CD4", "CD8"), 
+                                       c("Tumor"), 
+                                       "noNorm"), 
+              facet_grid = FALSE) 
+ggsave(paste0(figure_dir_use, "Sankey_MajorCellTypes.png"), width=5, height=3)
+```
+
+
+simplified tumor (ac, opc, oc, cycling)/myeloid
+```{r}
+## Simplify tumor cell type
+sigLRs_tmp<- sigLRs
+sigLRs_tmp$sender<- gsub("GIPC-like", "Other", gsub("Neuronal-like", "Other", gsub("Ribo-Active", "Other", sigLRs_tmp$sender)))
+sigLRs_tmp$receiver<- gsub("GIPC-like", "Other", gsub("Neuronal-like", "Other", gsub("Ribo-Active", "Other", sigLRs_tmp$receiver)))
+
+## Simplify sender to major cell type (for immune only)
+sigLRs_tmp$sender<- ifelse(sigLRs_tmp$sender_major != "Tumor", sigLRs$sender_major, sigLRs_tmp$sender)
+sigLRs_tmp$receiver<- ifelse(sigLRs_tmp$receiver_major != "Tumor", sigLRs$receiver_major, sigLRs_tmp$receiver)
+
+
+
+## Set order to plot by
+sigLRs_plot<-process_LR_forSankeyPlot(sigLRs_tmp, 
+                                       c("Myeloid", "CD4", "CD8"), 
+                                       c("Tumor"), 
+                                       "noNorm")
+sigLRs_plot$sender<-factor(sigLRs_plot$sender, levels=c("CD4", "CD8", "Myeloid", "Cycling", "AC-like", "OPC-like", "OC-like", "Other"))
+
+my_sankeyPlot(sigLRs_plot, 
+              facet_grid = FALSE) 
+ggsave(paste0(figure_dir_use, "Sankey_MajorCellTypes_tumorPrograms.png"), width=6, height=8)
+```
+
+

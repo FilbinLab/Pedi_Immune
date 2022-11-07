@@ -243,80 +243,37 @@ ggsave(paste0(figure_dir_use, "HeatmapBySampleProportion_Sender.", majorSender, 
 ```
 
 ## 4. Number of interactions between all pairwise combinations of 2 sets of minor cell types
-Plotting options: heatmap, chord diagram, sankey plot
+Plotting options: sankey plot (USED DOWNSTREAM), heatmap
 
 ## Preprocess
 ```{r}
-## Set major sender/receiver cell types
+## Settings: major sender/receiver cell types, normalization method-"noNorm", "bySample", "byCell"
 majorCellType1<- "Myeloid"
 majorCellType2<- "Tumor"
-
-## Set normalization method-"noNorm", "bySample", "byCell"
 norm_method<- "noNorm"
 
-## Subset to sender/receiver major cell type
-sigLRs_plot<- sigLRs
-sigLRs_plot<-sigLRs_plot[sigLRs_plot$sender_major %in% 
-                           c(majorCellType1, majorCellType2) & sigLRs_plot$receiver_major %in% c(majorCellType1, majorCellType2) ,]
+## Use helper function to preprocess for sankey plot
+sigLRs_nLR<- process_LR_forSankeyPlot(sigLRs, majorCellType1, majorCellType2, norm_method)
 
-## Remove \n from cell types for better plotting
-sigLRs_plot$sender<- gsub("\n", "_", sigLRs_plot$sender)
-sigLRs_plot$receiver<- gsub("\n", "_", sigLRs_plot$receiver)
+```
 
-## For each unique sender/receiver combination, determine the total number of sig LRs
-sigLRs_plot$interaction_id<- paste0(sigLRs_plot$sender, "__", sigLRs_plot$receiver)
-sigLRs_nLR<- sigLRs_plot %>% group_by(interaction_id) %>% summarise(nLRs=length(unique(LR))) %>% as.data.frame()
+## Sankey plot
+```{r}
+sigLRs_plot<- sigLRs_nLR
+
+## Order cell types by major cell type
+ordered_celltypes<- gsub("\n", "_", c(cd4_types, cd8_types, myeloid_types, tumor_types))
+sigLRs_plot$receiver.plot<- factor(sigLRs_plot$receiver, levels=ordered_celltypes[ordered_celltypes %in% sigLRs_plot$receiver])
+sigLRs_plot$sender.plot<- factor(sigLRs_plot$sender, levels=ordered_celltypes[ordered_celltypes %in% sigLRs_plot$sender])
+sigLRs_plot$major_sender<- gsub("CD4", "Immune", gsub("CD8", "Immune",gsub("Myeloid2", "Immune", sigLRs_plot$major_sender)))
+
+## Plot with my helper function
+my_sankeyPlot(sigLRs_plot)
 
 
-## Split sender/receiver back up
-sigLRs_nLR$sender<- sapply(sigLRs_nLR$interaction_id, function(x){unlist(strsplit(x, "__"))[[1]]})
-sigLRs_nLR$receiver<- sapply(sigLRs_nLR$interaction_id, function(x){unlist(strsplit(x, "__"))[[2]]})
+ggsave(paste0(figure_dir_use, "Sankey_ByTotalLR_Norm", norm_method,"_",paste(majorCellType1, collapse="."),".", majorCellType2, ".pdf"),device="pdf",
+       width=8, height=16)
 
-## Normalize based on set method
-  ## Divide by number of samples tested in pair
-  if(norm_method=="bySample"){
-    ## For each unique sender/receiver combination, determine the total number of samples tested, add to number of LRs
-    sigLRs_nSamples<-  sigLRs_plot %>% group_by(interaction_id) %>%
-      summarise(nSamples_inInteraction=length(unique(Sample))) %>% as.data.frame()
-    sigLRs_nLR$nSamples<- as.numeric(plyr::mapvalues(sigLRs_nLR$interaction_id, sigLRs_nSamples$interaction_id, sigLRs_nSamples$nSamples_inInteraction))
-    sigLRs_nLR$nLRs_norm<- sigLRs_nLR$nLRs/sigLRs_nLR$nSamples
-  }
-
-  ## Divide by number of cells tested in pair
-  if(norm_method=="byCell"){
-    ## Remove sample/cell type with < 10- not input into cellchat
-    nCells_bySample_filt<- nCells_bySample[nCells_bySample$NCells>10,]
-    
-    nCells_total<- nCells_bySample %>% group_by(CellType) %>% summarise(nCells=sum(NCells)) %>% as.data.frame()
-    
-    ## Cycle through each interaction, determining the number of cells that were input into cellchat
-    ## Note that this needs to be done on sample-wise basis
-    cells_perPair<- apply(sigLRs_nLR, 1, function(x){
-      nCells_pair<- nCells_bySample_filt[nCells_bySample_filt$CellType %in% c(x["sender"],x["receiver"]),]
-      nCells_pair_filt<- nCells_pair %>% group_by(Sample) %>% summarise(PF=sum(NCells>10)) %>% as.data.frame()
-      samples_used<- as.character(nCells_pair_filt[nCells_pair_filt$PF==2, "Sample"])
-      nCells_pair<- nCells_pair[nCells_pair$Sample %in% samples_used,]
-      nCells_total<- sum(nCells_pair$NCells)
-      return(nCells_total)
-    })
-    sigLRs_nLR$nCells<- cells_perPair
-    sigLRs_nLR$nLRs_norm<- sigLRs_nLR$nLRs/sigLRs_nLR$nCells
-  }
-
-  ## No norm
-  if(norm_method=="noNorm"){
-    sigLRs_nLR$nLRs_norm<- sigLRs_nLR$nLRs
-  }
-
-## Get vector of both cell types used
-majorCells1<- unique(sigLRs_plot$sender[sigLRs_plot$sender_major %in% majorCellType1])
-majorCells2<- unique(sigLRs_plot$sender[sigLRs_plot$sender_major %in% majorCellType2])
-  
-  
-## Add on major cell type
-sigLRs_nLR$major_sender<- ifelse(sigLRs_nLR$sender %in% majorCells1, majorCellType1, majorCellType2 )
-sigLRs_nLR$major_receiver<- ifelse(sigLRs_nLR$receiver %in%majorCells1, majorCellType1, majorCellType2 )
-sigLRs_nLR$major_sr<- paste0(sigLRs_nLR$major_sender, "\nto\n", sigLRs_nLR$major_receiver)
 ```
 
 ## Heatmap
@@ -377,41 +334,7 @@ majorCells2<- gsub("_", "\n",gsub("\\.", "\n",majorCells2))
 ```
 
 
-## Sankey plot
-```{r}
-sigLRs_plot<- sigLRs_nLR
 
-## Order cell types by major cell type
-ordered_celltypes<- gsub("\n", "_", c(cd4_types, cd8_types, myeloid_types, tumor_types))
-sigLRs_plot$receiver.plot<- factor(sigLRs_plot$receiver, levels=ordered_celltypes[ordered_celltypes %in% sigLRs_plot$receiver])
-sigLRs_plot$sender.plot<- factor(sigLRs_plot$sender, levels=ordered_celltypes[ordered_celltypes %in% sigLRs_plot$sender])
-
-sigLRs_plot$major_sender<- gsub("CD4", "Immune", gsub("CD8", "Immune",gsub("Myeloid2", "Immune", sigLRs_plot$major_sender)))
-
-## Plot
-  ggplot(data=sigLRs_plot, aes(axis1=sender, axis2=receiver,  y=nLRs_norm))+
-    geom_alluvium(aes(fill = nLRs_norm)) +
-    geom_stratum() +
-    theme_classic()+
-    geom_text(stat = "stratum",
-              aes(label = after_stat(stratum))) +
-    scale_x_discrete(limits = c("Sender", "Receiver"),
-                     expand = c(0.15, 0.05), position="top") +
-    #scale_fill_gradientn(colors=c("blue", "green", "yellow", "orange", "red"))+
-    #scale_fill_viridis_c()+
-    paletteer::scale_fill_paletteer_c("viridis::plasma")+
-    ylab("")+
-    theme(axis.text.y=element_blank(), 
-          axis.ticks.y=element_blank(),
-          axis.text.x = element_text(face="bold", color="black", size=12),
-          strip.text = element_blank())  +
-    facet_grid(rows=vars(major_sender), scale="free_y", space="free_y")
-
-ggsave(paste0(figure_dir_use, "Sankey_ByTotalLR_Norm", norm_method,"_",paste(majorCellType1, collapse="."),".", majorCellType2, ".pdf"),device="pdf",
-       width=8, height=16)
-
-
-```
 
 
 
