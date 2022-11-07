@@ -1,0 +1,118 @@
+---
+title: "BCOR_clustering"
+output: html_document
+---
+
+```{r read-data}
+knitr::opts_chunk$set(echo = TRUE)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/04a_Integrate_Immune.Tumor/", 
+                     "SCENIC/PediatricGlioma/")
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+
+
+
+analysis_dir = "analysis/input/"
+for (folder in c(analysis_dir)){
+  if (!dir.exists(folder)){
+    dir.create(folder)
+  }
+}
+
+rank_use<-8
+sharedBy<- "union" 
+cohort<- "pedOnly_nomuv63"
+tcell_data_dir<- paste0("../../02_Ped.Adult/03_Visualize.Reannotate_programs/analysis/Reannotate_programs/",
+                  "rank", rank_use, "_sharedBy", sharedBy, "/")
+myeloid_data_dir<- paste0("../../../01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/",cohort, "/")
+
+resource_dir<- "/Users/jlabelle/Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/SCENIC_Resources/resources/"
+```
+
+## Load seurat object s
+```{r load-seurat-obj}
+cd8_seurat<- readRDS(paste0(tcell_data_dir, "ped_seurat_cd8_harmony.Rds"))
+cd4_seurat<- readRDS(paste0(tcell_data_dir, "ped_seurat_cd4_harmony.Rds"))
+myeloid_seurat<- readRDS(paste0(myeloid_data_dir, "myeloid_seurat_noDC.B_harmony.Rds"))
+myeloid_seurat$Final_Annot<- myeloid_seurat$NMF_rank6_annotByAdult10X
+
+## Load list of all genes in feather database (used for filtering seurat object)
+all_feather_genes<- readRDS(paste0(resource_dir, "AllFeatherDB_genes.Rds"))
+
+seurat_list<- list(CD8=cd8_seurat,
+                   CD4=cd4_seurat,
+                   Myeloid=myeloid_seurat)
+```
+
+
+
+## Subset to genes/cells of interest, save counts and annotations
+```{r}
+for(cellType in names(seurat_list)){
+  seurat_tmp<- seurat_list[[cellType]]
+  
+  cm<- as.data.frame(seurat_tmp@assays$RNA@counts)
+
+  ## Filter out genes found in fewer than 3 cells
+  nCells_perGene<- apply(cm, 1, function(x){sum(x!=0)})
+  genes_keep<- nCells_perGene[nCells_perGene >= 3] ## 7154 genes removed
+  cm<- cm[rownames(cm) %in% names(genes_keep),]
+  
+  ## Filter out any genes that aren't in the feather databases (won't be used downstream anyways)
+  cm<- cm[rownames(cm) %in% all_feather_genes,]
+  
+  ## Create metadata df
+  meta<- seurat_tmp@meta.data[,c("sample", "nFeature_RNA", "nCount_RNA", "Final_Annot")]
+  meta$cells<- rownames(meta)
+  meta<- meta[,c("cells", "sample", "Final_Annot", "nFeature_RNA", "nCount_RNA")]
+  colnames(meta)<- c("cell_id", "sample_id", "cell_type", "no.of.genes", "no.of.reads")
+  meta$patient_id<- meta$sample_id
+  
+  ## Transpose count matrix
+  cm<- as.data.frame(t(cm))
+  
+  ## Save for SCENIC
+  write.csv(cm, file=paste0(analysis_dir, cellType, "_tpm.csv"))
+  write.csv(meta, file=paste0(analysis_dir, cellType, "_cell.annotations.csv"), row.names = FALSE)
+}
+
+
+```
+
+NO LONGER IN USE
+## Downsampled dataset for testing
+```{r}
+samples<- sample(colnames(seurat_obj), 200)
+cm<- as.data.frame(seurat_obj@assays$RNA@counts)
+cm<- cm[,samples]
+
+## Filter out genes found in fewer than 3 cells
+nCells_perGene<- apply(cm, 1, function(x){sum(x!=0)})
+genes_keep<- nCells_perGene[nCells_perGene >= 3] ## 7154 genes removed
+cm<- cm[rownames(cm) %in% names(genes_keep),]
+
+## Filter out any genes that aren't in the feather databases (won't be used downstream anyways)
+cm<- cm[rownames(cm) %in% all_feather_genes,]
+
+## Create metadata df
+meta<- seurat_obj@meta.data[,c("sample", "nFeature_RNA", "nCount_RNA", "Final_Annot")]
+meta$cells<- rownames(meta)
+meta<- meta[,c("cells", "sample", "Final_Annot", "nFeature_RNA", "nCount_RNA")]
+colnames(meta)<- c("cell_id", "sample_id", "cell_type", "no.of.genes", "no.of.reads")
+meta$patient_id<- meta$sample_id
+meta<- meta[samples,]
+
+## Transpose count matrix
+cm<- as.data.frame(t(cm))
+
+## Save for SCENIC
+write.csv(cm, file=paste0(analysis_dir, "AllCells_tpm_downsampled.csv"))
+write.csv(meta, file=paste0(analysis_dir, "AllCells_cell.annotations_downsampled.csv"), row.names = FALSE)
+
+```

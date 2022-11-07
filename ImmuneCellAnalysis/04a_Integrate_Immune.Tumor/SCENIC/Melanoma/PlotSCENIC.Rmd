@@ -1,0 +1,461 @@
+---
+title: "BCOR_clustering"
+output: html_document
+---
+
+```{r read-data}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(ggplot2)
+library(pheatmap)
+library(clusterProfiler)
+
+gc()
+
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/04a_Integrate_Immune.Tumor/", 
+                     "SCENIC/Melanoma")
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+
+
+
+analysis_dir = "analysis/"
+figure_dir<- "figures/"
+
+## Load program colors
+tcell_colors<- readRDS("../../../plot_colors/Tcell.programs_rank8sharedByunion_reAnnot.Rds")
+myeloid_colors<- readRDS("../../../plot_colors/Myeloid_program_colors.Rds")$rank6
+```
+
+## Set cell types/analysis to process + plot
+```{r}
+analysis_names<- c("CD8")
+
+## Create figure directory for each
+for(analysis in analysis_names){
+  figure_dir_tmp<- paste0(figure_dir, analysis, "/")
+  if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp, recursive=TRUE)}
+    }
+```
+
+## Load in: 
+1. binarized AUC results (i.e., whether module is on or off for each cell)
+2. expression matrices
+3. AUC values
+4. regulon zscores
+5. Cell metadata
+6. Motifs (output from step2/3 run on O2)
+```{r}
+## Load in binarized auc results
+#bin_list<- lapply(analysis_names, function(analysis){
+#  bin<- read.csv(paste0(analysis_dir, "bin_", analysis, ".csv"), row.names = "Cell")
+#  return(as.data.frame(t(bin)))
+#}); names(bin_list)<- analysis_names
+
+## Load expression matrices
+expr_list<- lapply(analysis_names, function(analysis){
+    print(analysis)
+    expr<- read.csv(paste0(analysis_dir, "input/", analysis, "_tpm.csv"), row.names = "X")
+    return(expr)
+}); names(expr_list)<- analysis_names
+
+## Load AUC values
+auc_list<- lapply(analysis_names, function(analysis){
+      auc<- read.csv(paste0(analysis_dir, "auc_", analysis,".csv"), row.names = "Cell")
+      return(auc)
+}); names(auc_list)<- analysis_names
+
+
+## Load in regulon z scores
+regulon_list<- lapply(analysis_names, function(analysis){
+  regulon_zscore<- read.csv(paste0(analysis_dir, analysis, "_regulon_zscores.csv"), row.names = "X")
+  return(regulon_zscore[order(regulon_zscore$regulon),])
+}); names(regulon_list)<- analysis_names
+
+## Cell metadata
+metadata_list<- lapply(analysis_names, function(analysis){
+  metadata<- read.csv(paste0(analysis_dir,"input/", analysis, "_cell.annotations.csv"))
+  column_col<- metadata$cell_type; names(column_col)<- metadata$cell_id
+  column_col<- as.data.frame(column_col); colnames(column_col)<- "cell_type"
+  return(column_col)
+}); names(metadata_list)<- analysis_names
+
+
+## motifs
+motifs_list<- lapply(analysis_names, function(analysis){
+  motifs<- read.csv(paste0(analysis_dir,"step2_output/",  analysis, "_scenic_step2_output.csv"), header=FALSE)
+  motif_colnames<-motifs[1:2, 3:ncol(motifs)]
+  motif_colnames<- unname(apply(motif_colnames, 2, function(x){paste(x, collapse = "_")}))
+  colnames(motifs)<- c("TF", "MotifID", motif_colnames)
+  motifs<- motifs[4:nrow(motifs),]
+  return(motifs[order(motifs$TF),])
+}); names(motifs_list)<- analysis_names
+
+```
+
+## Heatmap of binarized AUC values
+```{r}
+top_genes<- 20
+
+for(analysis in analysis_names){
+  print(analysis)
+  figure_dir_tmp<- paste0(figure_dir, analysis, "/")
+  
+  bin<- bin_list[[analysis]]
+  column_col=metadata_list[[analysis]]
+  
+  ## Can subset genes if desired
+  bin_subset<- bin[rowSums(bin)>=top_genes,]
+
+  pheatmap(bin, annotation_col = column_col, show_colnames = FALSE,
+           color = c( "white","red"),
+           breaks = c(0, .5, 1),
+           filename = paste0(figure_dir_tmp, "Heatmap_BinaryAUC.png"),
+            width=12, height=15,
+           fontsize_row = 5)
+}
+```
+
+## zscore heatmap
+```{r}
+## Number of regulons to plot
+n_top_regulons<- 5
+
+for(analysis in analysis_names){
+  print(analysis)
+  figure_dir_tmp<- paste0(figure_dir, analysis, "/")
+  
+  regulon_zscore<- regulon_list[[analysis]]
+  
+  ## Add column for ordering regulons
+  maxZScore<- regulon_zscore %>% group_by(regulon) %>% summarise(maxZ=max(Z),
+                                                                      maxCellType=cell_type[which.max(Z)]) %>% as.data.frame()  
+  maxZScore<- maxZScore[order(maxZScore$maxZ),]; maxZScore$Order<- 1:nrow(maxZScore)
+  regulon_zscore$Order<- as.numeric(plyr::mapvalues(regulon_zscore$regulon, maxZScore$regulon, maxZScore$Order))
+  
+  ## Add column denoting which cell type has the max zscore for each regulon
+  regulon_zscore$MaxCellType<- plyr::mapvalues(regulon_zscore$regulon, maxZScore$regulon, maxZScore$maxCellType)
+  regulon_zscore$IsMaxCellType<- ifelse(regulon_zscore$MaxCellType == regulon_zscore$cell_type, "Yes", "No")
+  
+  ## subset to top x regulons per cell type
+  regulons_use<- regulon_zscore %>% group_by(MaxCellType) %>% top_n(n_top_regulons, Z) %>% as.data.frame() 
+  regulon_zscore<- regulon_zscore[regulon_zscore$regulon %in% regulons_use$regulon,]
+  regulon_zscore<- regulon_zscore[order(regulon_zscore$MaxCellType, regulon_zscore$Z),]
+  regulon_zscore$Order<- 1:nrow(regulon_zscore)
+  
+  ## Plot    
+  ggplot(regulon_zscore, aes(x=cell_type, y=reorder(regulon,Order), fill=Z))+
+    geom_tile()+
+    geom_text(aes(label = round(Z, 1), color=IsMaxCellType)) +
+    scale_color_manual(values=c(Yes="black", No="grey"))+
+    scale_fill_gradient2(low="blue", mid="white", high="red", midpoint=0)+
+    ylab("")+ xlab("")+
+    theme(axis.text.x = element_text(angle=45, hjust=1, face="bold", color="black"),
+          axis.text.y = element_text(face="bold", color="black"))
+  ggsave(paste0(figure_dir_tmp, "ZscoreHeatmap_Top", n_top_regulons, "Regulons.png"), width=4, 
+         height=0.2 * n_top_regulons * length(unique(regulon_zscore$cell_type)) )
+  }
+```
+
+## Plot number of regulons per cell type, using arbitrary z score threshold
+```{r}
+zscore_thresh<- 0.5
+
+for(analysis in analysis_names){
+  print(analysis)
+  figure_dir_tmp<- paste0(figure_dir, analysis, "/")
+  regulon_zscore<- regulon_list[[analysis]]
+  
+  ## Set colors to use
+  if(analysis=="Myeloid"){colors_use<- myeloid_colors}else{colors_use<- tcell_colors}
+  
+  ## Subset by zscore threshold
+  regulon_zscore_plot<- regulon_zscore[regulon_zscore$Z>=zscore_thresh,]
+
+  ## Add on n regulons per cell type
+  nRegulons<- as.data.frame(table(regulon_zscore_plot$cell_type))
+  regulon_zscore_plot$nRegulons<- plyr::mapvalues(regulon_zscore_plot$cell_type, nRegulons$Var1, nRegulons$Freq)
+  regulon_zscore_plot$cell_type_plot<- paste0(regulon_zscore_plot$cell_type, "\n(", regulon_zscore_plot$nRegulons, " TFs)" )
+  
+  ## Plot
+  ggplot(regulon_zscore_plot, aes(x=cell_type_plot, y=Z, color=cell_type))  +
+    geom_jitter(width=0.2)+
+    xlab("") + ylab("Regulon z score")+
+    ggtitle(paste0("All regulons with Zscore > ", zscore_thresh))+
+    theme_classic()+
+    scale_color_manual(values=colors_use)+
+    theme(legend.position = "none",
+          axis.text.x = element_text(angle=45, hjust=1, face="bold", color="black"),
+          axis.text.y = element_text(face="bold", color="black"),
+          axis.title.y = element_text(face="bold", color="black"))
+  ggsave(paste0(figure_dir_tmp, "NumberRegulonsAboveZ", zscore_thresh, ".png"), width=4, height=4)
+}
+```
+
+
+
+## Read in and process target gene info
+```{r}
+for(analysis in analysis_names){
+  print(analysis)
+  
+  motifs<- motifs_list[[analysis]]
+
+  ## Get list of targets for each TF
+  target_genes<- sapply(motifs$Enrichment_TargetGenes, function(TF){
+    single_target<- gsub("\\[", "", gsub("\\]", "", gsub("\\(", "", gsub("\\)", "", gsub("\\'", "", TF)))))
+    single_target<- unlist(strsplit(single_target, split=", "))
+    single_target_isNumeric<- sapply(single_target, function(x){
+      suppressWarnings(as.numeric(x))
+    })
+    single_target_genes<- single_target[is.na(single_target_isNumeric)]
+  })
+  names(target_genes)<- motifs$TF
+  
+  ## Multiple motifs for single TFs- merge all targets for the same TF into a single vector
+  target_genes_merge<-tapply(unlist(target_genes, use.names = FALSE), rep(names(target_genes), lengths(target_genes)), FUN = c)
+  target_genes_merge<- lapply(target_genes_merge, function(TF){unique(TF)})
+  
+  saveRDS(target_genes_merge, file=paste0(analysis_dir, analysis, "_TargetGenesOfTFs.Rds"))
+}
+
+```
+
+## Subset to TFs of interest, then run GO term analysis on their targets
+```{r}
+OrgDb = "org.Hs.eg.db"
+dataset = "hsapiens_gene_ensembl" 
+
+## Number of regulons to use
+n_top_regulons<-5
+
+
+analysis_names<- c("CD4")
+for(analysis in analysis_names){
+  print(analysis)
+  
+  target_genes_merge<- readRDS(paste0(analysis_dir, analysis, "_TargetGenesOfTFs.Rds"))
+  regulon_zscore<- regulon_list[[analysis]]
+  expr<- expr_list[[analysis]]
+  
+  ## Get top TFs by Zscore for each cell type
+  top_regulons<- regulon_zscore %>% group_by(cell_type) %>% top_n(n_top_regulons, Z) %>% as.data.frame()
+  top_regulons<- top_regulons[order(top_regulons$cell_type),]
+  
+  ## Get target genes for each top cell type
+  top_targets<- target_genes_merge[names(target_genes_merge) %in% top_regulons$regulon]
+  
+  ## Create background list of genes- all genes in expression matrix + all targets
+  ## There are a few target genes that are not in background, but should be included
+  background_genes<- unique(c(colnames(expr), unlist(unname(top_targets))))
+  all_genes_ens<- gene_symbol_to_ensembl_id(background_genes,dataset) 
+  background_genes<- all_genes_ens$ensembl_gene_id ## some genes removed- no ensembl ID
+  
+  ## Map ensembl ID to gene ID for targets, rename
+  top_targets_ens<- lapply(top_targets, function(x){
+    tmp<- x[x %in% all_genes_ens$external_gene_name] ## remove any genes without an ensembl ID
+    plyr::mapvalues(tmp, all_genes_ens$external_gene_name, all_genes_ens$ensembl_gene_id, 
+                    warn_missing = FALSE)
+    })
+  
+  ## Run GO analysis for each cell type separately, creating 1 go object per cell type
+  all_go_results<- lapply(unique(top_regulons$cell_type), function(cell_type){
+    print(cell_type)
+    targets<- top_targets_ens[names(top_targets_ens) %in% top_regulons[top_regulons$cell_type==cell_type, "regulon"]]
+    go_result<-list()
+    for (i in names(targets)){
+      print(paste0("Running GO analysis for ", i))
+      sigOE_genes<-targets[[i]]
+      go_result[[i]] = go_analysis(sigOE_genes, background_genes)
+    }
+    return(go_result)
+  })
+  names(all_go_results)<- unique(top_regulons$cell_type)
+  saveRDS(all_go_results, file=paste0(analysis_dir, analysis, "_goResults.Rds"))
+}
+
+
+
+
+## Plot GO terms for each cell type separately
+for(analysis in analysis_names){
+  print(analysis)
+  figure_dir_tmp<- paste0(figure_dir, analysis, "/")
+  all_go_results<- readRDS(paste0(analysis_dir, analysis, "_goResults.Rds"))
+  
+  for(cell_type in names(all_go_results)){
+    go_result<- all_go_results[[cell_type]]
+    go_plots<- plotGO(go_result, n_terms = 20)
+    cowplot::plot_grid(plotlist = go_plots, ncol=2)
+    ggsave(paste0("GO_OVA_Top5TFs_", cell_type, ".png"), 
+           path=figure_dir_tmp, width=16, height=(5.6*ceiling(length(go_plots)/2)))
+  }
+}
+
+
+```
+
+## Plot TFs + targets in dotplot
+```{r}
+## Load seurat objects
+tcell_data_dir<- "../../02_Ped.Adult/03_Visualize.Reannotate_programs/analysis/Reannotate_programs/"
+myeloid_data_dir<- "../../../01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/"
+
+tcell_data_dir<- paste0(tcell_data_dir, "rank8_sharedByunion/")
+myeloid_data_dir<- paste0(myeloid_data_dir, "pedOnly_nomuv63/")
+
+myeloid_seurat<- readRDS(paste0(myeloid_data_dir, "myeloid_seurat_noDC.B_harmony.Rds"))
+myeloid_seurat$Final_Annot<- as.character(myeloid_seurat$NMF_rank6_annotByAdult10X)
+#tcell_seurat<- readRDS(paste0(tcell_data_dir, "ped_seurat_tcell_harmony.Rds"))
+cd4_seurat<- readRDS(paste0(tcell_data_dir, "ped_seurat_cd4_harmony.Rds"))
+cd8_seurat<- readRDS(paste0(tcell_data_dir, "ped_seurat_cd8_harmony.Rds"))
+
+seurat_list<- list(Myeloid=myeloid_seurat, CD4=cd4_seurat, CD8=cd8_seurat)
+
+## Number of regulons to use
+n_top_regulons<-5
+
+
+for(analysis in analysis_names){
+  regulon_zscore<- regulon_list[[analysis]]
+  seurat_obj<- seurat_list[[analysis]]
+  target_genes_merge<- readRDS(paste0(analysis_dir, analysis, "_TargetGenesOfTFs.Rds"))
+  figure_dir_tmp<- paste0(figure_dir, analysis, "/")
+  
+  ## Subset to top regulons per program 
+  max_regulons<- regulon_zscore %>% group_by(cell_type) %>% top_n(n_top_regulons, Z) %>% as.data.frame()
+  max_regulons<- max_regulons[order(max_regulons$cell_type),]
+  
+  ## DotPlot of expression for TFs by program
+  seurat_obj<-ScaleData(seurat_obj, do.scale=FALSE, do.center=TRUE, features=rownames(seurat_obj))
+  DotPlot(seurat_obj, features=unique(max_regulons$regulon), group.by = "Final_Annot")+
+    theme(axis.text.x = element_text(angle=45, hjust=1))+
+    scale_color_gradient2(low="blue", mid="white", high="red")+
+    xlab("") + ylab("")
+  ggsave(paste0(figure_dir_tmp, "DotPlot_top", n_top_regulons, "_perProgram.png"), width=12, height=4)
+  
+  
+  ## Score cells for targets of each TF
+  target_genes_score<- target_genes_merge[names(target_genes_merge) %in% unique(max_regulons$regulon)]
+  seurat_obj<- AddModuleScore(seurat_obj, target_genes_score, name = names(target_genes_score))
+  meta_colnames<- colnames(seurat_obj@meta.data)
+  colnames(seurat_obj@meta.data)<- c(meta_colnames[1:(length(meta_colnames)-length(target_genes_score))],
+                                     paste0(names(target_genes_score), "_Targets"))
+  
+  ## Plot scores for targets (ordered by program)
+  DotPlot(seurat_obj, features=paste0(unique(max_regulons$regulon), "_Targets"), group.by = "Final_Annot")+
+    theme(axis.text.x = element_text(angle=45, hjust=1))+
+    scale_color_gradient2(low="blue", mid="white", high="red")+
+    xlab("") + ylab("")
+  ggsave(paste0(figure_dir_tmp, "DotPlot_TargetsOfTop", n_top_regulons, "_perProgram.png"), width=12, height=4)
+}
+
+```
+
+## Plot TFs of GOI in heatmap
+```{r}
+target_gene_list<- readRDS(paste0(analysis_dir, analysis_name, "_TargetGenesOfTFs.Rds"))
+
+## Set targets of interst
+goi<- c("PDGFRA", "PDGFA", "FGFR1", "FGFR2", "FGFR3")
+
+## Identify TFs with targets of interest
+identify_TFs_forTargets<- function(target_of_interest, target_gene_list){
+  goi_exact<- paste0("\\b", target_of_interest, "\\b")
+  goi_tf<- sapply(target_gene_list, function(x){
+    ifelse(sum(grepl(goi_exact, x)) > 0, TRUE, FALSE)
+  })
+  goi_tf<- target_gene_list[goi_tf]
+  print(lapply(goi_tf, function(x){x[grepl(goi_exact, x)]}))
+  return(names(goi_tf))
+}
+
+goi_tfs<- lapply(goi,function(x){identify_TFs_forTargets(x, target_gene_list)})
+names(goi_tfs)<- goi
+
+
+
+## Plot regulon zscores for these tfs- separate for each TF
+all_plots<- lapply(names(goi_tfs), function(x){
+  
+  ## Subset to regulons targeting genes of interest
+  regulon_zscore_plot<- regulon_zscore[regulon_zscore$regulon %in% goi_tfs[[x]],]
+  if(nrow(regulon_zscore_plot)==0){return(NULL)}
+  
+  ## Plot
+  ggplot(regulon_zscore_plot, aes(x=cell_type, y=regulon, fill=Z))+
+    geom_tile()+
+    theme_classic()+
+    #geom_text(aes(label = round(Z, 1), color=IsMaxCellType)) +
+    #scale_color_manual(values=c(Yes="black", No="grey"))+
+    scale_fill_gradient2(low="blue", mid="white", high="red", midpoint=0)+
+    ylab("")+ xlab("")+
+    theme(axis.text.x = element_text(angle=45, hjust=1, face="bold", color="black"),
+          axis.text.y = element_text(face="bold", color="black"))+
+    ggtitle(x)
+})
+all_plots<-all_plots[!sapply(all_plots,is.null)]
+cowplot::plot_grid(plotlist=all_plots, ncol=length(all_plots))
+ggsave(paste0(figure_dir, analysis_name, "ZscoreHeatmap_TFsFor",paste(goi, collapse = "."), ".png"), width=12, height=4)
+
+
+## Plot regulon zscores for these TFs- 1 heatmap for all, grouped by TF
+  ## Subset to regulons targeting genes of interest
+  regulon_zscore_plot<- regulon_zscore[regulon_zscore$regulon %in% unname(unlist(goi_tfs)),]
+  
+  ## Get flat vector of goi/tf pairs
+  goi_tfs<- lapply(names(goi_tfs), function(x){
+    tmp<- goi_tfs[[x]]
+    names(tmp)<-rep(x, length(tmp))
+    return(tmp)
+  })
+  goi_tfs<- unlist(goi_tfs)
+  
+  ## Add on TF of interest
+  regulon_zscore_plot$TF<- plyr::mapvalues(regulon_zscore_plot$regulon, goi_tfs, names(goi_tfs), warn_missing = FALSE)
+  
+  ## some TFs regulate multiple GOIs
+  ## NOTE: as currently written, only allows for ONE goi to need to be duplicated (KLF10)
+    ## get GOI with >1 TF
+    nGOI<-table(goi_tfs)
+    multiple_goi<- nGOI[nGOI>1]
+    
+    ## Subset to GOI with >1 tf
+    to_dup<- regulon_zscore_plot[regulon_zscore_plot$regulon %in% names(multiple_goi),]
+    
+    ## duplicate however many times is needed
+    for(i in unname(multiple_goi)){
+      to_dup<- rbind(to_dup, to_dup)
+    }
+    
+    ## rename TF
+    TFs<- names(goi_tfs[goi_tfs %in% to_dup$regulon])
+    to_dup$TF<- c(rep(TFs[1], 5),
+                  rep(TFs[2], 5))
+    
+    ## remove duplicated, add back on
+    regulon_zscore_plot<- regulon_zscore_plot[!regulon_zscore_plot$regulon %in% to_dup$regulon,]
+    regulon_zscore_plot<- rbind(regulon_zscore_plot, to_dup)
+  
+  ## Plot on heatmap, grouped by TF
+  ggplot(regulon_zscore_plot, aes(x=cell_type, y=regulon, fill=Z))+
+    geom_tile()+
+    theme_bw()+
+    #geom_text(aes(label = round(Z, 1), color=IsMaxCellType)) +
+    #scale_color_manual(values=c(Yes="black", No="grey"))+
+    scale_fill_gradient2(low="blue", mid="white", high="red", midpoint=0)+
+    ylab("")+ xlab("")+
+    theme(axis.text.x = element_text(angle=45, hjust=1, face="bold", color="black"),
+          axis.text.y = element_text(face="bold", color="black"),
+          strip.text = element_text(face="bold", size=10))+
+    facet_grid(rows=vars(TF), scale="free_y", space="free_y")
+  ggsave(paste0(figure_dir, analysis_name, "ZscoreHeatmap_allTogether_TFsFor",paste(goi, collapse = "."), ".png"), width=4, height=8)
+  
+```
+

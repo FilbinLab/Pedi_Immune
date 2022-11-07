@@ -1,0 +1,115 @@
+---
+title: "BCOR_clustering"
+output: html_document
+---
+
+Compare SCENIC results across ped/adult myeloid/cd4/cd8, across glioma/nsclc/melanoma cd8
+```{r read-data}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(ggplot2)
+library(pheatmap)
+library(clusterProfiler)
+
+gc()
+
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/04a_Integrate_Immune.Tumor/", 
+                     "SCENIC/")
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+
+
+
+analysis_dir = "analysis/"
+figure_dir<- "figures/"
+
+## Load program colors
+tcell_colors<- readRDS("../../plot_colors/Tcell.programs_rank8sharedByunion_reAnnot.Rds")
+myeloid_colors<- readRDS("../../plot_colors/Myeloid_program_colors.Rds")$rank6
+```
+
+## Set cell types/analysis to process + plot
+```{r}
+analysis_names<- c("CD8", "CD4", "Myeloid")
+
+## Create figure directory for each
+for(analysis in analysis_names){
+  figure_dir_tmp<- paste0(figure_dir, analysis, "/")
+  if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp, recursive=TRUE)}
+    }
+```
+
+## Load in zscores for all analyses
+```{r}
+ped_glioma_cd8_z<- read.csv("PediatricGlioma/analysis/CD8_regulon_zscores.csv", row.names = "X")
+ped_glioma_cd4_z<- read.csv("PediatricGlioma/analysis/CD4_regulon_zscores.csv", row.names = "X")
+ped_glioma_myeloid_z<- read.csv("PediatricGlioma/analysis/Myeloid_regulon_zscores.csv", row.names = "X")
+
+adult_glioma_cd8_z<- read.csv("AdultGlioma/analysis/CD8_regulon_zscores.csv", row.names = "X")
+adult_glioma_cd4_z<- read.csv("AdultGlioma/analysis/CD4_regulon_zscores.csv", row.names = "X")
+adult_glioma_myeloid_z<- read.csv("AdultGlioma/analysis/Myeloid_regulon_zscores.csv", row.names = "X")
+
+nsclc_cd8_z<- read.csv("NSCLC/analysis/CD8_regulon_zscores.csv", row.names = "X")
+melanoma_cd8_z<- read.csv("Melanoma/analysis/CD8_regulon_zscores.csv", row.names = "X")
+```
+
+## Single df with zscores for all analyses
+For CD4, CD8, Myeloid separately
+```{r}
+## Add on cohort info
+ped_glioma_cd4_z$Cohort<- "PedGlioma"; ped_glioma_cd8_z$Cohort<- "PedGlioma"; ped_glioma_myeloid_z$Cohort<- "PedGlioma"
+adult_glioma_cd4_z$Cohort<- "AdultGlioma"; adult_glioma_cd8_z$Cohort<- "AdultGlioma"; adult_glioma_myeloid_z$Cohort<- "AdultGlioma"
+melanoma_cd8_z$Cohort<- "Melanoma"
+nsclc_cd8_z$Cohort<- "NSCLC"
+
+## Merge CD8: Pediatric/adult
+glioma_cd8_z<- merge(ped_glioma_cd8_z, adult_glioma_cd8_z, by=c("regulon", "cell_type"))
+
+
+## Merge CD4: Pediatric/adult
+glioma_cd4_z<- merge(ped_glioma_cd4_z, adult_glioma_cd4_z, by=c("regulon", "cell_type"))
+```
+
+## Plot correlation (linear regression) between scores across the same programs
+```{r}
+## CD8: Pediatric/adult
+all_plots<- lapply(unique(glioma_cd8_z$cell_type), function(x){
+  tmp<- glioma_cd8_z[glioma_cd8_z$cell_type==x,]
+  lr<- summary(lm(Z.x ~ Z.y, tmp))
+  ggplot(tmp, aes(x=Z.x, y=Z.y, color=cell_type))+
+    geom_point()+
+    ggtitle(x, subtitle = paste0("R2: ", round(lr$r.squared, 2),
+                                 "; pvalue: ", formatC(lr$coefficients["Z.y", "Pr(>|t|)"]) ))+
+    theme_classic()+
+    scale_color_manual(values=tcell_colors)+
+    theme(legend.position = "none")+
+    xlab("Pediatric zscore") + ylab("Adult zscore")+
+    geom_smooth(method="lm",se=FALSE)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "CD8/", "LM_Ped.Adult_Zscores.png"), width=12, height=12)
+
+## CD4: Pediatric/adult
+all_plots<- lapply(unique(glioma_cd4_z$cell_type), function(x){
+  tmp<- glioma_cd4_z[glioma_cd4_z$cell_type==x,]
+  lr<- summary(lm(Z.x ~ Z.y, tmp))
+  ggplot(tmp, aes(x=Z.x, y=Z.y, color=cell_type))+
+    geom_point()+
+    ggtitle(x, subtitle = paste0("R2: ", round(lr$r.squared, 2),
+                                 "; pvalue: ", formatC(lr$coefficients["Z.y", "Pr(>|t|)"]) ))+
+    theme_classic()+
+    scale_color_manual(values=tcell_colors)+
+    theme(legend.position = "none")+
+    xlab("Pediatric zscore") + ylab("Adult zscore")+
+    geom_smooth(method="lm",se=FALSE)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "CD4/", "LM_Ped.Adult_Zscores.png"), width=12, height=12)
+```
+
