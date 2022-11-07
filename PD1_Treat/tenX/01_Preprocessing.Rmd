@@ -154,6 +154,7 @@ ggsave(paste0(figure_dir, "PF_BySample_nFeature.nHK.png"), width=3, height=3)
 ## recluster without low quality cells
 seurat_obj_filt_meta<- seurat_obj_filt@meta.data
 seurat_obj_filt<- RunFullSeurat(seurat_obj_filt@assays$RNA@counts, RunHarmony = FALSE, samples=seurat_obj_filt_meta$sample)
+seurat_obj_filt<-AddMetaData(seurat_obj_filt, seurat_obj_filt_meta[,!colnames(seurat_obj_filt_meta) %in% colnames(seurat_obj_filt@meta.data)])
 
 saveRDS(seurat_obj_filt, file=paste0(analysis_dir, "seurat_obj.Rds"))
 
@@ -184,3 +185,21 @@ seurat_obj<- AddMetaData(seurat_obj, pd1_meta[,!colnames(pd1_meta) %in% colnames
 
 saveRDS(seurat_obj, file="analysis/preprocessing/seurat_obj_noAC.Unknown.Rds")
 ```
+
+## Convert scale to TPM- to match with SS2 
+May not make a difference for projection, but likely best to have identical scale for raw counts when comparing SS2/tenX
+```{r}
+seurat_obj<- readRDS("analysis/preprocessing/seurat_obj_noAC.Unknown.Rds")
+seurat_meta<- seurat_obj@meta.data
+
+## Convert to CPM
+cm<- seurat_obj@assays$RNA@counts
+cm<- apply(cm, 2, function(x){x/sum(x) * 1e06})
+
+## Rerun clustering (just so processing is completely identical to ss2)
+seurat_obj<- RunFullSeurat(cm, RunHarmony = FALSE, samples=seurat_obj$sample)
+seurat_obj<- AddMetaData(seurat_obj, seurat_meta[,!colnames(seurat_meta) %in% colnames(seurat_obj@meta.data)])
+
+saveRDS(seurat_obj, file="analysis/preprocessing/seurat_obj_noAC.Unknown.Rds")
+```
+
