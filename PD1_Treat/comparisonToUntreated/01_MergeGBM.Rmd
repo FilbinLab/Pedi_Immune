@@ -1,0 +1,302 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+## Merge all GBM (ss2 and tenx) seurat objects, both pd1 and untreated
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+
+#library(harmony)
+
+base_dir = "/Users/jlabelle/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/PD1_Treat/comparisonToUntreated/")
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+source("../HelperFunctions.R")
+
+
+analysis_dir<- "analysis/"
+figure_dir<- "figures/Merge/"
+
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+
+```
+
+
+## Load in seurat objects
+```{r}
+## Set data directories
+full_dir<- "../../ImmuneCellAnalysis/"
+setwd(full_dir)
+
+## ss2, untreated
+ut_ss_myeloid<- readRDS(paste0(full_dir, 
+                               "01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/pedOnly_nomuv63/",
+                              "myeloid_seurat_noDC.B_harmony.Rds"))
+ut_ss_cd8<- readRDS(paste0(full_dir, 
+                           "02a_Tcells/02_Ped.Adult/03_Visualize.Reannotate_programs/analysis/Reannotate_programs/rank8_sharedByunion/",
+                           "ped_seurat_cd8_harmony.Rds"))
+ut_ss_cd4<- readRDS(paste0(full_dir, 
+                           "02a_Tcells/02_Ped.Adult/03_Visualize.Reannotate_programs/analysis/Reannotate_programs/rank8_sharedByunion/", 
+                           "ped_seurat_cd4_harmony.Rds"))
+
+## ss2, treated
+pd1_ss_myeloid<- readRDS("../ss2/Immune/analysis/project_broad.detailed_annot/myeloid_pd1_noDC.B_seurat.Rds")
+pd1_ss_cd8<- readRDS("../ss2/Immune/analysis/project_broad.detailed_annot/cd8_pd1_seurat.Rds")
+pd1_ss_cd4<- readRDS("../ss2/Immune/analysis/project_broad.detailed_annot/cd4_pd1_seurat.Rds")
+
+## tenx, untreated
+ut_tenx_myeloid<- readRDS(paste0(full_dir, "tenX/unTreatedAlone/analysis/project_broad.detailed_annot/myeloid_tenx_noDC.B_seurat.Rds"))
+ut_tenx_cd8<- readRDS(paste0(full_dir, "tenX/unTreatedAlone/analysis/project_broad.detailed_annot/cd8_tenx_seurat.Rds"))
+ut_tenx_cd4<- readRDS(paste0(full_dir, "tenX/unTreatedAlone/analysis/project_broad.detailed_annot/cd4_tenx_seurat.Rds"))
+
+## tenx, treated
+pd1_tenx_myeloid<- readRDS("../tenX/analysis/project_broad.detailed_annot/myeloid_pd1_noDC.B_seurat.Rds")
+pd1_tenx_cd8<- readRDS("../tenX/analysis/project_broad.detailed_annot/cd8_pd1_seurat.Rds")
+pd1_tenx_cd4<- readRDS("../tenX/analysis/project_broad.detailed_annot/cd4_pd1_seurat.Rds")
+
+## Set colors
+colors_treatment<- c(PD1="orange", Untreated="purple")
+colors_samples<-c(BT1478="purple", BT1745="blue", BT1857="cyan",E167CD35resub="skyblue",
+                  BT1910="orange", BT1935="khaki", GEX="gold")
+```
+
+## Subset full cohort to just gbm
+```{r}
+gbm_samples<- c("BT1857", "BT1478", "BT1745")
+ut_ss_myeloid<- subset(ut_ss_myeloid, sample %in% gbm_samples)
+ut_ss_cd8<- subset(ut_ss_cd8, sample %in% gbm_samples)
+ut_ss_cd4<- subset(ut_ss_cd4, sample %in% gbm_samples)
+```
+
+
+## Merge ss2
+```{r}
+## Add treatment info
+ut_ss_myeloid$Treatment<- "Untreated"; ut_ss_cd8$Treatment<- "Untreated"; ut_ss_cd4$Treatment<- "Untreated"
+pd1_ss_myeloid$Treatment<- "PD1"; pd1_ss_cd8$Treatment<- "PD1"; pd1_ss_cd4$Treatment<- "PD1"
+
+## Add annotation column (named same way for merging)
+pd1_ss_myeloid$Final_Annot<- pd1_ss_myeloid$Program_projected
+pd1_ss_cd8$Final_Annot<- pd1_ss_cd8$Program_projected
+pd1_ss_cd4$Final_Annot<- pd1_ss_cd4$Program_projected
+
+pd1_ss_cd4$detailed_annot<- pd1_ss_cd4$detailed_annot_projected
+pd1_ss_cd8$detailed_annot<- pd1_ss_cd8$detailed_annot_projected
+
+
+## Merge and rerun clustering- no integration
+ss_myeloid<-my_mergeRerunClustering(ut_ss_myeloid, pd1_ss_myeloid, Integration="None")
+ss_cd4<-my_mergeRerunClustering(ut_ss_cd4, pd1_ss_cd4,  Integration="None")
+ss_cd8<-my_mergeRerunClustering(ut_ss_cd8, pd1_ss_cd8, Integration="None")
+ss_tcells<- my_mergeRerunClustering(ss_cd4, ss_cd8, Integration="None")
+
+saveRDS(ss_myeloid, file=paste0(analysis_dir, "ss_myeloid_noHarmony_seurat.Rds"))
+saveRDS(ss_cd4, file=paste0(analysis_dir, "ss_cd4_noHarmony_seurat.Rds"))
+saveRDS(ss_cd8, file=paste0(analysis_dir, "ss_cd8_noHarmony_seurat.Rds"))
+
+## Merge and rerun clustering- with harmony integration
+ss_myeloid<-my_mergeRerunClustering(ut_ss_myeloid, pd1_ss_myeloid, Integration="Harmony")
+ss_cd4<-my_mergeRerunClustering(ut_ss_cd4, pd1_ss_cd4, Integration="Harmony")
+ss_cd8<-my_mergeRerunClustering(ut_ss_cd8, pd1_ss_cd8, Integration="Harmony")
+ss_tcells<- my_mergeRerunClustering(ss_cd4, ss_cd8, Integration="Harmony")
+
+saveRDS(ss_myeloid, file=paste0(analysis_dir, "ss_myeloid_Harmony_seurat.Rds"))
+saveRDS(ss_cd4, file=paste0(analysis_dir, "ss_cd4_Harmony_seurat.Rds"))
+saveRDS(ss_cd8, file=paste0(analysis_dir, "ss_cd8_Harmony_seurat.Rds"))
+
+## Merge and rerun clustering- with seurat's integration
+ss_myeloid<-my_mergeRerunClustering(ut_ss_myeloid, pd1_ss_myeloid, Integration="Seurat")
+ss_cd4<-my_mergeRerunClustering(ut_ss_cd4, pd1_ss_cd4, Integration="Seurat")
+ss_cd8<-my_mergeRerunClustering(ut_ss_cd8, pd1_ss_cd8, Integration="Seurat")
+
+saveRDS(ss_myeloid, file=paste0(analysis_dir, "ss_myeloid_SeuratInt_seurat.Rds"))
+saveRDS(ss_cd4, file=paste0(analysis_dir, "ss_cd4_SeuratInt_seurat.Rds"))
+saveRDS(ss_cd8, file=paste0(analysis_dir, "ss_cd8_SeuratInt_seurat.Rds"))
+
+```
+
+## Merge tenx
+```{r}
+## Add treatment info
+ut_tenx_myeloid$Treatment<- "Untreated"; ut_tenx_cd8$Treatment<- "Untreated"; ut_tenx_cd4$Treatment<- "Untreated"
+pd1_tenx_myeloid$Treatment<- "PD1"; pd1_tenx_cd8$Treatment<- "PD1"; pd1_tenx_cd4$Treatment<- "PD1"
+
+## Add annotation column (named same way for merging)
+pd1_tenx_myeloid$Final_Annot<- pd1_tenx_myeloid$Program_projected
+pd1_tenx_cd8$Final_Annot<- pd1_tenx_cd8$Program_projected
+pd1_tenx_cd4$Final_Annot<- pd1_tenx_cd4$Program_projected
+
+pd1_tenx_cd4$detailed_annot<- pd1_tenx_cd4$detailed_annot_projected
+pd1_tenx_cd8$detailed_annot<- pd1_tenx_cd8$detailed_annot_projected
+
+
+## Merge and rerun clustering- no integration
+tenx_myeloid<-my_mergeRerunClustering(ut_tenx_myeloid, pd1_tenx_myeloid, RunHarmony=FALSE)
+tenx_cd4<-my_mergeRerunClustering(ut_tenx_cd4, pd1_tenx_cd4, RunHarmony=FALSE)
+tenx_cd8<-my_mergeRerunClustering(ut_tenx_cd8, pd1_tenx_cd8, RunHarmony=FALSE)
+tenx_tcells<- my_mergeRerunClustering(tenx_cd4, tenx_cd8, RunHarmony = FALSE)
+
+saveRDS(tenx_myeloid, file=paste0(analysis_dir, "tenx_myeloid_noHarmony_seurat.Rds"))
+saveRDS(tenx_cd4, file=paste0(analysis_dir, "tenx_cd4_noHarmony_seurat.Rds"))
+saveRDS(tenx_cd8, file=paste0(analysis_dir, "tenx_cd8_noHarmony_seurat.Rds"))
+
+## Merge and rerun clustering- with harmony integration
+tenx_myeloid<-my_mergeRerunClustering(ut_tenx_myeloid, pd1_tenx_myeloid, RunHarmony=TRUE)
+tenx_cd4<-my_mergeRerunClustering(ut_tenx_cd4, pd1_tenx_cd4, RunHarmony=TRUE)
+tenx_cd8<-my_mergeRerunClustering(ut_tenx_cd8, pd1_tenx_cd8, RunHarmony=TRUE)
+tenx_tcells<- my_mergeRerunClustering(tenx_cd4, tenx_cd8, RunHarmony = TRUE)
+
+saveRDS(tenx_myeloid, file=paste0(analysis_dir, "tenx_myeloid_Harmony_seurat.Rds"))
+saveRDS(tenx_cd4, file=paste0(analysis_dir, "tenx_cd4_Harmony_seurat.Rds"))
+saveRDS(tenx_cd8, file=paste0(analysis_dir, "tenx_cd8_Harmony_seurat.Rds"))
+
+## Merge and rerun clustering- with seurat's integration
+tenx_myeloid<-my_mergeRerunClustering(ut_tenx_myeloid, pd1_tenx_myeloid, Integration="Seurat")
+tenx_cd4<-my_mergeRerunClustering(ut_tenx_cd4, pd1_tenx_cd4, Integration="Seurat")
+tenx_cd8<-my_mergeRerunClustering(ut_tenx_cd8, pd1_tenx_cd8, Integration="Seurat")
+
+saveRDS(tenx_myeloid, file=paste0(analysis_dir, "tenx_myeloid_SeuratInt_seurat.Rds"))
+saveRDS(tenx_cd4, file=paste0(analysis_dir, "tenx_cd4_SeuratInt_seurat.Rds"))
+saveRDS(tenx_cd8, file=paste0(analysis_dir, "tenx_cd8_SeuratInt_seurat.Rds"))
+```
+
+
+
+
+## Plot ss2/tenx by sample/treatment: without integration
+```{r}
+files<- list.files(analysis_dir, pattern="noHarmony")
+all_seurat<- lapply(files, function(f){
+   readRDS(paste0(analysis_dir, f))
+})
+names(all_seurat)<- gsub("_noHarmony_seurat.Rds", "", files)
+
+
+## Plot by treatment
+all_plots<- lapply(names(all_seurat), function(x){
+  seurat_tmp<- all_seurat[[x]]
+  DimPlot(seurat_tmp, group.by = "Treatment")+scale_color_manual(values=colors_treatment)+ggtitle(x)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "UMAP_NoHarmony_Treatment_All.png"), width=15, height=8)
+
+## Plot by sample
+all_plots<- lapply(names(all_seurat), function(x){
+  seurat_tmp<- all_seurat[[x]]
+  DimPlot(seurat_tmp, group.by = "sample")+scale_color_manual(values=colors_samples[names(colors_samples) %in% unique(seurat_tmp$sample)])+
+    ggtitle(x)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "UMAP_NoHarmony_sample_All.png"), width=15, height=8)
+```
+
+## Plot ss2/tenx by sample/treatment: with harmony integration
+```{r}
+files<- list.files(analysis_dir, pattern="_Harmony")
+files<- files[grepl("_Harmony", files)]
+all_seurat<- lapply(files, function(f){
+   readRDS(paste0(analysis_dir, f))
+})
+names(all_seurat)<- gsub("_Harmony_seurat.Rds", "", files)
+
+
+## Plot by treatment
+all_plots<- lapply(names(all_seurat), function(x){
+  seurat_tmp<- all_seurat[[x]]
+  DimPlot(seurat_tmp, group.by = "Treatment")+scale_color_manual(values=colors_treatment)+ggtitle(x)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "UMAP_Harmony_Treatment_All.png"), width=15, height=8)
+
+## Plot by sample
+all_plots<- lapply(names(all_seurat), function(x){
+  seurat_tmp<- all_seurat[[x]]
+  DimPlot(seurat_tmp, group.by = "sample")+scale_color_manual(values=colors_samples[names(colors_samples) %in% unique(seurat_tmp$sample)])+
+    ggtitle(x)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "UMAP_Harmony_sample_All.png"), width=15, height=8)
+```
+
+
+## Plot ss2/tenx by sample/treatment: with seurat integration
+```{r}
+files<- list.files(analysis_dir, pattern="seurat")
+files<- files[grepl("SeuratInt", files)]
+all_seurat<- lapply(files, function(f){
+   readRDS(paste0(analysis_dir, f))
+})
+names(all_seurat)<- gsub("_SeuratInt_seurat.Rds", "", files)
+
+## Plot by treatment
+all_plots<- lapply(names(all_seurat), function(x){
+  seurat_tmp<- all_seurat[[x]]
+  DimPlot(seurat_tmp, group.by = "Treatment")+scale_color_manual(values=colors_treatment)+ggtitle(x)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "UMAP_SeuratInt_Treatment_All.png"), width=15, height=8)
+
+## Plot by sample
+all_plots<- lapply(names(all_seurat), function(x){
+  seurat_tmp<- all_seurat[[x]]
+  DimPlot(seurat_tmp, group.by = "sample")+scale_color_manual(values=colors_samples[names(colors_samples) %in% unique(seurat_tmp$sample)])+
+    ggtitle(x)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "UMAP_SeuratInt_sample_All.png"), width=15, height=8)
+```
+
+## Merge ss2 and tenx
+```{r}
+## Load merged ss2
+ss2_files<- list.files(analysis_dir, pattern="ss")
+ss2_files<- ss2_files[grepl("noHarmony", ss2_files)]
+ss2_seurat<- lapply(ss2_files, function(x){readRDS(paste0(analysis_dir, x))}); names(ss2_seurat)<-  gsub("_noHarmony_seurat.Rds", "", ss2_files)
+ss2_seurat<- lapply(ss2_seurat, function(x){x$Sequencing<- "ss2"; return(x)})
+
+## Load merged 10x
+tenx_files<- list.files(analysis_dir, pattern="tenx")
+tenx_files<- tenx_files[grepl("noHarmony", tenx_files)]
+tenx_seurat<- lapply(tenx_files, function(x){readRDS(paste0(analysis_dir, x))}); names(tenx_seurat)<-  gsub("_noHarmony_seurat.Rds", "", tenx_files)
+tenx_seurat<- lapply(tenx_seurat, function(x){x$Sequencing<- "TenX"; return(x)})
+
+## Merge- harmony integration
+myeloid<- my_mergeRerunClustering(ss2_seurat$ss_myeloid, tenx_seurat$tenx_myeloid, Integration="Harmony")
+cd4<- my_mergeRerunClustering(ss2_seurat$ss_cd4, tenx_seurat$tenx_cd4,Integration="Harmony")
+cd8<- my_mergeRerunClustering(ss2_seurat$ss_cd8, tenx_seurat$tenx_cd8,Integration="Harmony")
+harmony_list<- list(myeloid=myeloid, cd4=cd4, cd8=cd8)
+
+  ## Plot by seq type/treatment
+  all_plots<- lapply(names(harmony_list), function(x){
+    seurat_tmp<- harmony_list[[x]]
+    DimPlot(seurat_tmp, group.by = "Sequencing")+scale_color_manual(values=c(ss2="magenta", TenX="turquoise"))+
+      ggtitle(x)
+  })
+  cowplot::plot_grid(plotlist=all_plots, ncol=3)
+  ggsave(paste0(figure_dir, "UMAP_HarmonyIntTreatment_sample_All.png"), width=15, height=6)
+
+## Merge- seurat integration
+myeloid<- my_mergeRerunClustering(ss2_seurat$ss_myeloid, tenx_seurat$tenx_myeloid, Integration="Seurat")
+cd4<- my_mergeRerunClustering(ss2_seurat$ss_cd4, tenx_seurat$tenx_cd4, Integration="Seurat")
+cd8<- my_mergeRerunClustering(ss2_seurat$ss_cd8, tenx_seurat$tenx_cd8, Integration="Seurat")
+
+seuratInt_list<- list(myeloid=myeloid, cd4=cd4, cd8=cd8)
+
+  ## Plot by seq type/treatment
+  all_plots<- lapply(names(seuratInt_list), function(x){
+    seurat_tmp<- seuratInt_list[[x]]
+    DimPlot(seurat_tmp, group.by = "Sequencing")+scale_color_manual(values=c(ss2="magenta", TenX="turquoise"))+
+      ggtitle(x)
+  })
+  cowplot::plot_grid(plotlist=all_plots, ncol=3)
+  ggsave(paste0(figure_dir, "UMAP_SeuratIntTreatment_sample_All.png"), width=15, height=5)
+```
