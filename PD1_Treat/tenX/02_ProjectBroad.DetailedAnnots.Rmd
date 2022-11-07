@@ -11,6 +11,7 @@ output: html_document
 library(Seurat) 
 
 base_dir = "/Users/jlabelle/"
+base_dir = "C:/Users/jenna/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
 working_dir<- paste0(base_dir, 
                      "Dropbox (Partners HealthCare)/FilbinLab/",
@@ -26,8 +27,10 @@ preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_f
 nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
 source(preprocessing)
 source(nmf_helper)
-
+source("../HelperFunctions.R")
 ```
+
+
 
 ## Load seurat objects: pd-1 (processed in 01b_Preprocess_QC_ToSeurat.Rmd) and full immune cohort (both myeloid and t cells)
 ```{r}
@@ -54,18 +57,10 @@ immune_colors<- readRDS(paste0(full_cohort_dir, "/plot_colors/ImmuneCell.celltyp
 
 ## Projection of myeloid/tcell annotations with pcproject 
 ```{r}
-seurat_list<-list(full=full_seurat, pd1=pd1_seurat)
-
-transferAnchors<-FindTransferAnchors(reference = seurat_list$full, query=seurat_list$pd1,
-                                     reduction = "pcaproject")
-
-predictions <- TransferData(anchorset = transferAnchors, 
-                            refdata = full_seurat$broad_annot,
-                            weight.reduction = "pcaproject")
-
-predictions_final<- predictions$predicted.id; names(predictions_final)<- rownames(predictions)
-pd1_seurat<- AddMetaData(pd1_seurat, predictions, col.name=c("broad_annot_projected", "Tcell_score_projected", 
+pd1_seurat<- my_project_seurat(full_seurat, pd1_seurat, reference_annotation = "broad_annot",
+                               prediction_colNames = c("broad_annot_projected", "Tcell_score_projected", 
                                                              "Myeloid_score_projected", "max_score_projected"))
+
 
 ## plot
 DimPlot(pd1_seurat, group.by="broad_annot_projected", pt.size = 1, label=TRUE, label.size = 6)+ NoLegend()+
@@ -81,21 +76,16 @@ cowplot::plot_grid(plotlist=lapply(c("CSF1R", "CD3G", "CD8A", "CD4"), function(x
 ggsave(paste0(figure_dir, "Vln_broadMarkers_projectedFromFull.png"), width=12, height=4)
 
 ## Proportion
-df<- as.data.frame(table(pd1_seurat$broad_annot_projected))
-colnames(df)<-c("CellType", "NCells")
-df<- df %>% mutate(perCells=NCells/sum(NCells)) %>% as.data.frame()
-ggplot(df, aes(x="", y=perCells, fill=CellType))+
-  geom_bar(stat="identity")+
-  scale_fill_manual(values=immune_colors[names(immune_colors) %in% df$CellType])+
-  theme_classic()+
-  xlab("")
-ggsave(paste0(figure_dir, "Breakdown_broadAnnot.png"), width=3, height=4)
-∂
+my_barchart_programProp(pd1_seurat, coloring_variable = "broad_annot_projected", colors=immune_colors)
+
+
 saveRDS(pd1_seurat, file="analysis/preprocessing/seurat_obj_noAC.Unknown.Rds")
 ```
 
 ## Split into myeloid/tcell seurat objects, rerun processing
 ```{r}
+pd1_seurat<- readRDS("analysis/preprocessing/seurat_obj_noAC.Unknown.Rds")
+
 ## Myeloid
 myeloid_pd1<- subset(pd1_seurat, broad_annot_projected=="Myeloid")
 myeloid_pd1_meta<- myeloid_pd1@meta.data
@@ -112,24 +102,82 @@ saveRDS(myeloid_pd1, file=paste0(analysis_dir, "myeloid_pd1_seurat.Rds"))
 saveRDS(tcell_pd1, file=paste0(analysis_dir, "tcell_pd1_seurat.Rds"))
 ```
 
+## Projection of DC/BC/Monocyte annotations for myeloid cells with pcproject 
+```{r}
+myeloid_pd1<- readRDS(paste0(analysis_dir, "myeloid_pd1_seurat.Rds"))
+
+myeloid_pd1<- my_project_seurat(full_myeloid_seurat, myeloid_pd1, reference_annotation = "detailed_annot",
+                                prediction_colNames =c("detailed_annot_projected", "Myeloid_score_projected", 
+                                                             "Bcell_score_projected", "DC_score_projected",
+                                                             "max_Detailed_score_projected") )
+
+
+## plot
+DimPlot(myeloid_pd1, group.by="detailed_annot_projected", pt.size = 1, label=TRUE, label.size = 6)+ NoLegend()+
+  scale_color_manual(values=immune_colors[names(immune_colors) %in% myeloid_pd1$detailed_annot_projected])
+ggsave(paste0(figure_dir, "UMAP_myeloid_detailedAnnot_projectedFromFull.png"), width=6, height=6)
+
+## Very few Bcells and no dendritic cells predicted based on projection- outlier clusters suggest could be different cell types?
+## Result: outlier clusters express CD3/CD8, but also CSF1R? Remove from downstream (134 cells)
+  ## Reduce resolution
+  myeloid_pd1<- FindClusters(myeloid_pd1, resolution = 0.25) ## was 0.2
+  
+  ## Merge clusters ( main myeloid cluster)
+  myeloid_pd1$merged_cluster<- ifelse(myeloid_pd1$seurat_clusters %in% c(0, 2, 1), 0, myeloid_pd1$seurat_clusters)
+  
+  ## Find markers
+  myeloid_pd1<- SetIdent(myeloid_pd1, value = myeloid_pd1$merged_cluster)
+  all_markers<- FindAllMarkers(myeloid_pd1, min.pct = 0.5, logfc.threshold = 0.25)
+  filtered_markers<- all_markers[all_markers$p_val_adj<0.05, ]
+  top_markers<- filtered_markers %>% group_by(cluster) %>% top_n(n=10, wt=avg_log2FC) %>% as.data.frame()
+  
+  ## Plot top marker genes- cluster 4 expresses CD3, CD8, some other T cells markers
+  FeaturePlot(myeloid_pd1, features=c("CD3E","CD8A", "CSF1R", "GNLY"))
+  ggsave(paste0(figure_dir, "Myeloid_identifyMisassignedCells.png"), width=7, height=6)
+  
+
+## Add updated detailed annot, ploy
+myeloid_pd1$detailed_annot_projected_manual<- ifelse(myeloid_pd1$merged_cluster==4, "Unclear", myeloid_pd1$detailed_annot_projected)
+DimPlot(myeloid_pd1, group.by="detailed_annot_projected_manual", pt.size = 1, label=TRUE, label.size = 6)+ NoLegend()+
+  scale_color_manual(values=immune_colors[names(immune_colors) %in% myeloid_pd1$detailed_annot_projected_DCmanual])
+ggsave(paste0(figure_dir, "UMAP_myeloid_detailedAnnot_projectedFromFull.png"), width=6, height=6)
+  
+## Confirm high expression of myeloid markers by predicted detailed annotation
+cowplot::plot_grid(plotlist=lapply(c( "CSF1R",  "CD207", "MS4A1", "CD8A"), function(x){
+  VlnPlot(myeloid_pd1, features=x, group.by = "detailed_annot_projected_manual")+ NoLegend()+
+    scale_fill_manual(values=immune_colors[names(immune_colors) %in% myeloid_pd1$detailed_annot_projected_DCmanual])+
+    xlab("")
+}), ncol=4)
+ggsave(paste0(figure_dir, "Vln_myeloid_detailedMarkers_projectedFromFull_manual.png"), width=9, height=4)
+
+FeaturePlot(myeloid_pd1, features=c( "CSF1R",  "CD207", "MS4A1", "CD8A"))
+ggsave(paste0(figure_dir, "UMAP_myeloid_detailedMarkers.png"), width=7, height=6)
+
+
+
+## Save with annotations
+saveRDS(myeloid_pd1, file=paste0(analysis_dir, "myeloid_pd1_seurat.Rds"))
+
+## Remove DC/BC, rerun clustering, and save
+myeloid_pd1_noDC.B<- subset(myeloid_pd1, detailed_annot_projected_manual=="Myeloid")
+myeloid_pd1_noDC.B_meta<- myeloid_pd1_noDC.B@meta.data
+myeloid_pd1_noDC.B<- RunFullSeurat(myeloid_pd1_noDC.B@assays$RNA@counts, RunHarmony = FALSE, samples=myeloid_pd1_noDC.B$sample)
+myeloid_pd1_noDC.B<- AddMetaData(myeloid_pd1_noDC.B, myeloid_pd1_noDC.B_meta[,!colnames(myeloid_pd1_noDC.B_meta) %in% 
+                                                                               colnames(myeloid_pd1_noDC.B@meta.data)])
+saveRDS(myeloid_pd1_noDC.B, file=paste0(analysis_dir, "myeloid_pd1_noDC.B_seurat.Rds"))
+```
+
+
+
 
 ## Projection of CD4/CD8 annotations for T cells with pcproject 
 ```{r}
 tcell_pd1<- readRDS(paste0(analysis_dir, "tcell_pd1_seurat.Rds"))
 
-full_tcell_seurat<- subset(full_tcell_seurat, detailed_annot_byNMFrank8_mergedByunion != "Unclear")
-seurat_list<-list(full=full_tcell_seurat, pd1=tcell_pd1)
+tcell_pd1<- my_project_seurat(full_tcell_seurat, tcell_pd1, reference_annotation = "detailed_annot_byNMFrank8_mergedByunion",
+                                prediction_colNames =c("detailed_annot_projected", "CD4_score_projected", 
+                                                             "CD8_score_projected", "max_Detailed_score_projected"))
 
-transferAnchors<-FindTransferAnchors(reference = seurat_list$full, query=seurat_list$pd1,
-                                     reduction = "pcaproject")
-
-predictions <- TransferData(anchorset = transferAnchors, 
-                            refdata = full_tcell_seurat$detailed_annot_byNMFrank8_mergedByunion,
-                            weight.reduction = "pcaproject")
-
-predictions_final<- predictions$predicted.id; names(predictions_final)<- rownames(predictions)
-tcell_pd1<- AddMetaData(tcell_pd1, predictions, col.name=c("detailed_annot_projected", "CD4_score_projected", 
-                                                             "CD8_score_projected", "max_score_projected"))
 
 ## plot
 DimPlot(tcell_pd1, group.by="detailed_annot_projected", pt.size = 1, label=TRUE, label.size = 6)+ NoLegend()+
@@ -144,10 +192,13 @@ cowplot::plot_grid(plotlist=lapply(c( "CD3G", "CD8A", "CD4"), function(x){
 }), ncol=3)
 ggsave(paste0(figure_dir, "Vln_Tcell_detailedMarkers_projectedFromFull.png"), width=9, height=4)
 
+FeaturePlot(tcell_pd1, features=c("CD3G", "CD4", "CD8A"), cols = c("grey", "red"), ncol=3)
+ggsave(paste0(figure_dir, "UMAP_Tcell_detailedMarkers.png"), width=12, height=3)
+
 ## Save with annotations
 saveRDS(tcell_pd1, file=paste0(analysis_dir, "tcell_pd1_seurat.Rds"))
 
-## Split into cd4/cd8, recluster, save
+## Split into cd4/cd8, recluster
 cd4_pd1<- subset(tcell_pd1, detailed_annot_projected=="CD4")
 cd4_pd1_meta<- cd4_pd1@meta.data
 cd4_pd1<- RunFullSeurat(cd4_pd1@assays$RNA@counts, samples=cd4_pd1$sample, RunHarmony = FALSE)
@@ -158,48 +209,63 @@ cd8_pd1_meta<- cd8_pd1@meta.data
 cd8_pd1<- RunFullSeurat(cd8_pd1@assays$RNA@counts, samples=cd8_pd1$sample, RunHarmony = FALSE)
 cd8_pd1<- AddMetaData(cd8_pd1, cd8_pd1_meta[,!colnames(cd8_pd1_meta) %in% colnames(cd8_pd1@meta.data)])
 
-saveRDS(cd4_pd1, file=paste0(analysis_dir, "cd4_pd1_seurat.Rds"))
-saveRDS(cd8_pd1, file=paste0(analysis_dir, "cd8_pd1_seurat.Rds"))
+## Both CD4 and CD8 show misannotated cells- fix annotation and recluster
+p1<-FeaturePlot(cd8_pd1, features=c("CD4", "CD8A"), cols=c("grey", "red"))
+p2<-FeaturePlot(cd4_pd1, features=c("CD4", "CD8A"), cols=c("grey", "red"))
+cowplot::plot_grid(plotlist=list(p1, p2), ncol=1)
+ggsave(paste0(figure_dir,"UMAP_CD4.CD8_detailedMarkers_preReannotation.png"), width=7, height=6)
+
+  ## Fix CD4: 1 clear CD8 cluster + 1 with CD4/CD8 (kept as CD4) + 1 cycling cluster annotated cell wise
+  DimPlot(cd4_pd1, label=TRUE) + VlnPlot(cd4_pd1, features=c("CD4", "CD8A"))
+  cd4_pd1$detailed_annot_projected_manual<- ifelse(cd4_pd1$seurat_clusters==3, "CD8", cd4_pd1$detailed_annot_projected) ## clear cluster
+  cd4_pd1$cd8_expr<- as.data.frame(cd4_pd1@assays$RNA@counts["CD8A",])
+  cd4_pd1$detailed_annot_projected_manual<- ifelse(cd4_pd1$seurat_clusters==6 & cd4_pd1$cd8_expr > 0, "CD8",
+                                                   cd4_pd1$detailed_annot_projected_manual)
+  
+  DimPlot(cd4_pd1, label=TRUE) + 
+    FeaturePlot(cd4_pd1, features=c("CD4", "CD8A"), cols=c("grey", "red"))+
+    VlnPlot(cd4_pd1, features=c("CD4", "CD8A"))+
+    DimPlot(cd4_pd1, group.by = "detailed_annot_projected_manual")
+  ggsave(paste0(figure_dir, "CD4_reannotateToCD8.png") ,width = 10, height=10)
+  
+  
+  ## Fix CD8: 1 clear CD4 cluster + 1 cycling cluster annotated cell wise
+  DimPlot(cd8_pd1, label=TRUE) + VlnPlot(cd8_pd1, features=c("CD4", "CD8A"))
+  cd8_pd1$detailed_annot_projected_manual<- ifelse(cd8_pd1$seurat_clusters==3, "CD4", cd8_pd1$detailed_annot_projected)
+  cd8_pd1$cd4_expr<- as.data.frame(cd8_pd1@assays$RNA@counts["CD4",])
+  cd8_pd1$detailed_annot_projected_manual<- ifelse(cd8_pd1$seurat_clusters%in%c(6,7) & cd8_pd1$cd4_expr > 0, "CD4",
+                                                   cd8_pd1$detailed_annot_projected_manual)
+  
+  DimPlot(cd8_pd1, label=TRUE) + 
+    FeaturePlot(cd8_pd1, features=c("CD4", "CD8A"), cols=c("grey", "red"))+
+    VlnPlot(cd8_pd1, features=c("CD4", "CD8A"))+
+    DimPlot(cd8_pd1, group.by = "detailed_annot_projected_manual")
+  ggsave(paste0(figure_dir, "CD8_reannotateToCD4.png") ,width = 10, height=10)
+  
+  ## Add CD4/CD8 to correct object and recluster
+  cd8_pd1_reAnnot<- my_mergeRerunClustering(subset(cd8_pd1, detailed_annot_projected_manual=="CD8"),
+                                            subset(cd4_pd1, detailed_annot_projected_manual=="CD8"), 
+                                            Integration="None")
+  cd4_pd1_reAnnot<- my_mergeRerunClustering(subset(cd8_pd1, detailed_annot_projected_manual=="CD4"),
+                                            subset(cd4_pd1, detailed_annot_projected_manual=="CD4"), 
+                                            Integration="None")
+  
+  ## COnfirm finalized annots
+  p1<-FeaturePlot(cd8_pd1_reAnnot, features=c("CD4", "CD8A"), cols=c("grey", "red"))
+  p2<- FeaturePlot(cd4_pd1_reAnnot, features=c("CD4", "CD8A"), cols=c("grey", "red"))
+  cowplot::plot_grid(plotlist=list(p1, p2), ncol=1)
+  ggsave(paste0(figure_dir, "UMAP_Tcells_detailedMarkers_postReannotation.png"), width=6, height=6)
+  
+  ## Add back to full tcell
+  tcell_pd1$detailed_annot_projected_manual<- ifelse(colnames(tcell_pd1) %in% colnames(cd4_pd1_reAnnot), "CD4",
+                                                     ifelse(colnames(tcell_pd1) %in% colnames(cd8_pd1_reAnnot), "CD8", "issue"))
+  DimPlot(tcell_pd1, group.by = "detailed_annot_projected_manual")+
+    scale_color_manual(values = immune_colors[names(immune_colors) %in% unique(tcell_pd1$detailed_annot_projected_manual)])
+  ggsave(paste0(figure_dir, "UMAP_Tcells_detailedAnnot_postReannotation.png"), width=6, height=5)
+  
+
+saveRDS(cd4_pd1_reAnnot, file=paste0(analysis_dir, "cd4_pd1_seurat.Rds"))
+saveRDS(cd8_pd1_reAnnot, file=paste0(analysis_dir, "cd8_pd1_seurat.Rds"))
+saveRDS(tcell_pd1, file=paste0(analysis_dir, "tcell_pd1_seurat.Rds"))
 ```
 
-## Projection of DC/BC/Monocyte annotations for myeloid cells with pcproject 
-```{r}
-myeloid_pd1<- readRDS(paste0(analysis_dir, "myeloid_pd1_seurat.Rds"))
-
-seurat_list<-list(full=full_myeloid_seurat, pd1=myeloid_pd1)
-
-transferAnchors<-FindTransferAnchors(reference = seurat_list$full, query=seurat_list$pd1,
-                                     reduction = "pcaproject")
-
-predictions <- TransferData(anchorset = transferAnchors, 
-                            refdata = full_myeloid_seurat$detailed_annot,
-                            weight.reduction = "pcaproject")
-
-predictions_final<- predictions$predicted.id; names(predictions_final)<- rownames(predictions)
-myeloid_pd1<- AddMetaData(myeloid_pd1, predictions, col.name=c("detailed_annot_projected", "Myeloid_score_projected", 
-                                                             "Bcell_score_projected", "DC_score_projected", "max_score_projected"))
-
-## plot
-DimPlot(myeloid_pd1, group.by="detailed_annot_projected", pt.size = 1, label=TRUE, label.size = 6)+ NoLegend()+
-  scale_color_manual(values=immune_colors[names(immune_colors) %in% myeloid_pd1$detailed_annot_projected])
-ggsave(paste0(figure_dir, "UMAP_myeloid_detailedAnnot_projectedFromFull.png"), width=6, height=6)
-
-## Confirm high expression of myeloid markers by predicted detailed annotation
-cowplot::plot_grid(plotlist=lapply(c( "CSF1R",  "CD207", "MS4A1"), function(x){
-  VlnPlot(myeloid_pd1, features=x, group.by = "detailed_annot_projected")+ NoLegend()+
-    scale_fill_manual(values=immune_colors[names(immune_colors) %in% myeloid_pd1$detailed_annot_projected])+
-    xlab("")
-}), ncol=3)
-ggsave(paste0(figure_dir, "Vln_myeloid_detailedMarkers_projectedFromFull.png"), width=9, height=4)
-
-## Save with annotations
-saveRDS(myeloid_pd1, file=paste0(analysis_dir, "myeloid_pd1_seurat.Rds"))
-
-## Remove DC/BC, rerun clustering, and save
-myeloid_pd1_noDC.B<- subset(myeloid_pd1, detailed_annot_projected == "Myeloid")
-myeloid_pd1_noDC.B_meta<- myeloid_pd1_noDC.B@meta.data
-myeloid_pd1_noDC.B<- RunFullSeurat(myeloid_pd1_noDC.B@assays$RNA@counts, RunHarmony = TRUE, samples=myeloid_pd1_noDC.B$sample)
-myeloid_pd1_noDC.B<- AddMetaData(myeloid_pd1_noDC.B, myeloid_pd1_noDC.B_meta[,!colnames(myeloid_pd1_noDC.B_meta) %in% 
-                                                                               colnames(myeloid_pd1_noDC.B@meta.data)])
-saveRDS(myeloid_pd1_noDC.B, file=paste0(analysis_dir, "myeloid_pd1_noDC.B_seurat.Rds"))
-```
