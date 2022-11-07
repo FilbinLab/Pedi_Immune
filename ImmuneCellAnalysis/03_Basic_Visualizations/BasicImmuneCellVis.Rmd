@@ -63,10 +63,9 @@ subtype_colors<-  readRDS("../plot_colors/Subtype.Rds")
 updateBCOR<- TRUE
 
 figure_dir<- ifelse(updateBCOR, paste0(figure_dir, "updateBCOR/"), figure_dir_tmp)
-#analysis_dir<- ifelse(removeBCOR, paste0(analysis_dir, "updateBCOR/"), data_dir_tmp)
 
 if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
-#if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp, recursive = TRUE)}
+
 
 if(updateBCOR){
   tcell_seurat$NiceSubtype<- ifelse(tcell_seurat$sample=="BT1478", "Hemispheric-HistoneWT", tcell_seurat$NiceSubtype)
@@ -166,7 +165,19 @@ ggsave(paste0(figure_dir, "MyeloidTcellMarkers.png"), width=24, height=5.5)
       xlab("")
   }), ncol=5) 
   ggsave(paste0(figure_dir, "Tcell.Myeloid.Monocyte.DC.BC_markers_Vln.pdf"), device="pdf", width=11, height=4)
-  
+
+## Breakdown of myeloid/tcells by subtype
+df_bd<- as.data.frame(table(immune_seurat$NiceSubtype, immune_seurat$broad_annot))
+colnames(df_bd)<- c("Subtype", "CellType", "NCells")
+df_bd <- df_bd %>% group_by(Subtype) %>% mutate(CellProportion=NCells/sum(NCells)) %>% as.data.frame()
+
+ggplot(df_bd, aes(x=Subtype, y=CellProportion, fill=CellType))+
+  geom_bar(position = "stack", stat="identity") + 
+  theme_classic()+
+  bargraph_bd_theme()+
+  xlab("")+ ylab("Proportion of cell type")+
+  scale_fill_manual(values=c(immune_colors[names(immune_colors) %in% unique(df_bd$CellType)]))
+ggsave(paste0(figure_dir, "Immune_broadAnnot_BreakdownAcrossAllSubtypes.pdf"), device="pdf", width=4, height=4)
 ```
 
 

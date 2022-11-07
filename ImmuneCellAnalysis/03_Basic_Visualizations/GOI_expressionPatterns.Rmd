@@ -218,7 +218,7 @@ figure_dir_use<- paste0(figure_dir, analysis_name, "/"); if(!dir.exists(figure_d
       theme(axis.text.x = element_text(angle=45, hjust=1),
             axis.text = element_text(face="bold", color="black"))+
       xlab("")+ylab("")
-    ggsave(paste0(figure_dir_use, "PTGER2_ByAgeGroup.clonality.png"), width=4, height=4)
+    ggsave(paste0(figure_dir_use, "PTGER2_ByAgeGroup.clonality.pdf"), device="pdf", width=4, height=4)
   
   
 ## 4 samples express PTGER2 in cd8- may be age linked? plot ages
@@ -399,23 +399,33 @@ ggsave(paste0(figure_dir_use, "VlnPlot_SELPLG_CD4_bySample.png"), width = 7, hei
 
 
 ## By age- with clonality, program
-pedAdult_cd8_seurat$clonal<- gsub("not clonal", "nonclonal", pedAdult_cd8_seurat$clonal)
-DotPlot(pedAdult_cd8_seurat, group.by = "Age", features="SELPLG", scale=FALSE)
-
-pedAdult_cd8_seurat$clonal.Age<- paste0( pedAdult_cd8_seurat$Age,"_", pedAdult_cd8_seurat$clonal)
-DotPlot(pedAdult_cd8_seurat, group.by = "clonal.Age", features="SELPLG", scale=FALSE, scale.max=70, scale.min=40)+
-  scale_color_gradient(low="white", high="blue", limits=c(3.75,4.25))
-ggsave(paste0(figure_dir_use, "DotPlot_SELPLG_CD8_byAge.Clonal.png"), width=5, height=3)
-
-pedAdult_cd8_seurat$program.Age<- paste0(pedAdult_cd8_seurat@meta.data[[tcell_program_name]], "_",pedAdult_cd8_seurat$Age )
-DotPlot(pedAdult_cd8_seurat, group.by = "program.Age", features="SELPLG", scale=FALSE)
-  scale_color_gradient(low="white", high="blue", limits=c(3.75,4.25))
- ggsave(paste0(figure_dir_use, "DotPlot_CD8_byAge.Program.png"), width=5, height=6) 
- 
-pedAdult_cd4_seurat$program.Age<- paste0(pedAdult_cd4_seurat@meta.data[[tcell_program_name]], "_",pedAdult_cd4_seurat$Age )
-DotPlot(pedAdult_cd4_seurat, group.by = "program.Age", features="SELPLG", scale=FALSE)
-  #scale_color_gradient(low="white", high="blue", limits=c(3.75,4.25))
- ggsave(paste0(figure_dir_use, "DotPlot_CD4_byAge.Program.png"), width=5, height=6) 
+  ## clonality
+  pedAdult_cd8_seurat$clonal<- gsub("not clonal", "nonclonal", pedAdult_cd8_seurat$clonal)
+  DotPlot(pedAdult_cd8_seurat, group.by = "Age", features="SELPLG", scale=FALSE)
+  
+  pedAdult_cd8_seurat$clonal.Age<- paste0( pedAdult_cd8_seurat$Age,"_", pedAdult_cd8_seurat$clonal)
+  DotPlot(pedAdult_cd8_seurat, group.by = "clonal.Age", features="SELPLG", scale=FALSE, scale.max=70, scale.min=40)+
+    scale_color_gradient(low="white", high="red", limits=c(3.75,4.25))
+  ggsave(paste0(figure_dir_use, "DotPlot_SELPLG_CD8_byAge.Clonal.pdf"),device="pdf", width=5, height=3)
+  
+  DotPlot(pedAdult_cd8_seurat, group.by = "clonal.Age", features="SELPLG", scale=TRUE)+
+    scale_color_gradient2(low="blue",mid="white", high="red",)
+  ggsave(paste0(figure_dir_use, "DotPlot_SELPLG_CD8_byAge.Clonal_scaled.pdf"),device="pdf", width=5, height=3)
+  
+  ## program
+  pedAdult_cd8_seurat$program.Age<- paste0(pedAdult_cd8_seurat@meta.data[[tcell_program_name]], "_",pedAdult_cd8_seurat$Age )
+  DotPlot(pedAdult_cd8_seurat, group.by = "program.Age", features="SELPLG", scale=FALSE)+
+    scale_color_gradient(low="white", high="red")
+   ggsave(paste0(figure_dir_use, "DotPlot_CD8_byAge.Program.pdf"), device="pdf", width=5, height=6) 
+   
+  DotPlot(pedAdult_cd8_seurat, group.by = "program.Age", features="SELPLG", scale=TRUE)+
+    scale_color_gradient2(low="blue", mid="white", high="red")
+   ggsave(paste0(figure_dir_use, "DotPlot_CD8_byAge.Program_scaled.pdf"), device="pdf", width=5, height=6) 
+   
+  pedAdult_cd4_seurat$program.Age<- paste0(pedAdult_cd4_seurat@meta.data[[tcell_program_name]], "_",pedAdult_cd4_seurat$Age )
+  DotPlot(pedAdult_cd4_seurat, group.by = "program.Age", features="SELPLG", scale=FALSE)
+    #scale_color_gradient(low="white", high="blue", limits=c(3.75,4.25))
+   ggsave(paste0(figure_dir_use, "DotPlot_CD4_byAge.Program.png"), width=5, height=6) 
 
 ## Plot SELPLG expression vs age in CD8, removing any samples without at least 10 CD8 cells + also adding in adult
     ## Remove samples with < 10 cells
