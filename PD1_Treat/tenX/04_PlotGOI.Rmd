@@ -49,7 +49,7 @@ myeloid_colors<- myeloid_colors$rank6
 ```{r}
 ## CD8
 cowplot::plot_grid(plotlist=lapply(c("KLRB1", "PTGER2", "SELPLG"), function(x){
-  FeaturePlot(cd8_seurat, features=x)+
+  FeaturePlot(pd1_cd8, features=x)+
     scale_color_gradient(low="grey", high="red")
 }), ncol=3)
 ggsave(paste0(figure_dir, "CD8_UMAP_InhibitoryGenes.png"), width=10, height=3)
