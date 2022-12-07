@@ -11,7 +11,7 @@ knitr::opts_chunk$set(echo = TRUE)
 base_dir = "/Users/jlabelle/"
 working_dir<- paste0(base_dir, 
                      "Dropbox (Partners HealthCare)/FilbinLab/",
-                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/tenX/unTreatedAlone/")
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/tenX/BT1857/")
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
 
 

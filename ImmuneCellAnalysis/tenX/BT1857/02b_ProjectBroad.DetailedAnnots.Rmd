@@ -14,7 +14,7 @@ base_dir = "/Users/jlabelle/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
 working_dir<- paste0(base_dir, 
                      "Dropbox (Partners HealthCare)/FilbinLab/",
-                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/tenX/unTreatedAlone/")
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/tenX/BT1857/")
 
 analysis_dir<- paste0(working_dir, "/analysis/project_broad.detailed_annot/")
 figure_dir<- paste0(working_dir, "/figures/project_broad.detailed_annot/")
