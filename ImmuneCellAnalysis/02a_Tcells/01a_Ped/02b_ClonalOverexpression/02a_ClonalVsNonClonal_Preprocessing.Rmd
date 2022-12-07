@@ -15,7 +15,7 @@ script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
 working_dir<- paste0(base_dir, 
                      "Dropbox (Partners HealthCare)/FilbinLab/",
                      "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/02a_Tcells/01a_Ped/", 
-                     "02_ClonalOverexpression/")
+                     "02b_ClonalOverexpression/")
 
 library(Seurat)
 library(ggplot2)
@@ -55,7 +55,8 @@ if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
 ```{r}
 rank_use<-8
 sharedBy<- "union" 
-data_dir<- paste0("../../02_Ped.Adult/02_detailed_annot/analysis/identifyCD4.CD8_byNMF/", "rank",rank_use, "_sharedBy", sharedBy, "/" )
+data_dir<- paste0("../../02_Ped.Adult/03_Visualize.Reannotate_programs/analysis/Reannotate_programs/", 
+                  "rank",rank_use, "_sharedBy", sharedBy, "/" )
 
 ## Read in seurat object
 cd8_seurat<- readRDS(paste0( data_dir, "ped_seurat_cd8_harmony.Rds"))

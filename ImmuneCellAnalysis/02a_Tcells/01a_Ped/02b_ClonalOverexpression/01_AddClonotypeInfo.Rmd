@@ -1,0 +1,143 @@
+---
+title: "Add in clonotype info"
+output: html_document
+---
+
+For both CD8/CD4 T cells, "clonal" (clonal/nonclonal) + clonal group (arbitrary number) currently in seurat objects
+Also interested in the size of the clonal group- number of cells. Could re-calculate this, but it's already calculated by Tracer- this accounts for any cell that were maybe removed as low quality, myeloid cells, etc. Likely slightly more accurate. Read in this information and add to seurat objects for use downstream. Additionally, need to add whether a cell actually had a TCR reconstructed- calculations for clonal expansion should really be made on this- nonclonal includes cells with TCR  but in clonotype of n=1 and also cells without TCR
+
+Note that this information is stored in 2 places: dataFromOrr (most of cohort) and TracerPreprocessing (for a few samples added to cohort later, processed by me and Li). The later samples have raw tracer output available, but this isn't available for full cohort- same info is stored, just slightly different method.
+
+```{r}
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/02a_Tcells/01a_Ped/", 
+                     "02b_ClonalOverexpression/")
+
+library(Seurat)
+library(ggplot2)
+library(ggpubr)
+library(Rtreemix)
+
+figure_dir_tmp<- "figures/"
+analysis_dir_tmp<- "analysis/"
+
+if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp,recursive = TRUE)}
+if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(nmf_helper)
+clonalOverexpression<- paste0(base_dir, script_dir, "CellChat_HelperFunctions.R")
+source(clonalOverexpression)
+
+```
+
+
+## Set figure dir based on annotation approach (rank/sharedBy changes the final cd4/cd8 annotations)
+```{r}
+rank_use<-8
+sharedBy<- "union" 
+
+## figure/analysis dir based on rank + how shared programs are merged
+figure_dir<- paste0(figure_dir_tmp, "rank", rank_use, "_sharedBy", sharedBy, "/")
+analysis_dir<- paste0(analysis_dir_tmp, "rank", rank_use, "_sharedBy", sharedBy, "/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir,recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+```
+
+## Read in seurat objects, tracer info
+```{r}
+rank_use<-8
+sharedBy<- "union" 
+data_dir<- paste0("../../02_Ped.Adult/03_Visualize.Reannotate_programs/analysis/Reannotate_programs/", 
+                  "rank",rank_use, "_sharedBy", sharedBy, "/" )
+
+## Read in seurat object
+cd8_seurat<- readRDS(paste0( data_dir, "ped_seurat_cd8_harmony.Rds"))
+cd4_seurat<- readRDS(paste0( data_dir, "ped_seurat_cd4_harmony.Rds"))
+tcell_seurat<- readRDS(paste0( data_dir, "ped_seurat_tcell_harmony.Rds"))
+seurat_list<- list(cd8=cd8_seurat, cd4=cd4_seurat, tcell=tcell_seurat)
+
+## Tracer info
+  ## full cohort
+  ## note- this includes muv90, muv91, muv62, which are not in our ped cohort
+  fullCohort_tcr_dir<-"../../../data/data_fromOrr"
+  #load(paste0(fullCohort_tcr_dir, "2020_12_10_clonalTcells_cluster.Rda"))
+  
+  ## newer samples
+  newSamples_tcr_dir<- "../../../01_Preprocessing/01_Tracer_Preprocess/data/"
+  newSamples_dirs<- list.files(newSamples_tcr_dir)
+  newSamples_cellData<- lapply(newSamples_dirs, function(x){
+    print(x)
+    dir_tmp<- paste0(newSamples_tcr_dir, x, "/output/filtered_TCRAB_summary/")
+    if(file.exists(paste0(dir_tmp, "cell_data.csv"))){
+      tcr<- read.csv(paste0(newSamples_tcr_dir, x, "/output/filtered_TCRAB_summary/cell_data.csv"))
+      tcr$experiment<-x
+      return(tcr)
+    }else{
+      print("No TCRs")
+      return(NULL)}
+  })
+  newSamples_tcr<- do.call("rbind", newSamples_cellData[unlist(lapply(newSamples_cellData, function(x){!is.null(x)}))])
+  
+```
+
+## Merge clonotype info from original cohort/newer samples
+```{r}
+## For new samples- remove cells without productive A or B chain
+newSamples_tcr<- newSamples_tcr[newSamples_tcr$A_productive!="" | newSamples_tcr$B_productive != "" ,]
+
+## List of all cells with tcr
+cells_with_tcr<-c(unname(unlist(tcell.reconstructed)),
+                  newSamples_tcr$cell_name )
+cells_with_tcr<- gsub("MUV", "MUV0", cells_with_tcr)
+
+## Clonal group size info
+rownames(newSamples_tcr)<- newSamples_tcr$cell_name
+clonal_group_info<- rbind(clonotypes.all, newSamples_tcr[,c("cell_name","experiment", "clonal_group", "group_size")])
+rownames(clonal_group_info)<- ifelse(grepl("MUV0", rownames(clonal_group_info)), rownames(clonal_group_info),
+                                     ifelse(grepl("MUV", rownames(clonal_group_info)), gsub("MUV", "MUV0", rownames(clonal_group_info)),
+                                            rownames(clonal_group_info)))
+
+## There are a few clonal cells in clonal_group_info that are not in cells_with_tcr- only for original cohort, maybe some slight error in Orr's analysis
+## Add these into cells_with_tcr- only 7 cells
+clonal_cells<- clonal_group_info[!is.na(clonal_group_info$clonal_group), "cell_name"]
+fix_cells<- clonal_cells[!clonal_cells %in% cells_with_tcr]
+cells_with_tcr<- c(cells_with_tcr, clonal_cells)
+```
+
+
+## Add clonotype info to seurat object
+```{r}
+## Assign cells as having a tcr reconstructed or not
+## Roughly 50% of cells have TCR
+seurat_list<- lapply(seurat_list, function(seurat){
+  seurat$tcr_reconstructed<- ifelse(colnames(seurat) %in% cells_with_tcr, "Yes", "No")
+  return(seurat)
+})
+
+## Add on size of clonal group
+## Clonotype info is already here, checked that it matches exactly. Don't technically need to add
+seurat_list<- lapply(seurat_list, function(seurat){
+  seurat<- AddMetaData(seurat, clonal_group_info[,c("clonal_group", "group_size")])
+  
+  ## if tcr was reconstructed but group size/clonal group == NA, this means that cell is in its own clonotype
+  ## For downstream calculations, change group size to 1
+  seurat$group_size<- ifelse(seurat$tcr_reconstructed=="Yes" & is.na(seurat$group_size), 1, seurat$group_size)
+  return(seurat)
+})
+
+```
+
+## Save objects
+```{r}
+saveRDS(seurat_list$cd4, paste0( data_dir, "ped_seurat_cd4_harmony.Rds"))
+saveRDS(seurat_list$cd8, paste0( data_dir, "ped_seurat_cd8_harmony.Rds"))
+saveRDS(seurat_list$tcell, paste0( data_dir, "ped_seurat_tcell_harmony.Rds"))
+```
+
