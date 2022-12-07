@@ -1,0 +1,204 @@
+---
+title: "inferCNV hierarchical clustering"
+output: html_document
+---
+
+Use hierarchical clustering to identify normal/malignant inferCNV clusters
+
+```{r load_packages}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load libraries and functions
+```{r}
+library(cluster)    # clustering algorithms
+library(factoextra) # clustering visualization
+library(dendextend)
+library(weights)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+inferCNV = paste0(base_dir, script_dir, "inferCNV_helper_functions.R")
+source(preprocessing)
+source(inferCNV)
+
+gene_order_file = paste0(base_dir, "/Dropbox (Partners HealthCare)/FilbinLab/data_analysis/genome/gencode_v19_gene_pos.txt")
+ext_ctrl = paste0(base_dir, "/Dropbox (Partners HealthCare)/FilbinLab/data_analysis/ctrl_data/")
+
+
+## Create output files
+inferCNV_analysis_folder = "analysis/inferCNV/HC/"
+inferCNV_fig_folder = "figures/inferCNV/HC/"
+for (folder in c(inferCNV_analysis_folder, inferCNV_fig_folder)){
+  if (!dir.exists(folder)){
+    dir.create(folder)
+  }
+}
+```
+
+## Load input data (observations + control) and gene order file
+## Including: cm, samples, CNV values, 
+## and labels for obsevations (obs) and references (ref)
+```{r load_data}
+cm = readRDS("analysis/inferCNV/cm_exp_ctrl.rds")
+samples = readRDS("analysis/inferCNV/samples_exp_ctrl.rds")
+all_cnv_values = readRDS("analysis/inferCNV/all_cnv_values.rds")
+obs_ref = readRDS("analysis/inferCNV/obs_ref.rds")
+
+gene_order_file = paste0(base_dir, "/Dropbox (Partners HealthCare)/FilbinLab/data_analysis/genome/gencode_v19_gene_pos.txt")
+gene_order = read.table(gene_order_file, header = F, sep = "\t", row.names = 1)
+```
+
+## In each sample, weighted pairwise correlation of cells + references 
+## Hierarchical clustering using correlatiton coefficient 
+## Cutree 
+```{r hierarchical_clustering}
+cnv_hc_each_sample = list()
+cnv_cutree_each_sample = list()
+weights_list = list()
+nTree = 6
+
+for (sample in sort(unique(samples))){
+  ## Subset each sample + (mg and od)
+  to_subset = (samples == sample | samples == "mg" | samples == 'od')
+  message("======================================")
+  message("Processing sample: ", sample)
+  message("Start time: ", Sys.time())
+  ## Compute weights
+  weights = apply(all_cnv_values[,to_subset], 1, var)
+  weights_list[[sample]] = weights
+  ## Compute pairwise correlations and distances
+  pairwise_cor = wtd.cors(all_cnv_values[,to_subset], weight = weights) 
+  pairwise_dist = 1 - pairwise_cor
+  ## Hierarchical clustering and cutree 
+  hc = hclust(as.dist(pairwise_dist), method="ward.D2")
+  cnv_hc_each_sample[[sample]] = hc
+  cnv_cutree_each_sample[[sample]] = cutree(hc, nTree)
+  message("End time: ", Sys.time())
+}
+```
+
+## plot a dendrogram of hierarchical clustering result for target sample
+```{r Plot_dendrogram}
+sample = unique(samples)[1]
+tmp = as.dendrogram(cnv_hc_each_sample[[sample]])
+labels(tmp) = cnv_cutree_each_sample[[sample]][cnv_hc_each_sample[[sample]]$order]
+tmp = color_branches(tmp, k = 4)
+tmp = set(tmp, "labels_cex", 1)
+plot(tmp, horiz=T)
+```
+
+## Print out cutree results for each sample 
+```{r examine_clustering_results}
+cnv_cutree_table = list()
+for (sample in sort(unique(samples))){
+  print("======================")
+  print(sample)
+  print(table(samples[names(cnv_cutree_each_sample[[sample]])], cnv_cutree_each_sample[[sample]]))
+  cnv_cutree_table[[sample]] = table(samples[names(cnv_cutree_each_sample[[sample]])],
+                                     cnv_cutree_each_sample[[sample]])
+}
+names(cnv_cutree_table) = sort(unique(samples))
+
+## write out table- renaming rows so that it's obvious what sample each row corresponds to
+newRownames<-mapply(function(x,y) paste(rownames(x), y, sep="_Sample:"), cnv_cutree_table, names(cnv_hc_each_sample))
+all_cnv_cutree_table<- as.data.frame(do.call(rbind, cnv_cutree_table))
+rownames(all_cnv_cutree_table)<-unname(unlist(newRownames))
+write.table(all_cnv_cutree_table, paste0(inferCNV_analysis_folder, "AllCNVcutreeResults_6Clusters.txt"))
+```
+
+## Repeat inferCNV for target sample with references 
+## Cells in the sample grouped based on previously computed hierarchical clustering
+## and cutree results 
+## May inspect resulting heatmaps to see if cutree results successfully separate 
+## cells +/- CNV and subclones
+```{r heatmap_for_normal_tumor_cells}
+normal_type = c("mg", "od")
+cutree_res = cnv_cutree_each_sample
+
+sample = unique(samples)[2]
+folder = paste0("analysis/inferCNV/", sample, "_6Clusters/")
+plot_subcluster_10X(folder, sample, cm, samples, 
+                    normal_type, cutree_res, gene_order_file, cutoff=1)
+
+```
+
+## Assign CNV status to each based on the number of normal cells in its cluster 
+```{r call-cnv}
+normal_cutoff = 5
+## Store normal clusters in a list
+normal_clusters = lapply(cnv_cutree_table, 
+                         function(x) which((x["mg",] + x["od",])>=normal_cutoff))
+try (if(any(names(cnv_cutree_each_sample) != names(normal_clusters))) stop("cutree results list and normal clusters list should have identical names for elements"))
+
+## Classify each cell as Normal (F) vs Tumor (T) based on normal_clusters list 
+call_cnv_res = NULL
+for (i in seq(length(normal_clusters))){
+  sample = names(normal_clusters)[i]
+  print(sample)
+  normal_clust = normal_clusters[[i]]
+  print(normal_clust)
+  hc_clust_res = cnv_cutree_each_sample[[i]]
+  print(head(hc_clust_res))
+  sample_names = sapply(names(hc_clust_res), function(x) unlist(strsplit(x, split = ".", fixed = T))[1])
+  print(head(sample_names))
+  hc_clust_res = hc_clust_res[sample_names == sample]
+  tmp = ifelse(hc_clust_res %in% normal_clust, F, T)
+  names(tmp) = names(hc_clust_res)[sample_names == sample]
+  call_cnv_res = c(call_cnv_res, tmp)
+}
+
+## Generate a named vector for mg and od, and label them as normal 
+mg_names = names(samples)[samples == "mg"]
+mg_res = rep(F, length(mg_names))
+names(mg_res) = mg_names
+od_names = names(samples)[samples == "od"]
+od_res = rep(F, length(od_names))
+names(od_res) = od_names
+
+## Concatenate CNV calling for all samples and normal control 
+call_cnv_res_complete = c(call_cnv_res, mg_res, od_res)
+call_cnv_res_complete = call_cnv_res_complete[names(samples)]
+call_cnv_res = call_cnv_res_complete[names(samples)[obs_ref == "obs"]]
+
+## Store CNV calling for all samples alone and all samples + normal control 
+saveRDS(call_cnv_res, paste0(inferCNV_analysis_folder, "call_cnv.rds"))
+saveRDS(call_cnv_res_complete, paste0(inferCNV_analysis_folder, "call_cnv_w_ctrl.rds"))
+```
+
+## Save cutree results
+```{r}
+hc_res = sapply(unique(samples[obs_ref == "obs"]), function(x){
+  tmp = cnv_cutree_each_sample[[x]]
+  tmp = tmp[names(tmp) %in% names(obs_ref)[obs_ref == "obs"]]
+})
+
+hc_res = unlist(hc_res)
+tmp = lapply(names(hc_res), 
+                           function(x) unlist(strsplit(x, split = ".", fixed = T))[2:4])
+tmp2 = sapply(tmp, function(x) paste(x[1], x[2], x[3], sep = "."))
+names(hc_res) = tmp2
+
+
+saveRDS(hc_res, paste0(inferCNV_analysis_folder, "cnv_hc_res.rds"))
+```
+
+## Plot proportion of cells with clear cnv for each sample
+```{r}
+df<- as.data.frame(call_cnv_res)
+df$Sample<- plyr::mapvalues(rownames(df), names(samples),samples, warn_missing = FALSE)
+df_bd<- as.data.frame(table(df$call_cnv_res, df$Sample))
+colnames(df_bd)<- c("CNV_detected", "Sample", "NCells")
+df_bd$CNV_detected<- gsub("FALSE", "NoCNV", gsub("TRUE", "CNV", df_bd$CNV_detected))
+df_bd<- df_bd %>% group_by(Sample) %>% mutate(CellPer=NCells/sum(NCells)) %>% as.data.frame()
+
+ggplot(df_bd, aes(x=Sample, y=CellPer, fill=CNV_detected))+
+  geom_bar(position="stack", stat="identity")+
+  xlab("")+ylab("Cell Percentage")+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle=45, hjust=1, face="bold", color="black"))
+ggsave(paste0(inferCNV_fig_folder, "ProporitionOfNormalCells_BasedOnCNV.png"), width=4, height=4)
+```
+
