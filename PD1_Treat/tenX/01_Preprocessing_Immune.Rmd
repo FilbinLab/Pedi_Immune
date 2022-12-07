@@ -31,34 +31,40 @@ hkgenes <- read.table(paste0(marker_dir, "tirosh_house_keeping.txt"), skip = 2)
 hkgenes <- as.vector(hkgenes$V1)
 ```
 
-## Read in matrixes- 1 per sample
+## Read in immune matrixes- 1 per sample
 ```{r}
-matrix_dirs<- list.files(data_dir)
+samples<- list.files(data_dir)
 
-
-## Remove TCR/VDJ directories- analyzed separately
-matrix_dirs<- matrix_dirs[!grepl("TCR", matrix_dirs)]
-matrix_dirs<- matrix_dirs[!grepl("VDJ", matrix_dirs)]
-
-all_matrix<- lapply(matrix_dirs, function(x){
-  matrix_dir<- paste0(data_dir, x)
-  print(matrix_dir)
-  barcode.path <- paste0(matrix_dir, "/filtered_feature_bc_matrix/barcodes.tsv.gz")
-  features.path <- paste0(matrix_dir, "/filtered_feature_bc_matrix/features.tsv.gz")
-  matrix.path <- paste0(matrix_dir, "/filtered_feature_bc_matrix/matrix.mtx.gz")
-  mat <- readMM(file = matrix.path)
-  feature.names = read.delim(features.path,
-                             header = FALSE,
-                             stringsAsFactors = FALSE)
-  barcode.names = read.delim(barcode.path,
-                             header = FALSE,
-                             stringsAsFactors = FALSE)
-  colnames(mat) = barcode.names$V1
-  rownames(mat) = feature.names$V2
+all_matrix<- lapply(samples, function(x){
+  print(x)
+  matrix_dir<- paste0(data_dir, x, "/Tumor")
+  
+  ## tumor/immune as available
+  if(dir.exists(matrix_dir)){
+    barcode.path <- paste0(matrix_dir, "/filtered_feature_bc_matrix/barcodes.tsv.gz")
+    features.path <- paste0(matrix_dir, "/filtered_feature_bc_matrix/features.tsv.gz")
+    matrix.path <- paste0(matrix_dir, "/filtered_feature_bc_matrix/matrix.mtx.gz")
+    mat <- readMM(file = matrix.path)
+    feature.names = read.delim(features.path,
+                               header = FALSE,
+                               stringsAsFactors = FALSE)
+    barcode.names = read.delim(barcode.path,
+                               header = FALSE,
+                               stringsAsFactors = FALSE)
+    colnames(mat) = barcode.names$V1
+    rownames(mat) = feature.names$V2
+  } else{next}
   return(mat)
 })
-names(all_matrix)<- matrix_dirs
+names(all_matrix)<- samples
 
+## Some cell names are duplicated. add sample name to clarify
+all_matrix<- lapply(names(all_matrix), function(x){
+  mtx<- all_matrix[[x]]
+  colnames(mtx)<- paste0(x, "_", colnames(mtx))
+  return(mtx)
+})
+names(all_matrix)<-samples
 ```
 
 ## Make simple metadata for each matrix- cells + sample
@@ -73,7 +79,27 @@ all_meta<- lapply(names(all_matrix), function(x){
 ## Save cm and meta
 ```{r}
 meta<- do.call("rbind", all_meta)
-cm<- all_matrix$GEX
+
+sum(rownames(all_matrix$BT2062) != rownames(all_matrix$BT2080))
+cm<- do.call("cbind", all_matrix)
+
+## There are 91 genes that are duplicated (same for both samples)-sum counts
+  ## Get cm of genes with dup genes
+  dup_genes<- rownames(cm)[duplicated(rownames(cm))]
+  dup_cm<-cm[rownames(cm) %in% dup_genes,]
+  dup_genes<- rownames(dup_cm)
+  dup_cm<- as.data.frame(dup_cm)
+  dup_cm$gene<- dup_genes
+
+  ## Group by gene and get total counts across cell
+  dup_cm<- dup_cm %>% group_by(gene) %>% summarise(across(everything(), list(sum))) %>% as.data.frame()
+  rownames(dup_cm)<-dup_cm$gene
+  dup_cm$gene<- NULL
+  colnames(dup_cm)<- gsub("_1", "", colnames(dup_cm))
+  
+  ## Add back to full cm
+  cm_unDup<- as.data.frame(cm[!rownames(cm) %in% rownames(dup_cm),])
+  cm<- rbind(cm_unDup, dup_cm)
 
 saveRDS(cm, file=paste0(analysis_dir, "raw_cm.Rds"))
 saveRDS(meta, file=paste0(analysis_dir, "raw_meta.Rds"))
@@ -90,7 +116,7 @@ seurat_raw<- RunFullSeurat(cm=cm, RunHarmony = FALSE, samples=meta$sample)
 ## Identify # of HK genes
 hkgenes.notfound.indices <- which(!hkgenes %in% rownames(seurat_raw))  
 if (length(hkgenes.notfound.indices)) {
-  message = paste0(paste0(hkgenes[hkgenes.notfound.indices], collapse = " "), " housekeeping genes were not found in sample ", i)
+  message = paste0(paste0(hkgenes[hkgenes.notfound.indices], collapse = " "), " housekeeping genes were not found")
   print(message)
 }
 
@@ -98,9 +124,6 @@ if (length(hkgenes.notfound.indices)) {
 hkgenes.found <- hkgenes[-hkgenes.notfound.indices]  # remove hkgenes that were not found
 seurat_raw[["nHK_RNA"]] <- Matrix::colSums(seurat_raw[['RNA']]@data[hkgenes.found, ] > 0)
 
-# Get number of expressed housekeeping genes.
-hkgenes.found <- hkgenes[-hkgenes.notfound.indices]  # remove hkgenes that were not found
-seurat_raw[["nHK_RNA"]] <- Matrix::colSums(seurat_raw[['RNA']]@data[hkgenes.found, ] > 0)
 
 ## Get percentage of mito genes
 seurat_raw[["percent_mito"]] <- PercentageFeatureSet(seurat_raw, pattern = "^MT-")
@@ -153,26 +176,26 @@ ggsave(paste0(figure_dir, "PF_BySample_nFeature.nHK.png"), width=3, height=3)
 
 ## recluster without low quality cells
 seurat_obj_filt_meta<- seurat_obj_filt@meta.data
-seurat_obj_filt<- RunFullSeurat(seurat_obj_filt@assays$RNA@counts, RunHarmony = FALSE, samples=seurat_obj_filt_meta$sample)
+seurat_obj_filt<- RunFullSeurat(seurat_obj_filt@assays$RNA@counts, RunHarmony = TRUE, samples=seurat_obj_filt_meta$sample)
 seurat_obj_filt<-AddMetaData(seurat_obj_filt, seurat_obj_filt_meta[,!colnames(seurat_obj_filt_meta) %in% colnames(seurat_obj_filt@meta.data)])
 
 saveRDS(seurat_obj_filt, file=paste0(analysis_dir, "seurat_obj.Rds"))
 
 ```
 
+nothing after here run yet
 ## PD1 has a few AC, OC- remove prior to projection
 ```{r}
 seurat_obj<- readRDS(paste0(analysis_dir, "seurat_obj.Rds"))
 
-
 ## Reduce resolution to identify markers for major clusters
-seurat_obj<-FindClusters(seurat_obj, resolution = 0.15)
+seurat_obj<-FindClusters(seurat_obj, resolution = 0.1)
 all_markers<- FindAllMarkers(seurat_obj, min.pct = 0.4, logfc.threshold = 0.5)
 all_markers_filtered<- all_markers[all_markers$p_val_adj<0.05,]
 top_markers<- all_markers_filtered %>% group_by(cluster) %>% top_n(n=10, wt=avg_log2FC) %>% as.data.frame()
 
-## Assign cluster 6 to AC, cluster r to Unknown (not T cells or)
-seurat_obj$AC<- ifelse(seurat_obj$seurat_clusters==6, "AC", ifelse(seurat_obj$seurat_clusters==5, "Unknown", "Other"))
+## Assign cluster 6 to AC, cluster r to Unknown (not T cells or myeloid)
+seurat_obj$AC<- ifelse(seurat_obj$seurat_clusters==5, "AC", ifelse(seurat_obj$seurat_clusters==7, "Unknown", "Other"))
 FeaturePlot(seurat_obj, features=c("CD3G", "CSF1R", "GFAP")) + DimPlot(seurat_obj, group.by = "AC")
 ggsave(paste0(figure_dir, "UMAP_removeAC.Unknown.png"), width=7, height=6)
 
