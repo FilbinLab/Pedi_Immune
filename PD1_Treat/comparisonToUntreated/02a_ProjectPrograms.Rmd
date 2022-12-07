@@ -142,8 +142,8 @@ tenx_seurat$tenx_cd4<- my_project_seurat(full_cd4_seurat,tenx_seurat$tenx_cd4, r
 tenx_seurat$tenx_cd8<- my_project_seurat(full_cd8_seurat,tenx_seurat$tenx_cd8, reference_annotation = "NMF_rank8_annot_mergedByunion_reAnnot")
 tenx_seurat$tenx_myeloid<- my_project_seurat(full_myeloid_seurat,tenx_seurat$tenx_myeloid, reference_annotation = "NMF_rank6_annotByAdult10X")
 
-saveRDS(ss2_seurat, file=paste0(analysis_dir, "ss2_seurat_list_cd4.cd8.myeloid.Rds"))
-saveRDS(tenx_seurat, file=paste0(analysis_dir, "tenx_seurat_list_cd4.cd8.myeloid.Rds"))
+saveRDS(ss2_seurat, file=paste0(analysis_dir, "../ss2_seurat_list_cd4.cd8.myeloid.Rds"))
+saveRDS(tenx_seurat, file=paste0(analysis_dir, "../tenx_seurat_list_cd4.cd8.myeloid.Rds"))
 ```
 
 ## Merge by sequencing type
