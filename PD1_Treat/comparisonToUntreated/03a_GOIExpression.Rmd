@@ -66,11 +66,16 @@ nature_2020_genes<- lapply(nature_2020_genes, function(x){x[x!=""]})
 
 ```
 
-## Set GOI to plot, sample order (based on treatment, sequencing)
+## Settings:
+## set GOI to plot, sample order (based on treatment, sequencing), whether to plot programs assigned by score or projection
 ```{r}
 GOI<- c("KLRB1", "SELPLG", "PTGER2", "PDCD1", "TIGIT", "CTLA4", "ITGAE", "GZMK", "GNLY", "NKG7", "GZMB", "GZMA", "GADD45B")
 
 sample_order<-c("BT1478", "BT1857","BT1745", "E167", "BT1910", "BT1935", "GEX")
+
+## Can assign programs by score or by program- assign which to use here. Will set metadata column to use downstream + new figure dir
+annot_by<- "score" ## "score" or "program
+if(annot_by)
 ```
 
 ## Merge by sequencing type
@@ -131,11 +136,12 @@ ggsave(paste0(figure_dir, "Heatmap_GOI_byProgram_All.png"), width=28, height=7)
 tmp<- all_seurat$cd4
 tmp$Program_projected<- gsub("\\.", "\n",tmp$Program_projected)
 
-## Remove effector memory- no untreated GBM effector memory
+## Remove effector memory- no untreated GBM effector memory (+ stress for cd4)
 tmp<- subset(tmp, Program_projected != "Effector\nMemory")
+tmp<- subset(tmp, Program_projected != "Stress")
 
 ## Boxplot
-goi_plot<- c("PDCD1", "GNLY", "TIGIT", "CTLA4", "GZMB", "SELPLG", "PTGER2", "KLRB1")
+goi_plot<- c("PDCD1", "GNLY", "TIGIT", "CTLA4", "GZMB", "SELPLG", "PTGER2", "KLRB1","GADD45B")
 all_plots<-lapply(goi_plot, function(gene){
   tmp$GOI<- as.data.frame(tmp@assays$RNA@data[gene,])
   mean_goi<- tmp@meta.data %>% group_by(sample, Program_projected) %>% summarise(mean_expr=mean(GOI)) %>% as.data.frame()
@@ -159,14 +165,14 @@ all_plots<-lapply(goi_plot, function(gene){
     ylab(paste0("Mean log2 TPM: ", gene))
 })
 cowplot::plot_grid(plotlist=all_plots, ncol=1)
-ggsave(paste0(figure_dir, "Boxplot_AllGOI_MeanExprBySample_PD1vUntreated.png"), width=10, height=4*length(goi_plot))
+ggsave(paste0(figure_dir, "Boxplot_AllGOI_MeanExprBySample_PD1vUntreated_CD4.png"), width=10, height=4*length(goi_plot))
 
 ## VlnPlot
 VlnPlot(tmp, group.by = "Program_projected",stack=TRUE , flip = TRUE,
         features=c("PDCD1", "TIGIT", "CTLA4", "ITGAE", "GZMK", "GNLY", "NKG7", "GZMA", "SELPLG", "PTGER2","KLRB1", "GADD45B"), 
         combine=TRUE, fill.by="ident", split.by = "Treatment", split.plot = TRUE)+
   scale_fill_manual(values= c(Untreated="purple", PD1="orange"))
-ggsave(paste0(figure_dir, "Vln_GOI_byTreatment.png"), width=7, height=8)
+ggsave(paste0(figure_dir, "Vln_GOI_byTreatment_CD4.png"), width=7, height=8)
 ```
 
 ## Score for cytoxic/dysfunctional genesets, plot by treatment
