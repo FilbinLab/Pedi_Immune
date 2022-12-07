@@ -186,38 +186,8 @@ figure_dir_use<- paste0(figure_dir, analysis_name, "/"); if(!dir.exists(figure_d
   ggsave(paste0(figure_dir_use, "Vln_PTGER4_CD8_byAge.png"), width=4, height=3)
   
   ## With adult, by subtype + age (over 25, 4-25, under 4)
-    under4<- c("BT1478", "BT1857", "BT1733", "MUV078")
-    df<- pedAdult_cd8_seurat@meta.data
-    df$PTGER2<- pedAdult_cd8_seurat@assays$RNA@data["PTGER2",]
-    df$Age<- plyr::mapvalues(rownames(df), colnames(pedAdult_cd8_seurat), pedAdult_cd8_seurat$Age)
-    df$Age<- ifelse(df$sampleid %in% under4, "Under4",df$Age)
-    df$Age<- gsub("Ped", "Ped_4-25", df$Age)
-    
-    ## Call SPP1/CD44 as expressed or not
-    df<- df[,c("sampleid", "PTGER2", "Age", "clonal")]
-    df$PTGER2_expressed<- ifelse(df$PTGER2>2, "Expressed", "NotExpressed")
-    df$clonal<- gsub("not clonal", "nonclonal", df$clonal)
-    
-    
-    ## Determine mean expression/mean percent expressed for each age/program
-    df$UniqueID<- paste0(df$Age, "__", df$clonal)
-    df_summary<- df %>% group_by(UniqueID) %>% summarise(NormalizedExpression=mean(PTGER2),
-                                                         PercentExpressed=sum(PTGER2_expressed =="Expressed")/n()) %>%
-      as.data.frame()
-    
-    ## Split uniqueID back into age/program
-    df_summary$Age<- unlist(lapply(strsplit(df_summary$UniqueID, split="__"),function(x){x[1]}))
-    df_summary$Clonality<- unlist(lapply(strsplit(df_summary$UniqueID, split="__"),function(x){x[2]}))
-    
-    ## Plot
-    ggplot(df_summary, aes(x=Clonality, y=Age, color=NormalizedExpression, size=PercentExpressed))+
-      geom_point()+
-      theme_bw()+
-      #facet_grid(cols=vars(Age), space="free_x", scale="free_x")+
-      scale_color_gradient(low="white", high="red")+
-      theme(axis.text.x = element_text(angle=45, hjust=1),
-            axis.text = element_text(face="bold", color="black"))+
-      xlab("")+ylab("")
+    my_dotPlotByAgeGroup(seurat = pedAdult_cd8_seurat, normalization = "center", cm_list=cm_list,
+                     genes=c("PTGER2"))
     ggsave(paste0(figure_dir_use, "PTGER2_ByAgeGroup.clonality.pdf"), device="pdf", width=4, height=4)
   
   
@@ -408,8 +378,8 @@ ggsave(paste0(figure_dir_use, "VlnPlot_SELPLG_CD4_bySample.png"), width = 7, hei
     scale_color_gradient(low="white", high="red", limits=c(3.75,4.25))
   ggsave(paste0(figure_dir_use, "DotPlot_SELPLG_CD8_byAge.Clonal.pdf"),device="pdf", width=5, height=3)
   
-  DotPlot(pedAdult_cd8_seurat, group.by = "clonal.Age", features="SELPLG", scale=TRUE)+
-    scale_color_gradient2(low="blue",mid="white", high="red",)
+  DotPlot(pedAdult_cd8_seurat, group.by = "clonal.Age", features=c("SELPLG"), scale=TRUE)+
+    scale_color_gradient2(low="blue",mid="white", high="red")
   ggsave(paste0(figure_dir_use, "DotPlot_SELPLG_CD8_byAge.Clonal_scaled.pdf"),device="pdf", width=5, height=3)
   
   ## program
@@ -418,7 +388,7 @@ ggsave(paste0(figure_dir_use, "VlnPlot_SELPLG_CD4_bySample.png"), width = 7, hei
     scale_color_gradient(low="white", high="red")
    ggsave(paste0(figure_dir_use, "DotPlot_CD8_byAge.Program.pdf"), device="pdf", width=5, height=6) 
    
-  DotPlot(pedAdult_cd8_seurat, group.by = "program.Age", features="SELPLG", scale=TRUE)+
+  DotPlot(pedAdult_cd8_seurat, group.by = "program.Age", features=c("SELPLG", "PTGER2"), scale=TRUE)+
     scale_color_gradient2(low="blue", mid="white", high="red")
    ggsave(paste0(figure_dir_use, "DotPlot_CD8_byAge.Program_scaled.pdf"), device="pdf", width=5, height=6) 
    
@@ -496,6 +466,11 @@ ggsave(paste0(figure_dir_use, "VlnPlot_SELPLG_CD4_bySample.png"), width = 7, hei
     
     DotPlot(ped_tcell_seurat, features=c("SELP", "SELL", "SELE"), group.by = "NiceSubtype", scale=FALSE)
     ggsave(paste0(figure_dir_use, "Tcell_DotPlot_receptors_bySubtype.png"), width=6, height=4)
+ 
+## Plot by age group/clonality- under 4, 4-25, adult       
+ my_dotPlotByAgeGroup(seurat = pedAdult_cd8_seurat, normalization = "center", cm_list=cm_list,
+                     genes=c("SELPLG"))
+    ggsave(paste0(figure_dir_use, "SELPLG_ByAgeGroup.clonality.png"), device="png", width=4, height=4)
 ```
 
 ## ANXA1
@@ -662,10 +637,17 @@ DotPlot(merged_cd8, features=c("PDCD1", "CTLA4", "TIGIT", "KLRB1", "LAG3","CD244
 ggsave(paste0(figure_dir_use, "Ped.Adult.CD8_BySubtype.png"), width=7, height=4)
 ```
 
-## PTGER2 and SELPLG together, on heatmap
+## PTGER2 and SELPLG together
 ```{r}
 analysis_name<- "PTGER2.SELPLG"
 figure_dir_use<- paste0(figure_dir, analysis_name, "/"); if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
+
+   
+DotPlot(pedAdult_cd8_seurat, group.by = "program.Age", features=c("SELPLG", "PTGER2"), scale=TRUE)+
+  scale_color_gradient2(low="blue", mid="white", high="red")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))+
+  xlab("")
+ ggsave(paste0(figure_dir_use, "DotPlot_CD8_byAge.Program_scaled.pdf"), device="pdf", width=6, height=6) 
 
 ## CD8 by age + program
 pedAdult_cd8_seurat$tmp<- paste0( pedAdult_cd8_seurat$Final_Annot, "-", pedAdult_cd8_seurat$Age)
@@ -770,5 +752,103 @@ ggplot(pb_melt6, aes(x=Program, y=Gene, fill=TPM))+
   xlab("")+ylab("")+
   facet_grid(rows=vars(receptor), scale="free_y", space="free_y")
 ggsave(paste0(figure_dir_use, "Heatmap_ligands.SELPLG.PTGER2_byTumor_sample.png"), width=9, height=4.5)
+
+## With adult, by subtype + age (over 25, 4-25, under 4)
+cm_list<-NormCenter(pedAdult_cd8_seurat@assays$RNA@counts)
+my_dotPlotByAgeGroup(seurat = pedAdult_cd8_seurat, normalization = "center", cm_list=cm_list,
+                     genes=c("PTGER2", "SELPLG", "KLRB1"))
+    
+ggsave(paste0(figure_dir_use, "PTGER2.SELPLG.KLRB1_ByAgeGroup.clonality.pdf"), device="pdf", width=6, height=4)
+```
+
+```{r}
+seurat<- pedAdult_cd8_seurat
+normalization<- "center"
+genes<- c("PTGER2", "SELPLG")
+cm_list<-NormCenter(seurat@assays$RNA@counts)
+age_metadata_column="Age"
+under4Patients= c("BT1478", "BT1857", "BT1733", "MUV078")
+xAxis="clonal"
+
+my_dotPlotByAgeGroup<- function(seurat, 
+                                under4Patients= c("BT1478", "BT1857", "BT1733", "MUV078"), 
+                                normalization, 
+                                genes,
+                                cm_list,
+                                age_metadata_column="Age",
+                                xAxis="clonal"){
+    ## Add on centered counts for GOI to metadata
+    df<- seurat@meta.data
+    cm_center<-cm_list$center_data[genes,]
+    if(length(genes)>1){
+      cm_center<- as.data.frame(t(cm_center))
+    }else if (length(genes) == 1){
+      cm_center<- as.data.frame(cm_center)
+      colnames(cm_center)<- genes
+    }
+    colnames(cm_center)<-paste0(colnames(cm_center), "_Centered")
+    df<- cbind(df, cm_center)
+    
+    ## Add on raw counts to metadata (for determining % expressed)
+    if(length(genes)>1){
+      df<- cbind(df, as.data.frame(t(seurat@assays$RNA@data[genes,])))
+    }else if (length(genes) == 1){
+      tmp<- as.data.frame(seurat@assays$RNA@data[genes,])
+      colnames(tmp)<- genes
+      df<- cbind(df, tmp)
+    }
+    
+    ## Add on age info
+    df$Age<- plyr::mapvalues(rownames(df), colnames(seurat),seurat@meta.data[[age_metadata_column]])
+    df$Age<- ifelse(df$sampleid %in% under4Patients, "Under4",df$Age)
+    df$Age<- gsub("Ped", "Ped_4-25", df$Age)
+    df<- df[,c("sampleid", genes, paste0(genes, "_Centered"), "Age", xAxis)]
+    
+    ## Call as expressed or not
+    expressed_df<-as.data.frame(lapply(genes, function(x){ifelse(df[,x]>2, "Expressed", "NotExpressed")}))
+    colnames(expressed_df)<-c(paste0(genes, "_expressed"))
+    df<- cbind(df, expressed_df)
+    
+    ## Determine mean expression (raw, centered) and mean percent expressed (calculated based on raw) for each age/program for each gene
+    if(normalization=="center"){
+        df$UniqueID<- paste0(df$Age, "__", df[,xAxis])
+        df_summary_list<- lapply(genes, function(gene){
+          df_summary<- df %>% group_by(UniqueID) %>% summarise(NormalizedExpression=mean( (!!sym(paste0(gene, "_Centered")))),
+                                                     PercentExpressed=sum((!!sym(paste0(gene, "_expressed"))) =="Expressed")/n()) %>%
+            as.data.frame()
+          df_summary$gene<- gene
+          return(df_summary)
+        })
+    }
+    
+    if(normalization=="raw"){
+        df$UniqueID<- paste0(df$Age, "__", df[,xAxis])
+        df_summary_list<- lapply(genes, function(gene){
+          df_summary<- df %>% group_by(UniqueID) %>% summarise(NormalizedExpression=mean( (!!sym(gene))),
+                                                     PercentExpressed=sum((!!sym(paste0(gene, "_expressed"))) =="Expressed")/n()) %>%
+            as.data.frame()
+          df_summary$gene<- gene
+          return(df_summary)
+        })
+    }
+    
+    ## Merge all genes into single df
+    df_summary<- do.call("rbind", df_summary_list)
+    
+    ## Split uniqueID back into age/program
+    df_summary$Age<- unlist(lapply(strsplit(df_summary$UniqueID, split="__"),function(x){x[1]}))
+    df_summary$XAxis<- unlist(lapply(strsplit(df_summary$UniqueID, split="__"),function(x){x[2]}))
+    
+
+    ## Plot
+    ggplot(df_summary, aes(x=XAxis, y=Age, color=NormalizedExpression, size=PercentExpressed))+
+      geom_point()+
+      theme_bw()+
+      scale_color_gradient2(low="blue", mid="white", high="red")+
+      theme(axis.text.x = element_text(angle=45, hjust=1),
+            axis.text = element_text(face="bold", color="black"))+
+      xlab("")+ylab("")+
+      facet_grid(cols=vars(gene), scale="free", space="free")
+}
 ```
 
