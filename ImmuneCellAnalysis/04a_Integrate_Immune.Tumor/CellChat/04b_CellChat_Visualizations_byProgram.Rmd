@@ -17,7 +17,7 @@ library(ggalluvial)
 options(stringsAsFactors = FALSE)
 
 base_dir = "/Users/jlabelle/"
-script_dir = paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/")
+script_dir = paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/Scripts/")
 working_dir<- paste0(base_dir, 
                      "Dropbox (Partners HealthCare)/FilbinLab/",
                      "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/04a_Integrate_Immune.Tumor/CellChat/")
@@ -30,7 +30,7 @@ source(cellchatHelper)
 setwd(working_dir)
 
 ## Load in list of all cell types across all subtypes
-nCellTypes<- readRDS( "analysis/nCellTypes_bySample.Rds")
+nCell_bySample<- readRDS( "analysis/nCellTypes_bySample.Rds")
 
 
 library(RColorBrewer)
@@ -249,13 +249,15 @@ Plotting options: sankey plot (USED DOWNSTREAM), heatmap
 ```{r}
 ## Settings: major sender/receiver cell types, normalization method-"noNorm", "bySample", "byCell"
 majorCellType1<- "Myeloid"
-majorCellType2<- "Tumor"
-norm_method<- "noNorm"
+majorCellType2<- c("CD4", "CD8")
+norm_method<- "byCellBySample"
 
 ## Use helper function to preprocess for sankey plot
 sigLRs_nLR<- process_LR_forSankeyPlot(sigLRs, majorCellType1, majorCellType2, norm_method)
 
 ```
+
+
 
 ## Sankey plot
 ```{r}
@@ -271,7 +273,10 @@ sigLRs_plot$major_sender<- gsub("CD4", "Immune", gsub("CD8", "Immune",gsub("Myel
 my_sankeyPlot(sigLRs_plot)
 
 
-ggsave(paste0(figure_dir_use, "Sankey_ByTotalLR_Norm", norm_method,"_",paste(majorCellType1, collapse="."),".", majorCellType2, ".pdf"),device="pdf",
+ggsave(paste0(figure_dir_use, "Sankey_ByTotalLR_Norm", norm_method,"_",
+              paste(majorCellType1, collapse="."),".",
+              paste(majorCellType2, collapse="."), ".pdf"),
+       device="pdf",
        width=8, height=16)
 
 ```
