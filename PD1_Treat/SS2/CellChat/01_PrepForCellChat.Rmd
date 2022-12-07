@@ -1,0 +1,298 @@
+---
+title: "PrepSeuratObjectsForCellChat"
+output: html_document
+---
+
+```{r}
+library(CellChat)
+library(Seurat) 
+
+options(stringsAsFactors = FALSE)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/PD1_Treat/SS2/Tumor/03_CellChat/")
+
+analysis_dir<- paste0(working_dir, "/analysis/")
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+```
+
+## Read in seurat objects: ped tcells, myeloid cells, tumor cells
+```{r}
+tumor_seurat<- readRDS("../02_Annotate/analysis/seurat/seurat_obj.Rds")
+cd4_seurat<- readRDS("../../../comparisonToUntreated/analysis/ss_cd4_Harmony_seurat.Rds")
+cd8_seurat<- readRDS("../../../comparisonToUntreated/analysis/ss_cd8_Harmony_seurat.Rds")
+myeloid_seurat<- readRDS("../../../comparisonToUntreated/analysis/ss_myeloid_Harmony_seurat.Rds")
+
+## Remove non-treated from immune seurat objects
+cd4_seurat<- subset(cd4_seurat, Treatment=="PD1")
+cd8_seurat<- subset(cd8_seurat, Treatment=="PD1")
+myeloid_seurat<- subset(myeloid_seurat, Treatment=="PD1")
+```
+
+
+## Merge seurat objects together
+```{r}
+## Add common column for: 
+## 1) high level cell type (tcell, myeloid, tumor)
+cd4_seurat$highLevel_annot<- "Tcell"
+cd8_seurat$highLevel_annot<- "Tcell"
+myeloid_seurat$highLevel_annot<- "Myeloid"
+tumor_seurat$highLevel_annot<- "Tumor"
+
+## 2) detailed - (CD4/CD8)
+## For myeloid: may replace this with microglia/macrophage/monocyte distinction
+cd4_seurat$detailed_annotForCellChat<- "CD4"
+cd8_seurat$detailed_annotForCellChat<- "CD8"
+myeloid_seurat$detailed_annotForCellChat<- "Myeloid"
+tumor_seurat$detailed_annotForCellChat<- "Tumor"
+
+## 3) program
+cd4_seurat$immunePrograms_tumorCellTypes<- paste0("CD4_", cd4_seurat$Program_projected)
+cd8_seurat$immunePrograms_tumorCellTypes<- paste0("CD8_", cd8_seurat$Program_projected)
+myeloid_seurat$immunePrograms_tumorCellTypes<- myeloid_seurat$Program_projected
+tumor_seurat$immunePrograms_tumorCellTypes<- tumor_seurat$Program_projected_manualOPC
+
+## Add on any other colums needed before merging
+tumor_seurat$sampleid<- tumor_seurat$sample
+
+## Check that scaling is the same for all
+head(colSums(myeloid_seurat@assays$RNA@counts))/head(colSums(cd4_seurat@assays$RNA@counts))
+head(colSums(myeloid_seurat@assays$RNA@counts))/head(colSums(tumor_seurat@assays$RNA@counts))
+
+## Match metadata to clean up merged seurat
+all_colnames<-c(colnames(myeloid_seurat@meta.data),colnames(cd4_seurat@meta.data), colnames(cd8_seurat@meta.data), colnames(tumor_seurat@meta.data))
+commonColumns<- table(all_colnames); commonColumns<- names(commonColumns)[commonColumns==4]
+
+tumor_seurat@meta.data<- tumor_seurat@meta.data[,commonColumns]
+myeloid_seurat@meta.data<- myeloid_seurat@meta.data[,commonColumns]
+cd4_seurat@meta.data<- cd4_seurat@meta.data[,commonColumns]
+cd8_seurat@meta.data<- cd8_seurat@meta.data[,commonColumns]
+
+## Merge together
+merged_seurat<- merge(tumor_seurat, c(myeloid_seurat, cd4_seurat, cd8_seurat))
+
+## Run full seurat processing- not needed for cellChat, but nice for a high-level look
+merged_seurat_meta<- merged_seurat@meta.data
+merged_seurat<- RunFullSeurat(merged_seurat@assays$RNA@counts, RunHarmony = TRUE, samples=merged_seurat_meta$sampleid)
+merged_seurat<- AddMetaData(merged_seurat, merged_seurat_meta[,!colnames(merged_seurat_meta) %in% colnames(merged_seurat@meta.data)])
+
+saveRDS(merged_seurat, file=paste0(analysis_dir, "seurat_tumor.tcell.myeloid.Rds"))
+```
+
+
+## Split into 1 seurat object per sample
+```{r}
+all_seurat<- readRDS(paste0(analysis_dir, "seurat_tumor.tcell.myeloid.Rds"))
+
+## Number of cells in each cell type per sample, save
+## This includes detailed annot (CD4, CD8, etc) as well as Tcell/myeloid programs
+meta<- all_seurat@meta.data
+
+  ## detailed annot
+  nCells_bySample<- as.data.frame(table(meta$detailed_annotForCellChat, meta$sample))
+  colnames(nCells_bySample)<-c("CellType", "Sample", "NCells")
+  
+  ## By program
+  nProgramCells_bySample<- as.data.frame(table(meta$immunePrograms_tumorCellTypes, meta$sample))
+  colnames(nProgramCells_bySample)<-c("CellType", "Sample", "NCells")
+
+nCells_bySample<- rbind(nCells_bySample, nProgramCells_bySample[!nProgramCells_bySample$CellType %in% nCells_bySample$CellType,])  
+saveRDS(nCells_bySample, file=paste0(analysis_dir, "nCellTypes_bySample.Rds"))
+
+## Cycle through each sample, split seurat object
+all_seurat_list<- lapply(unique(meta$sample), function(x){
+  seurat_tmp<- subset(all_seurat, sample==x)
+  print(paste0(x, " has ", ncol(seurat_tmp)," cells"))
+  return(seurat_tmp)
+})
+names(all_seurat_list)<- unique(meta$sample)
+
+saveRDS(all_seurat_list, file=paste0(analysis_dir, "seurat_list_bySample.Rds"))
+```
+
+
+## Write out comparison file- sender/receiver text file
+file_with_comparisons should be a text file with 3 columns that follow the structure: comparison_name sender receiver
+Can run all simultaneously, but takes too long to run- over 3 days
+Split into multiple comparison files, just so they can run simultaneously
+
+## By program
+```{r}
+all_seurat<- readRDS(paste0(analysis_dir, "seurat_tumor.tcell.myeloid.Rds"))
+nCells_bySample<- readRDS(paste0(analysis_dir, "nCellTypes_bySample.Rds"))
+
+
+## Get list of all cell types by high level cell type
+cd8_types<- unique(all_seurat$immunePrograms_tumorCellTypes[all_seurat$detailed_annotForCellChat=="CD8"])
+cd4_types<- unique(all_seurat$immunePrograms_tumorCellTypes[all_seurat$detailed_annotForCellChat=="CD4"])
+myeloid_types<- unique(all_seurat$immunePrograms_tumorCellTypes[all_seurat$detailed_annotForCellChat=="Myeloid"])
+tumor_types<- unique(all_seurat$immunePrograms_tumorCellTypes[all_seurat$detailed_annotForCellChat=="Tumor"])
+
+## Get list of cell types with at least 11 cells- required for cell chat input
+enough_cells<- nCells_bySample[nCells_bySample$NCells>10 & nCells_bySample$CellType %in% all_seurat$immunePrograms_tumorCellTypes,]  
+cd8_types<- cd8_types[cd8_types %in% enough_cells$CellType]
+cd4_types<- cd4_types[cd4_types %in% enough_cells$CellType]
+myeloid_types<- myeloid_types[myeloid_types %in% enough_cells$CellType]
+tumor_types<- tumor_types[tumor_types %in% enough_cells$CellType]
+
+## Between high level cell type lists, get all pairwise combinations
+cd4_myeloid<- expand.grid(Sender=as.list(cd4_types), Receiver=as.list(myeloid_types))
+cd8_myeloid<- expand.grid(Sender=as.list(cd8_types), Receiver=as.list(myeloid_types))
+cd4_cd8<- expand.grid(Sender=as.list(cd4_types), Receiver=as.list(cd8_types))
+tumor_cd4<- expand.grid(Sender=as.list(tumor_types), Receiver=as.list(cd4_types))
+tumor_cd8<- expand.grid(Sender=as.list(tumor_types), Receiver=as.list(cd8_types))
+tumor_myeloid<- expand.grid(Sender=as.list(tumor_types), Receiver=as.list(myeloid_types))
+
+
+## All together:
+all_comparisons<- do.call("rbind", list(cd4_myeloid, cd8_myeloid, cd4_cd8, tumor_cd4, tumor_cd8, tumor_myeloid))
+all_comparisons<- as.data.frame(apply(all_comparisons, 2, function(x){as.character(x)}))
+
+  ## Add column with analysis name
+  all_comparisons$name<- paste0(all_comparisons$Sender, "_to_", all_comparisons$Receiver)
+  all_comparisons<- all_comparisons[,c("name", "Sender", "Receiver")]
+
+
+write.table(all_comparisons, file=paste0(analysis_dir, "all_comparisons.txt"), col.names = FALSE, quote = FALSE, row.names = FALSE)
+
+
+## Separated to speed up run time (these files used)
+## not used currently
+comparison_list<- list(tcell_myeloid=tcell_myeloid, myeloid_tcell=myeloid_tcell, 
+                       tumor_clonal=tumor_clonal, tumor_nonclonal=tumor_nonclonal, tumor_myeloid=tumor_myeloid)
+comparison_list<- lapply(comparison_list, function(x){
+  x$name<- paste0(x$Sender, "_to_", x$Receiver)
+  x<- x[,c("name", "Sender", "Receiver")]
+  x$Sender<- as.character(x$Sender);x$Receiver<- as.character(x$Receiver)
+  return(x)
+})
+for(i in names(comparison_list)){
+  tmp<- comparison_list[[i]]
+  write.table(tmp, file=paste0(analysis_dir, "/byCellType/comparisons_", i, ".txt"), col.names = FALSE, quote = FALSE, row.names = FALSE)
+}
+
+```
+
+
+## By program: tumor cell types, myeloid programs, cd4 programs, cd8 programs
+not used currently
+```{r}
+all_seurat<- readRDS(paste0(analysis_dir, "seurat_tumor.tcell.myeloid.Rds"))
+
+## Add on CD4/CD8 distinction
+all_seurat$detailed_annot<- ifelse(grepl("CD4", all_seurat$immunePrograms_tumorCellTypes), "CD4",
+                                   ifelse(grepl("CD8", all_seurat$immunePrograms_tumorCellTypes), "CD8",
+                                          ifelse(grepl("Unclear", all_seurat$immunePrograms_tumorCellTypes), "UnclearTcell",
+                                                 all_seurat$highLevel_annot)))
+
+## Remove "unclear" cells, inhibitory CD8
+all_seurat<- subset(all_seurat, detailed_annot != "UnclearTcell")
+all_seurat<- subset(all_seurat, immunePrograms_tumorCellTypes != "CD8_Inhibitory")
+
+## Remove any programs/cell types without at least 10 cells in 1 sample
+nCells<- as.data.frame.matrix(table(all_seurat$immunePrograms_tumorCellTypes, all_seurat$sample))
+nSamples_pf<- apply(nCells, 1, function(x){sum(x>10)})
+cellTypes_keep<- names(nSamples_pf)[nSamples_pf!=0]
+all_seurat<- subset(all_seurat, immunePrograms_tumorCellTypes %in% cellTypes_keep)
+
+## Get list of all programs by high level cell type
+cd4_types<- unique(all_seurat$immunePrograms_tumorCellTypes[grepl("CD4", all_seurat$immunePrograms_tumorCellTypes)])
+cd8_types<- unique(all_seurat$immunePrograms_tumorCellTypes[grepl("CD8", all_seurat$immunePrograms_tumorCellTypes)])
+myeloid_types<- unique(all_seurat$immunePrograms_tumorCellTypes[all_seurat$detailed_annot=="Myeloid"])
+tumor_types<- unique(all_seurat$immunePrograms_tumorCellTypes[all_seurat$highLevel_annot=="Tumor"])
+
+
+## Between high level cell type lists, get all pairwise combinations
+cd4_myeloid<- expand.grid(Sender=as.list(cd4_types), Receiver=as.list(myeloid_types))
+cd8_myeloid<- expand.grid(Sender=as.list(cd8_types), Receiver=as.list(myeloid_types))
+tumor_cd4<- expand.grid(Sender=as.list(tumor_types), Receiver=as.list(cd4_types))
+tumor_cd8<- expand.grid(Sender=as.list(tumor_types), Receiver=as.list(cd8_types))
+tumor_myeloid<- expand.grid(Sender=as.list(tumor_types), Receiver=as.list(myeloid_types))
+all_list<- list(cd4_myeloid=cd4_myeloid, cd8_myeloid=cd8_myeloid, tumor_cd4=tumor_cd4, tumor_cd8=tumor_cd8, tumor_myeloid=tumor_myeloid)
+
+## For each cell type list, cycle through each comparison. Remove any without at least 1 sample with 10 cells in each
+nCells_allTypes<- as.data.frame.matrix(table(all_seurat$immunePrograms_tumorCellTypes, all_seurat$sample))
+all_list_filtered<- lapply(all_list, function(x){
+  ## Cycle through each pair in the comparisons table- check whether at least 1 sample "passes" (has 10 cells in each)
+  pair_pf<- unlist(lapply(1:nrow(x), function(pair){
+    tmp<- nCells_allTypes[unlist(x[pair,]),]
+    pf<- sum(apply(tmp, 2, function(y){sum(y>10)==2})) ## number of samples with > 10 cells in BOTH cell types in pair
+    if(pf!=0){return("pass")}else{return("fail")}
+  }))
+  
+  ## Only return comparisons that "pass"
+  return(x[pair_pf=="pass",])
+})
+
+## Add column with analysis name to each comparison table, then write out
+all_list_filtered<- lapply(names(all_list_filtered), function(x){
+  all_comparisons<- all_list_filtered[[x]]
+  
+  ## Convert columns to character- converted to list during pairwise creation
+  all_comparisons$Sender<- as.character(all_comparisons$Sender)
+  all_comparisons$Receiver<- as.character(all_comparisons$Receiver)
+  
+  ## Add on "comparison name"
+  all_comparisons$name<- paste0(all_comparisons$Sender, "_to_", all_comparisons$Receiver)
+  all_comparisons<- all_comparisons[,c("name", "Sender", "Receiver")]
+  
+  ## Write out to file for input into cellchat
+  write.table(all_comparisons, file=paste0(analysis_dir, "byProgram/comparisons_byPrograms_",x, ".txt"), col.names = FALSE, quote = FALSE, row.names = FALSE)
+})
+
+
+
+```
+
+```{r}
+## How many cells are actually input into cellchat for each interaction? 
+## To simplify analysis, remove an interactions that do not have at least 1 sample with >10 cells in both interactor
+## These interactions will not be run in cell chat anyways
+## Cycle through each sample, determine whether it has enough cells to run each interaction
+cell_counts<- lapply(all_seurat_list, function(x){
+  nCells<- as.data.frame(table(x$detailed_annotForCellChat))
+  comp_counts<- lapply(comparisons$V1, function(comp){
+    tmp<- comparisons[comparisons$V1==comp,]
+    PF<- sum(nCells[nCells$Var1==tmp$V2, "Freq"]>10 & nCells[nCells$Var1==tmp$V3, "Freq"]>10)==1
+    if(PF){
+      total_counts<- nCells[nCells$Var1==tmp$V2, "Freq" ] + nCells[nCells$Var1==tmp$V3, "Freq" ] 
+    }else{total_counts<-0}
+    return(total_counts)
+  })
+  names(comp_counts)<- comparisons$V1
+  comp_counts<- lapply(comp_counts, function(x){ifelse(length(x)==0, 0, x)})
+  comp_counts<- as.data.frame(unlist(comp_counts))
+  colnames(comp_counts)<-unique(x$sample)
+  return(comp_counts)
+})
+cell_counts<- do.call("cbind", cell_counts)
+
+## Number of samples that would be run for each interaction
+nSamples_interaction<- apply(cell_counts,1, function(x){sum(x>0)})
+
+## Interactions with 0 samples that would not be run- remove here for simplicity
+interactions_remove<- names(nSamples_interaction)[nSamples_interaction==0]
+comparisons<- comparisons[!comparisons$V1 %in% interactions_remove,]
+write.table(all_comparisons, file=paste0(analysis_dir, "all_comparisons.txt"), col.names = FALSE, quote = FALSE, row.names = FALSE)
+```
+
+## For testing purposes: subsample from program to determine what effect cell count has on results
+Specifically: IFN_TAM shows high LR --> CD4, but if you divide by total cell count, this effect disappears
+Is the normalization removing technical bias or hiding real biological difference?
+To test: run cellchat on IFN_TAM + CD4 programs, subsampling # of IFN cells
+If no big difference in # LRs across subsampling: no need to normalize (i.e., was hiding biological difference)
+If clearly decreasing # LRs: cell count affects # LR detected, need to normalize (i.e., was removing technical bias)
+```{r}
+## Read in seurat object
+all_seurat<- readRDS(paste0(analysis_dir, "seurat_tumor.tcell.myeloid.Rds"))
+
+## Subset to IFN_TAM + CD4 programs
+cd4_programs<- unique(all_seurat$immunePrograms_tumorCellTypes[grepl("CD4", all_seurat$immunePrograms_tumorCellTypes)])
+seurat_use<- subset(all_seurat, immunePrograms_tumorCellTypes %in% c(cd4_programs, "IFN_TAM"))
+
+## 
+```
+
