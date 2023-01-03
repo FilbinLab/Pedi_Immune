@@ -209,7 +209,7 @@ if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
 
 ## Set colors
 program_colors<- c(cytotoxic="greenyellow", predysfunctional="lightsalmon2", naive="skyblue4", dysfunctional="red",ScoreTooLow="grey")
-tumor_colors<- c(Glioma="olivedrab", Melanoma="navy", NSCLC="violetred")
+tumor_colors<- c(Glioma="purple", Melanoma="orange", NSCLC="grey22") ## colors updated 12/12/22
 
 ## By max geneset
 p<-DimPlot(merge_cd8, group.by = "maxGeneset_lowScore")
@@ -264,7 +264,7 @@ ggsave(paste0(figure_dir_use, "CD8_UMAP_byProgram.png"),  width=11, height=9)
 
 ## Dotplot of inhibitory GOI by tumor type
 DotPlot(merge_cd8, group.by = "TumorType", 
-          features=c("PDCD1", "HAVCR2", "TIGIT", "CTLA4", "GZMK", "ITGAE", "PRF1", "GNLY", "KLRB1"))+
+          features=c("PDCD1", "HAVCR2", "TIGIT", "CTLA4", "GZMK", "ITGAE", "PRF1", "GNLY", "KLRB1"), cols=c("grey","red"))+
     theme(axis.text.x = element_text(angle=45, hjust=1))+
   ylab("")+xlab("")+
   coord_flip()
@@ -272,7 +272,7 @@ ggsave(paste0(figure_dir_use, "CD8_Dotplot_InhibitoryGOI_byTumorType.pdf"),devic
 
 ## Dotplot of  GOI by tumor type
 DotPlot(merge_cd8, group.by = "TumorType", 
-          features=c("CD8A", "SELPLG", "PTGER2", "KLRB1"), scale=FALSE)+
+          features=c("CD8A", "SELPLG", "PTGER2", "KLRB1"), scale=FALSE, cols=c("grey", "red"))+
     theme(axis.text.x = element_text(angle=45, hjust=1))
 ggsave(paste0(figure_dir_use, "CD8_Dotplot_GOI_byTumorType.png"), width=3, height=4)
 
