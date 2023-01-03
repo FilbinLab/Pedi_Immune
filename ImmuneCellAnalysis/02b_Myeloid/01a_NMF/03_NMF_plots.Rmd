@@ -55,7 +55,7 @@ annot_colors<- readRDS(paste0(analysis_dir, "annot_colors.Rds"))
 
 # Need to re-annotate BT1478 to non-BCOR; hemispheric, maybe GBM? Set to GBM for now, may update
 ```{r}
-updateBCOR<-TR
+updateBCOR<-TRUE
 
 figure_dir<- ifelse(updateBCOR, paste0(figure_dir, "updateBCOR/"), figure_dir_tmp)
 #analysis_dir<- ifelse(removeBCOR, paste0(analysis_dir, "updateBCOR/"), data_dir_tmp)
