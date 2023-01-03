@@ -67,6 +67,22 @@ program_colors<- readRDS(paste0("../../../plot_colors/Tcell.programs_rank", rank
 celltype_colors<- readRDS(paste0("../../../plot_colors/Tcell.celltypes.Rds"))
 ```
 
+# Need to re-annotate BT1478 to non-BCOR; hemispheric, maybe GBM? Set to GBM for now, may update
+```{r}
+updateBCOR<- TRUE
+
+figure_dir<- ifelse(updateBCOR, paste0(figure_dir, "updateBCOR/"), figure_dir_tmp)
+#analysis_dir<- ifelse(removeBCOR, paste0(analysis_dir, "updateBCOR/"), data_dir_tmp)
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+#if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp, recursive = TRUE)}
+
+if(updateBCOR){
+  cd8_seurat$NiceSubtype<- ifelse(cd8_seurat$sample=="BT1478", "Hemispheric-HistoneWT", cd8_seurat$NiceSubtype)
+
+}
+```
+
 ## Subset to top markers for each nmf- top 10
 ```{r}
 marker_genes<- program_markers
@@ -180,6 +196,10 @@ all_plots<- lapply(as.character(unique(tcell_seurat@meta.data[[program_name]])),
 cowplot::plot_grid(plotlist=all_plots, ncol = 2)
 ggsave(paste0(figure_dir, "AllTcells_UMAP_indv.png"), width=6, height=13)
 ```
+
+
+
+
 
 ## Density plots
 ```{r}

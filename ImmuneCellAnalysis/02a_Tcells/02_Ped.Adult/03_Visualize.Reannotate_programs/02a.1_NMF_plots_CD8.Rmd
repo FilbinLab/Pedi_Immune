@@ -162,6 +162,28 @@ ggsave(paste0(figure_dir, "CD8_Heatmap_TopNMFgenes_annot_rank", rank,figure_appe
 
 ```
 
+## Dotplot of selected marker genes
+```{r}
+rank<- "8"
+sharedBy<- "union"
+add_lines<- TRUE
+program_name<-paste0("NMF_rank", rank_use, "_annot_mergedBy", sharedBy, "_reAnnot")
+
+cd8_seurat@meta.data[[program_name]]<- factor(cd8_seurat@meta.data[[program_name]],
+                                              levels=c("Cytotoxic.NKreceptor", "Predysfunctional","Cycling", 
+                                                       "Effector.Memory", "Memory",
+                                                       "IFN.Response", "Stress"))
+DotPlot(cd8_seurat, group.by =program_name,
+        features=c("TOP2A", "UBE2C","PDCD1", "TIGIT", "ITGAE", "GNLY","GZMB","GZMA", "PRF1", "NKG7","GZMK", "HLA-DRA",
+                   "LMNA", "CCR7", "SELL", "IFIT3","IFIT1",
+                     "HSPA6", "HSPA1A",
+                   "cytotoxic", "predysfunctional","dysfunctional", "naive"))+
+  coord_flip()+
+  theme(axis.text.x = element_text(angle=45, hjust=1))+
+  scale_color_gradient2(low="blue", mid="white", high="red")
+ggsave(paste0(figure_dir, "DotPlot_MarkersOfInterest_byProgram.png"), width=6, height=8)
+```
+
 ## UMAP with annotations
 ```{r}
 rank<- "8"
