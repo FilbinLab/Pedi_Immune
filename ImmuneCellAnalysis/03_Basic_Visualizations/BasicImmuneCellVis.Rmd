@@ -458,3 +458,55 @@ DimPlot(immune_seurat_tmp, group.by = "detailed_annot", label=TRUE, label.size =
   ylab("UMAP2")+xlab("UMAP1")+ NoLegend()
 ```
 
+## Clonal- this is temporary hopefully. just for quick vis for meeting on 12/13/22
+```{r}
+tcell_colors<- readRDS("..//plot_colors/Tcell.programs_rank8sharedByunion_reAnnot.Rds")
+myeloid_colors<- readRDS("..//plot_colors/Myeloid_program_colors.Rds")
+myeloid_colors<- myeloid_colors$rank6
+immune_colors<- c(tcell_colors, myeloid_colors)
+
+## CD8
+seurat_tmp<- subset(cd8_seurat, group_size != "NA")
+
+  ## Normalize by size of program
+  nCells_program<- as.data.frame(table(seurat_tmp$Final_Annot))
+  seurat_tmp$NCells<- as.numeric(as.character(plyr::mapvalues(seurat_tmp$Final_Annot, 
+                                                              nCells_program$Var1, nCells_program$Freq, warn_missing = FALSE)))
+  seurat_tmp$group_size_norm<- seurat_tmp$group_size / seurat_tmp$NCells * 1000
+  
+  ## by raw group size
+  p1<- VlnPlot(seurat_tmp, group.by = "Final_Annot", features="group_size", sort=TRUE)+ NoLegend()+
+    scale_fill_manual(values=immune_colors)+
+    xlab("")+
+    ylab("clonotype size")
+    
+  p2<- VlnPlot(seurat_tmp, group.by = "Final_Annot", features="group_size_norm", sort=TRUE)+ NoLegend()+
+    scale_fill_manual(values=immune_colors)+
+    xlab("")+
+    ylab("clonotype size\nnormalized by population size")
+  p1+p2
+  ggsave(paste0(figure_dir, "CD8_ClonotypeSize_byProgram.png"), width=6, height=8)
+  
+## CD4
+seurat_tmp<- subset(cd4_seurat, group_size != "NA")
+
+  ## Normalize by size of program
+  nCells_program<- as.data.frame(table(seurat_tmp$Final_Annot))
+  seurat_tmp$NCells<- as.numeric(as.character(plyr::mapvalues(seurat_tmp$Final_Annot, 
+                                                              nCells_program$Var1, nCells_program$Freq, warn_missing = FALSE)))
+  seurat_tmp$group_size_norm<- seurat_tmp$group_size / seurat_tmp$NCells * 1000
+  
+  ## by raw group size
+  p1<- VlnPlot(seurat_tmp, group.by = "Final_Annot", features="group_size", sort=TRUE)+ NoLegend()+
+    scale_fill_manual(values=immune_colors)+
+    xlab("")+
+    ylab("clonotype size")
+    
+  p2<- VlnPlot(seurat_tmp, group.by = "Final_Annot", features="group_size_norm", sort=TRUE)+ NoLegend()+
+    scale_fill_manual(values=immune_colors)+
+    xlab("")+
+    ylab("clonotype size\nnormalized by population size")
+  p1+p2
+  ggsave(paste0(figure_dir, "CD4_ClonotypeSize_byProgram.png"), width=6, height=8)
+```
+
