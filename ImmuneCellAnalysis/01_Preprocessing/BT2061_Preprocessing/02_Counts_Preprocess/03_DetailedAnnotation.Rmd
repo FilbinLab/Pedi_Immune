@@ -5,25 +5,22 @@ date: "11/04/21"
 output: html_document
 ---
 
-## Purpose:
-Assign more detailed annotations to myeloid/tcells (CD4/CD8, DC/BCells). HOWEVER- CD4/CD8 annotations generated here are NOT used downstream. These annotations are done later, on program-wise basis.
-
-## Approach:
-Visualize marker genes for detailed cell types, assign on cluster-wise basis. For CD4/CD8 (again, these annotations not actually used downstream), sub-clustering and cell-wise annotation is required for some clusters/cells. Also have the option to use harmony or non-harmony integrated seurat objects.
+Detailed annotation for tcells and myeloid cells for BT2061. 
+Tcells: CD4, CD8- project from full cohort
+Myeloid: any DC, B cells- manaully check based on marker genes
 
 ```{r}
 library(Seurat) 
 
 base_dir = "/Users/jlabelle/"
-script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/Scripts/"
 working_dir<- paste0(base_dir, 
                      "Dropbox (Partners HealthCare)/FilbinLab/",
-                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/01_Preprocessing/02_Counts_Preprocess/")
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/01_Preprocessing/BT2061_Preprocessing/02_Counts_Preprocess/")
 
-integration<- "" ## HarmonyInt/ or ""
-analysis_dir<- paste0(working_dir, "/analysis/detailed_annotation/", integration, "/")
-figure_dir<- paste0(working_dir, "/figures/detailed_annotation/", integration, "/")
-data_dir<- paste0("../Counts_Preprocess/analysis/broad_annotation/", integration, "/")
+analysis_dir<- paste0(working_dir, "/analysis/detailed_annotation/")
+figure_dir<- paste0(working_dir, "/figures/detailed_annotation/")
+data_dir<- paste0("analysis/broad_annotation/")
 
 if(!dir.exists(figure_dir)){dir.create(figure_dir)};if(!dir.exists(analysis_dir)){dir.create(analysis_dir)}
 
@@ -31,22 +28,24 @@ preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_f
 nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
 source(preprocessing)
 source(nmf_helper)
+source(paste0(base_dir, script_dir, "seurat_transferAnchors_helper.R"))
 
 ```
 
 ## Read in processed seurat objects
 ```{r}
-cohort<- "pedOnly_nomuv63"
-
-analysis_dir<- paste0(analysis_dir, cohort, "/")
-figure_dir<- paste0(figure_dir, cohort, "/")
-for(x in c(analysis_dir, figure_dir)){if(!dir.exists(x)){dir.create(x)}}
-data_dir<- paste0(data_dir, cohort, "/")
-
+## BT2061
 immune_seurat<- readRDS(paste0(data_dir,"tcell.myeloid_seurat.Rds"))
 tcell_seurat<- readRDS(paste0(data_dir,   "tcell_seurat.Rds"))
 myeloid_seurat<- readRDS(paste0(data_dir, "myeloid_seurat.Rds"))
 
+## Full cohort
+tcell_data_dir<- "../../../02a_Tcells/02_Ped.Adult/03_Visualize.Reannotate_programs/analysis/Reannotate_programs/"
+tcell_data_dir<- paste0(tcell_data_dir, "rank8_sharedByunion/")
+full_tcell_seurat<- readRDS(paste0(tcell_data_dir, "ped_seurat_tcell_harmony.Rds"))
+
+## colors
+immune_colors<- readRDS("../../../plot_colors/ImmuneCell.celltypes.Rds")
 ```
 
 
@@ -67,38 +66,8 @@ dendritic_markers<- c("FLT3", "CD207", "CD1A", "CD1C", "FCER1A",
 FeaturePlot(myeloid_seurat, features=bcell_markers, ncol = 2)
 ggsave(paste0(figure_dir, "Myeloid_BcellMarkers.png"), width=8, height=4)
 
-FeaturePlot(myeloid_seurat, features=dendritic_markers, ncol = 3)
-ggsave(paste0(figure_dir, "Myeloid_DendriticMarkers.png"), width=12, height=8)
+## No B cells or DC to remove
 
-## annotate clusters based on these markers
-#cluster_annot<- c(9, 10) ## pedOnly
-#cluster_annot<-c(7,8) ## pedOnly_nomuv63
-#cluster_annot<- c(9,8) ## pedOnly_nomuv63.withmuv91
-##cluster_annot<- c(8, 6) ## pedOnly_nomuv63, with harmony integration
-cluster_annot<- c(8,7) ## allSamples
-names(cluster_annot)<- c("DC", "BCell")
-myeloid_seurat$detailed_annot<- ifelse(myeloid_seurat$seurat_clusters %in% cluster_annot,
-                                            plyr::mapvalues(as.character(myeloid_seurat$seurat_clusters), 
-                                                            cluster_annot, names(cluster_annot)),
-                                            "Myeloid")
-saveRDS(myeloid_seurat, file=paste0(analysis_dir, "myeloid_seurat.Rds"))
-
-## Remove DC/Bcells and rerun seurat
-myeloid_seurat_noDC.B<- subset(myeloid_seurat, detailed_annot=="Myeloid")
-myeloid_seurat_noDC.B_meta<- myeloid_seurat_noDC.B@meta.data
-
-if(integration=="HarmonyInt/"){
- myeloid_seurat_noDC.B<- RunFullSeurat(myeloid_seurat_noDC.B@assays$RNA@counts,RunHarmony = TRUE,
-                                             samples=myeloid_seurat_noDC.B$sampleid) 
-}else{
-  myeloid_seurat_noDC.B<- RunFullSeurat_Immune(myeloid_seurat_noDC.B@assays$RNA@counts,
-                                             myeloid_seurat_noDC.B$sampleid)
-}
-
-myeloid_seurat_noDC.B<- AddMetaData(myeloid_seurat_noDC.B, 
-                                    myeloid_seurat_noDC.B_meta[,!colnames(myeloid_seurat_noDC.B_meta) %in%
-                                                                 colnames(myeloid_seurat_noDC.B@meta.data)])
-saveRDS(myeloid_seurat_noDC.B, file=paste0(analysis_dir, "myeloid_seurat_noDC.B.Rds"))
 
 ```
 
@@ -106,334 +75,56 @@ saveRDS(myeloid_seurat_noDC.B, file=paste0(analysis_dir, "myeloid_seurat_noDC.B.
 ## Identify CD4/CD8 cells ##
 ############################
 
-
+Project detailed annotations from full cohort- too few t cells to annotate manually
+This approach doesn't work well- CD4 expresses both, CD8 onyl expresses CD8
 ```{r}
-## Decrease resolution
-if(integration=="HarmonyInt/"){
-  tcell_seurat<- FindClusters(tcell_seurat, resolution = .6)
-}else{
-  tcell_seurat<- FindClusters(tcell_seurat,  resolution = .7, algorithm = 4, random.seed = 100) ## .6 res used for pedOnly, .7 for pedOnly_nomuv63. Same cluster number
-}
-FeaturePlot(tcell_seurat, features=c("CD3G", "CD4", "CD8A", "CD8B"), ncol = 2)
-ggsave(paste0(figure_dir, "UMAP_Tcell_CD3.4.8.png"), width=6, height=6)
+tcell_seurat<- my_project_seurat(subset(full_tcell_seurat, Final_detailed_annot!="Unclear"), 
+                                 tcell_seurat, 
+                                 reference_annotation = "Final_detailed_annot", 
+                                 k.weight = ncol(tcell_seurat)-1,
+                                 prediction_colNames = c("detailed_annot_projected",
+                                                         "CD4_score_projected","CD8_score_projected", "Max_score_projected"))
 
-DimPlot(tcell_seurat, label=TRUE)+NoLegend()
-VlnPlot(tcell_seurat, features= c("CD3G", "CD4", "CD8A", "CD8B"), ncol=4)
-ggsave(paste0(figure_dir, "Vln_Tcell_CD3.4.8.png"), width=12, height=3)
+## Check expression of expected marker genes
+p1<-DimPlot(tcell_seurat, group.by = "detailed_annot_projected")+
+  scale_color_manual(values=immune_colors[names(immune_colors) %in% tcell_seurat$Program_projected])
+p2<-VlnPlot(tcell_seurat, group.by = "Program_projected", features=c("CD4", "CD8A"), cols=immune_colors)
+p3<- FeaturePlot(tcell_seurat, features=c("CD4", "CD8A"), cols=c("grey", "red"))
+p1+p2+p3
+ggsave(paste0(figure_dir, "Tcells_detailedAnnot.png"), width=15, height=4)
 
-## 6 is cycling, 1/4 are cd8, 2 is cd4, 3/5 are not clear (For pedOnly AND pedOnly_nomuv63)
-## 6 is cycling, 1 is CD4, 0/3/5 are CD8, 2/4 are unclear (for harmony + pedOnly_nomuv63)
+
+saveRDS(tcell_seurat, file=paste0(data_dir, "tcell_seurat.Rds" ))
 ```
 
-## Tcells in some clusters are not clearly cd4/cd8
-## Further analysis/plotting to determine annotation for these cells
+Alternative: merge with full cohort, then project annotations again, but only use the new annotations for BT2061
+Revealed high mitochondrial gene expression in new batch + distantly clusters. Low quality, cannot use this data..
 ```{r}
-unclear_clusters<- c(2,4)
+## Merge all and rerun clustering
+merged_tcell<- merge(full_tcell_seurat, tcell_seurat)
+merged_meta<- merged_tcell@meta.data
+merged_tcell<- RunFullSeurat(merged_tcell@assays$RNA@counts, RunHarmony = TRUE, samples=merged_tcell$sample)
+merged_tcell<- AddMetaData(merged_tcell, merged_meta[,!colnames(merged_meta) %in% colnames(merged_tcell@meta.data)])
 
-## Marker genes for unclearclusters
-all_markers<- FindAllMarkers(tcell_seurat, min.pct = 0.2)
-all_markers_filt<- all_markers[all_markers$p_val_adj<0.05 & all_markers$avg_log2FC>0.5,]
-write.csv(all_markers_filt, file=paste0(analysis_dir, "Tcells_seuratClusters_markerGenes_Cluster", 
-                                        paste(unclear_clusters, collapse="."),
-                                        "Unclear.csv"))
+## Plot by batch
+merged_tcell$batch<- ifelse(merged_tcell$sample== "BT2061", "new", "old")
+DimPlot(merged_tcell, group.by = "batch")+scale_color_manual(values=c(new="red", old="grey"))
+ggsave(paste0(figure_dir, "UMAP_Tcells_mergedOriginal.BT2061.png"), width=5, height=4)
 
-unclearCluster_markers<- all_markers_filt[all_markers_filt$cluster %in% unclear_clusters,]
-unclearCluster_markers<- unclearCluster_markers[order(unclearCluster_markers$avg_log2FC, decreasing = TRUE),]
-p1<-DoHeatmap(tcell_seurat, features=unclearCluster_markers$gene[1:35])
-p2<-VlnPlot(tcell_seurat, features=c("CD4", "CD8A", "CD3G"))
-p1+p2
-ggsave(paste0(figure_dir, "Tcells_seuratClusters_cluster", paste(unclear_clusters,
-                                                                 collapse="."),"Markers_UnclearCD4.CD8.Cluster.png"),
-       width=10, height=5)
-
-## Subset to just unclear clusters, Further  plotting to help annotate
-unclearAnnot_seurat<- subset(tcell_seurat, seurat_clusters %in% unclear_clusters) 
-FeaturePlot(unclearAnnot_seurat, features=c("CD4", "CD8A", "CD3G"), ncol = 3)
-FeaturePlot(unclearAnnot_seurat, 
-            features=c("CD3D", "CD4", "IL7R", "CD69", "CD40LG", "KLRB1", "ZBTB16", "PTGER2", "PTGER4"), 
-                    pt.size = 1)
-
-
-## assign annotations cell-wise: by highest expressort
-## issue with this approach: some cells don't express EITHER CD4 or CD8
-cd4.8_expr<- as.data.frame(t(unclearAnnot_seurat@assays$RNA@data[c("CD4", "CD8A"),]))
-cd4.8_expr$MaxExpr<- apply(cd4.8_expr, 1, function(x){names(x)[which.max(x)]})
-cd4.8_expr$MaxExpr<- ifelse(cd4.8_expr$CD4==0 & cd4.8_expr$CD8A==0, "Neither", cd4.8_expr$MaxExpr)
-unclearAnnot_seurat$MaxCD4.CD8<- plyr::mapvalues(colnames(unclearAnnot_seurat),
-                                                 rownames(cd4.8_expr), cd4.8_expr$MaxExpr)
-DimPlot(unclearAnnot_seurat, group.by = "MaxCD4.CD8")+scale_color_manual(values=c(CD4="red", CD8A="green", Neither="grey"))
-
-## plot CD4/CD8 expression on single scale
-## negative values = more CD4 / positive = more CD8 / zero = expresses both CD4/CD8
-tmp_seurat<-subset(unclearAnnot_seurat, MaxCD4.CD8 != "Neither")
-cd4.8_expr<- as.data.frame(t(tmp_seurat@assays$RNA@data[c("CD4", "CD8A"),]))
-cd4.8_expr$CD4<- cd4.8_expr$CD4 * -1
-cd4.8_expr$SlidingScale<- cd4.8_expr$CD4 + cd4.8_expr$CD8A
-tmp_seurat$Sliding_CD4.CD8_Scale<- as.numeric(plyr::mapvalues(colnames(tmp_seurat),
-                                                                       rownames(cd4.8_expr),
-                                                                       cd4.8_expr$SlidingScale))
-FeaturePlot(tmp_seurat, features = "Sliding_CD4.CD8_Scale")+
-  scale_color_gradient2(low="red", mid="grey", high="green", midpoint=0)
-
-## rerun seurat, see if cells cluster by CD4/CD8 expression then
-
-  ## Seurat pipeline function requires >1 cell per sample or it will break
-  ## 2 samples have only 1 cell. Temporarily merge these 2 cells into another random sample, then rename after
-  unclearAnnot_meta<- unclearAnnot_seurat@meta.data
-  unclearAnnot_meta$originalSample<- unclearAnnot_meta$sampleid
-  nSamples<- table(unclearAnnot_meta$sampleid)
-  unclearAnnot_meta$sampleid<- ifelse(unclearAnnot_meta$sampleid %in% names(nSamples)[nSamples==1],
-                                      names(nSamples[nSamples>1][1]), unclearAnnot_meta$sampleid)
-
-if(integration=="HarmonyInt/"){
-  unclearAnnot_rerun<- RunFullSeurat(unclearAnnot_seurat@assays$RNA@counts,RunHarmony = TRUE, 
-                                     samples=unclearAnnot_meta$sampleid)
-}  else{
-  unclearAnnot_rerun<- RunFullSeurat_Immune(unclearAnnot_seurat@assays$RNA@counts, unclearAnnot_meta$sampleid)
-}
-
-unclearAnnot_rerun<- AddMetaData(unclearAnnot_rerun, 
-                                 metadata=unclearAnnot_meta[,!colnames(unclearAnnot_meta) %in%
-                                                              colnames(unclearAnnot_rerun@meta.data) ])
-unclearAnnot_rerun$sampleid<- unclearAnnot_rerun$originalSample
-
-if(integration=="HarmonyInt/"){
-  unclearAnnot_rerun<- FindClusters(unclearAnnot_rerun, resolution = 2.75)
-}else{
-  unclearAnnot_rerun<- FindClusters(unclearAnnot_rerun,  resolution =.85, algorithm = 4, random.seed = 100) # res 1 for pedOnly, res1 for pedOnly_nomuv63.withmuv91
-}
-
-
-p1<- DimPlot(unclearAnnot_rerun, label=TRUE)+NoLegend()
-p2<- FeaturePlot(unclearAnnot_rerun, features=c("CD4", "CD8A"), ncol = 2)
-p3<-VlnPlot(unclearAnnot_rerun, features=c("CD4", "CD8A"))
-p1+p3
-ggsave(paste0(figure_dir, "Tcells_unclearCluster", paste(unclear_clusters,
-                                                                 collapse="."),
-              "_rerunSeurat_CD4.CD8Expr_res.2.75.png"), width=10, height=4)
-
-
-  ## Clusters 2/4 are CD4, Clusters 1 are CD8, cluster 3 is neither? (for pedOnly)
-  ## clusters 1/3 are CD4, clusters 2 is CD8, cluster 4 is unclear (for pedOnly_nomuv63)
-  ## clusters 3/5 are CD4, clusters 1/4 are CD8 (for pedOnly_nomuv63.withmuv91), cluster 2 is unclear
-  ## clusters 4/5/10/12 are CD8 clusters 0/1/2/3/6/7/9/13 are CD4, clusters 8/11 are unclear
-
-  ## for cluster 3 (pedOnly): no marker genes. Remove these cells (114 cells)
-  ## for cluster 3 (pedOnly_nomuv63): there are only 3 marker genes. CD8A/B is marker for cluster 2. remove cells (63 cells)
-  ## for cluster 2 (pedOnly_nomuv63.withmuv91): only 1 marker gene, ribosomal
-  all_markers<- FindAllMarkers(unclearAnnot_rerun, min.pct = 0.2)
-  all_markers_filtered<- all_markers[all_markers$p_val_adj<0.1 & all_markers$avg_log2FC>0,]
-  unclear_cluster<- subset(unclearAnnot_rerun, seurat_clusters %in% c(8,11))
-  
-  ## Assign CD4/CD8 by subcluster- 
-  cd4_clusters<- c(0,1,2,3,6,7,9,13); cd8_clusters<- c(4,5,10,12)
-  unclearAnnot_rerun$MaxCD4.CD8<- ifelse(unclearAnnot_rerun$seurat_clusters %in% cd4_clusters, "CD4", 
-                                        ifelse(unclearAnnot_rerun$seurat_clusters %in% cd8_clusters, "CD8", 
-                                                "Unclear_Removed"))
-  
-
-## To annotate:
-## By clustering for clear cd4/cd8 clusters
-## By clustering for unclear cluster- rerun pipeline, assign cd4/cd8 by cluster
-## Within unclear cluster, one sub-cluster (3 in pedOnly, 4 in pedOnly_nomub63) is still unclear. will remove these cells.
-unclearCluster_Annotations<- unclearAnnot_rerun$MaxCD4.CD8
-names(unclearCluster_Annotations)<- colnames(unclearAnnot_rerun)
-
-p2
+## Clusters by batch- why? markers?
+merged_tcell<- SetIdent(merged_tcell, value=merged_tcell$batch)
+markers<- FindAllMarkers(merged_tcell)
+markers_filt<- markers[markers$p_val_adj<0.05,]
+top_markers<- markers_filt %>% group_by(cluster) %>% top_n(n=10, wt=avg_log2FC) %>% as.data.frame()
+ 
+## Top markers for BT2061 are all mitochondrial- add percent mito and plot
+marker_dir<- paste0(base_dir,script_dir, "../", "Marker_genes/")
+hkgenes <- read.table(paste0(marker_dir, "tirosh_house_keeping.txt"), skip = 2)
+hkgenes <- as.vector(hkgenes$V1)
+hkgenes.notfound.indices <- which(!hkgenes %in% rownames(merged_tcell))  
+hkgenes.found <- hkgenes[-hkgenes.notfound.indices]
+merged_tcell$per_mito<- PercentageFeatureSet(merged_tcell, pattern = "^MT-")
+FeaturePlot(merged_tcell, features="per_mito")
+ggsave(paste0(figure_dir, "UMAP_Tcells_mergedOriginal.BT2061_perMito.png"), width=5, height=4)
 ```
 
-## Alternative to the above: score cells for multiple genes, instead of just CD4/CD8
-## Doesn't clarify annotation, not used downstream
-```{r}
-cd4.8_genes<- list(CD8=c("CD8A", "CD8B"), CD4=c("CD4", "IL7R", "CD69", "CD40LG", "KLRB1", "ZBTB16"))
-
-tcell_seurat<-AddModuleScore(tcell_seurat, features=list(cd4.8_genes[["CD8"]]), name="CD8_Score__")
-tcell_seurat<-AddModuleScore(tcell_seurat, features=list(cd4.8_genes[["CD4"]]), name="CD4_Score__")
-colnames(tcell_seurat@meta.data)<- gsub("__1", "", colnames(tcell_seurat@meta.data))
-
-DotPlot(tcell_seurat, features=c("CD8_Score", "CD4_Score"))
-FeaturePlot(tcell_seurat, features=c("CD8_Score", "CD4_Score"))
-```
-
-
-## For cycling: cycling drives clustering, but still are underlying cd4/cd8
-## Assign as CD4/CD8 based on max expression
-```{r}
-cycling_seurat<- subset(tcell_seurat, seurat_clusters =="6")
-cd4.cd8_expr<- as.data.frame(t(cycling_seurat@assays$RNA@counts[c("CD4", "CD8A"),]))
-cd4.cd8_expr$Max<- apply(cd4.cd8_expr, 1, function(x){names(x)[which.max(x)]})
-cycling_annotation<- cd4.cd8_expr$Max; names(cycling_annotation)<- colnames(cycling_seurat)
-
-```
-
-## Add final CD4/CD8 annotations
-## Based on: marker expression in "clear" clusters + reclustering of "unclear" + reclustering of cycling
-```{r}
-## clear cd4/cd8 clusters
-cd4_clusters<- c(1)
-cd8_clusters<- c(0,3,5) ## 1,4 for pedOnly_nomuv63
-
-## For 2 unclear clusters + cycling
-cd4_cells<-c(names(unclearCluster_Annotations)[unclearCluster_Annotations=="CD4"],
-             names(cycling_annotation)[cycling_annotation=="CD4"])
-cd8_cells<-c(names(unclearCluster_Annotations)[unclearCluster_Annotations=="CD8"],
-             names(cycling_annotation)[cycling_annotation=="CD8A"])
-unclear_cells<- c(names(unclearCluster_Annotations)[unclearCluster_Annotations=="Unclear_Removed"])
-
-## If cell is in "clear" cluster, use that annotation. If not, use cell-wise annotation
-tcell_seurat$detailed_annot<- ifelse(tcell_seurat$seurat_clusters %in% cd4_clusters, "CD4",
-                          ifelse(tcell_seurat$seurat_clusters %in% cd8_clusters, "CD8",
-                          ifelse(colnames(tcell_seurat) %in% cd4_cells, "CD4",
-                          ifelse(colnames(tcell_seurat) %in% cd8_cells, "CD8", 
-                          ifelse(colnames(tcell_seurat) %in% unclear_cells, "Unclear", "issue")))))
-
-## Add CD4/CD8/Cycling annotation
-  tcell_seurat$detailed_annot_withCycling<- ifelse(tcell_seurat$cycling_predicted=="cycling", "Cycling",
-                                               tcell_seurat$detailed_annot)
-  
-## Remove "Unclear" (114 cells for pedOnly, 63 for pedOnly_nomuv63, 88 for pedOnly_nomuv63.withmuv91, 57 in harmonyInt)
-tcell_seurat<- subset(tcell_seurat, detailed_annot != "Unclear")
-
-## Confirm that each cluster expresses CD3 + EITHER CD4 or CD8 (or at least one is clearly higher)
-tcell_seurat$cd4.8_cluster<-paste0("cluster", tcell_seurat$seurat_clusters, "_", tcell_seurat$detailed_annot)
-DotPlot(tcell_seurat, group.by="cd4.8_cluster", features=c("CD3G", "CD4", "CD8A"))
-ggsave(paste0(figure_dir, "CD4.CD8_finalClusterAnnotations_expression.png"), width=5, height=5)
-tcell_seurat$cd4.8_cluster<- NULL
-
-## Rerun pipeline on finalized set of cells
-tcell_meta<- tcell_seurat@meta.data
-if(integration=="HarmonyInt/"){
- tcell_seurat<- RunFullSeurat(tcell_seurat@assays$RNA@counts,RunHarmony = TRUE, samples= tcell_seurat$sampleid) 
-}else{
-  tcell_seurat<- RunFullSeurat_Immune(tcell_seurat@assays$RNA@counts, tcell_seurat$sampleid)
-}
-tcell_seurat<- AddMetaData(tcell_seurat, tcell_meta[,!colnames(tcell_meta) %in% colnames(tcell_seurat@meta.data)])
-
-
-saveRDS(tcell_seurat, file=paste0(analysis_dir, "tcell_seurat.Rds"))
-```
-
-## Split Tcell by CD4/CD8, rerun seurat pipeline for each separately
-```{r}
-cd4_seurat<- subset(tcell_seurat,detailed_annot=="CD4")
-cd8_seurat<- subset(tcell_seurat, detailed_annot=="CD8")
-
-cd4_meta<- cd4_seurat@meta.data; cd8_meta<- cd8_seurat@meta.data
-
-if(integration=="HarmonyInt/"){
-  cd4_seurat<- RunFullSeurat(cd4_seurat@assays$RNA@counts,RunHarmony = TRUE, samples= cd4_seurat$sampleid)
-  cd8_seurat<- RunFullSeurat(cd8_seurat@assays$RNA@counts,RunHarmony = TRUE, samples=  cd8_seurat$sampleid)
-}else{
-  cd4_seurat<- RunFullSeurat_Immune(cd4_seurat@assays$RNA@counts, cd4_seurat$sampleid)
-  cd8_seurat<- RunFullSeurat_Immune(cd8_seurat@assays$RNA@counts, cd8_seurat$sampleid)
-}
-
-cd4_seurat<- AddMetaData(cd4_seurat, metadata=cd4_meta[,!colnames(cd4_meta) %in% colnames(cd4_seurat@meta.data)])
-cd8_seurat<- AddMetaData(cd8_seurat, metadata=cd8_meta[,!colnames(cd8_meta) %in% colnames(cd8_seurat@meta.data)])
-
-saveRDS(cd4_seurat, file=paste0(analysis_dir, "tcell_cd4_seurat.Rds"))
-saveRDS(cd8_seurat, file=paste0(analysis_dir, "tcell_cd8_seurat.Rds"))
-```
-
-
-## Add on CD4/CD8/DC/Bcell annotation to Tcell+Myeloid seurat obj
-```{r}
-## Add on CD4/CD8
-immune_seurat$detailed_annot<- ifelse(colnames(immune_seurat) %in% colnames(cd4_seurat), "CD4", 
-                                               ifelse(colnames(immune_seurat) %in% colnames(cd8_seurat), "CD8",
-                                                      immune_seurat$broad_annot))
-immune_seurat$detailed_annot<- gsub("Tcell", "Tcell_UnclearCD4.CD8", immune_seurat$detailed_annot)
-
-## Add on DC/Bcell
-immune_seurat$detailed_annot<- ifelse(colnames(immune_seurat) %in% colnames(myeloid_seurat),
-                                      plyr::mapvalues(colnames(immune_seurat), 
-                                                      colnames(myeloid_seurat), myeloid_seurat$detailed_annot),
-                                      immune_seurat$detailed_annot)
-
-
-saveRDS(immune_seurat, file=paste0(analysis_dir, "tcell.myeloid_seurat.Rds"))
-```
-
-
-## For non-harmony integrated ONLY: integrate with harmony, then add on non-harmony-integrated annotations
-This only performed for tcells, tcell+myeloid, myeloid+DC+Bcells- not for CD8/CD4/Myeloid without DC/Bcells
-Similar analysis performed for cd4/cd8/myeloid without DC,Bcells in their NMF folders- after adding all NMF annotations, etc
-```{r}
-integration<- "" 
-cohort<- "pedOnly_nomuv63"
-analysis_dir<- paste0(working_dir, "/analysis/detailed_annotation/", integration, "/")
-analysis_dir<- paste0(analysis_dir, cohort, "/")
-
-## Read in unintegrated seurat objects
-myeloid_seurat<- readRDS(paste0(analysis_dir, "myeloid_seurat.Rds"))
-tcell_seurat<- readRDS(paste0(analysis_dir, "tcell_seurat.Rds"))
-immune_seurat<- readRDS(paste0(analysis_dir, "tcell.myeloid_seurat.Rds"))
-
-
-## Run harmony integration
-  ## Tcells 
-  tcell_meta<- tcell_seurat@meta.data
-  tcell_seurat<- RunFullSeurat(tcell_seurat@assays$RNA@counts, RunHarmony = TRUE, samples=tcell_seurat$sampleid)
-  tcell_seurat<- AddMetaData(tcell_seurat, metadata = tcell_meta[,!colnames(tcell_meta) %in% colnames(tcell_seurat@meta.data)])
-  
-  ## myeloid
-  myeloid_meta<- myeloid_seurat@meta.data
-  myeloid_seurat<- RunFullSeurat(myeloid_seurat@assays$RNA@counts, RunHarmony = TRUE, samples=myeloid_seurat$sampleid)
-  myeloid_seurat<- AddMetaData(myeloid_seurat, metadata = myeloid_meta[,!colnames(myeloid_meta) %in% colnames(myeloid_seurat@meta.data)])
-  
-  ## immune (all)
-  immune_meta<- immune_seurat@meta.data
-  immune_seurat<- RunFullSeurat(immune_seurat@assays$RNA@counts, RunHarmony = TRUE, samples=immune_seurat$sampleid)
-  immune_seurat<- AddMetaData(immune_seurat, metadata =immune_meta[,!colnames(immune_meta) %in% colnames(immune_seurat@meta.data)])
-
-saveRDS(tcell_seurat, file=paste0(analysis_dir, "tcell_seurat_harmony.Rds"))
-saveRDS(myeloid_seurat, file=paste0(analysis_dir, "myeloid_seurat_harmony.Rds"))
-saveRDS(immune_seurat, file=paste0(analysis_dir, "tcell.myeloid_seurat_harmony.Rds"))
-```
-
-
-## Compare how well "with integration" and "without integration" annotations match
-```{r}
-cohort<- "pedOnly_nomuv63"
-
-## Read in seurat objects
-cd4_harmony<- readRDS(paste0("analysis/detailed_annotation/HarmonyInt/", cohort, "/tcell_cd4_seurat.Rds"))
-cd4_noInt<- readRDS(paste0("analysis/detailed_annotation/", cohort, "/tcell_cd4_seurat.Rds"))
-
-cd8_harmony<- readRDS(paste0("analysis/detailed_annotation/HarmonyInt/", cohort, "/tcell_cd8_seurat.Rds"))
-cd8_noInt<- readRDS(paste0("analysis/detailed_annotation/", cohort, "/tcell_cd8_seurat.Rds"))
-
-
-## CD4
-  ## Number of tcells in each, number that match
-  print(paste0("CD4 with integration: ", ncol(cd4_harmony))) ## 683
-  print(paste0("CD4 without integration: ", ncol(cd4_noInt))) ## 701
-  print(paste0("Shared CD4: ", sum(colnames(cd4_harmony) %in% colnames(cd4_noInt)))) ## 531
-  
-  ## Where do mismatch cells fall on umap? Do they express CD4?
-  misMatchCD4<- colnames(cd4_harmony)[!colnames(cd4_harmony) %in% colnames(cd4_noInt)]
-  cd4_harmony$NotCD4InOriginal<- ifelse(colnames(cd4_harmony) %in% misMatchCD4, "NotInOriginal",
-                                              "InOriginal")
-  p1<-DimPlot(cd4_harmony, group.by = "NotCD4InOriginal")+
-    scale_color_manual(values=c(InOriginal="grey", NotInOriginal="red"))
-  p2<- VlnPlot(cd4_harmony, group.by = "NotCD4InOriginal", features=c("CD4", "CD8A"))
-  p1+p2
-  ggsave(paste0(figure_dir, "UMAP_CD4_InOriginalWithoutIntegration_butNotInCurrent.png"), width=12, height=5)
-  
-## CD8
-  ## Number of tcells in each, number that match
-  print(paste0("CD8 with integration: ", ncol(cd8_harmony))) ## 1045
-  print(paste0("CD8 without integration: ", ncol(cd8_noInt))) ## 960
-  print(paste0("Shared CD8: ", sum(colnames(cd8_harmony) %in% colnames(cd8_noInt)))) ## 843
-  
-  ## Where do mismatch cells fall on umap? Do they express cd8?
-  misMatchcd8<- colnames(cd8_harmony)[!colnames(cd8_harmony) %in% colnames(cd8_noInt)]
-  cd8_harmony$NotCD8InOriginal<- ifelse(colnames(cd8_harmony) %in% misMatchcd8, "NotInOriginal",
-                                              "InOriginal")
-  p1<-DimPlot(cd8_harmony, group.by = "NotCD8InOriginal")+
-    scale_color_manual(values=c(InOriginal="grey", NotInOriginal="red"))
-  p2<- VlnPlot(cd8_harmony, group.by = "NotCD8InOriginal", features=c("CD4", "CD8A"))
-  p1+p2
-  ggsave(paste0(figure_dir, "UMAP_CD8_InOriginalWithoutIntegration_butNotInCurrent.png"), width=12, height=5)
-
-```

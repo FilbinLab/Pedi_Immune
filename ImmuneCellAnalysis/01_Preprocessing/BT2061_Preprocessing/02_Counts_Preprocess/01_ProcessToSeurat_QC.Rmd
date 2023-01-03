@@ -6,6 +6,7 @@ output: html_document
 ---
 
 Preprocess/qc for new BT2061 sample
+new seq added 12/29/22
 
 ```{r}
 library(Seurat) 
@@ -40,12 +41,26 @@ cycling_genes<- read.table(paste0(base_dir,"Dropbox (Partners HealthCare)/Filbin
 
 ## Read in tpm, qc
 ```{r}
-cm<- read.csv("../data/cm_tpm_02_rsem.csv", row.names = "gene_id")
-qc<- read.csv("../data/qc_02_rsem.csv")
+## Read in all cm, merge to single data frame
+cm_dirs<- list.files("../data/")
 
-## remove "undetermned"
-cm<-cm[,!grepl("Undetermined",  colnames(cm)) ]
-qc<- qc[!grepl("Undetermined", qc$name),]
+all_cm<- lapply(cm_dirs, function(x){
+  tmp<- read.csv(paste0("../data/", x, "/cm_tpm_rsem.csv"))
+  rownames(tmp)<-tmp[,1]
+  tmp<- tmp[,2:ncol(tmp)]
+  tmp<- tmp[,!grepl("Undetermined", colnames(tmp))] ## remove any undetermined
+  return(tmp)
+})
+sum(!rownames(all_cm[[1]]) == rownames(all_cm[[2]]))
+cm<- do.call("cbind", all_cm)
+colnames(cm)<-gsub("\\.", "_", colnames(cm))
+
+## Read in all qc, merge
+all_qc<- lapply(cm_dirs, function(x){
+  return(read.csv(paste0("../data/", x, "/qc_rsem.csv")))
+})
+qc<- do.call("rbind", all_qc)
+
 ```
 
 ## Create seurat object
@@ -62,6 +77,8 @@ samplesheet<- data.frame(sampleid=rep("BT2061", nc),
                          source=rep("BCH", nc),
                          group=rep("hemispheric", nc),
                          prefix=rep("BT2061", nc),
+                         seq_batch=c(rep("new", ncol(all_cm[[1]])),
+                                     rep("old", ncol(all_cm[[2]]))),
                          row.names = colnames(cm))
 
 
@@ -81,6 +98,8 @@ saveRDS(seurat_raw, file=paste0(analysis_dir, "seurat_raw.Rds"))
 Count number of UMIs per cell (these are TPM in SmartSeq2), number of genes expressed per cell, number of human housekeeping genes expressed per cell, and fraction mitochondrial gene expression per cell.
 
 ```{r quality, eval = T}
+seurat_raw<- readRDS(paste0(analysis_dir, "seurat_raw.Rds"))
+
 # Within each sample, get number of expressed housekeeping genes detected per cell barcode and
 # fraction of mitochondrial gene expression.
 
@@ -104,31 +123,50 @@ print (paste0(sum(seurat_raw[["percent_mito"]] > 10), " of ", ncol(seurat_raw), 
 # This is done on a Seurat object merged across samples.
 VlnPlot(seurat_raw, features = c("nFeature_RNA", "nHK_RNA"), ncol = 1, pt.size = 0.5) 
 ggsave(paste0(figure_dir, "vln_nGene_nHK.png"), width = 6, height = 6)
+
+VlnPlot(seurat_raw, group.by = "seq_batch", features = c("nFeature_RNA", "nHK_RNA"), ncol = 1, pt.size = 0.5)
+ggsave(paste0(figure_dir, "Vln_nGene_nHK_bySeqBatch.png"), width=6, height=6)
+
+saveRDS(seurat_raw, file=paste0(analysis_dir, "seurat_raw.Rds"))
 ```
 
 ## Filter cells
 Remove cells that have a high percentage mitochondrial gene expression, or too few or too many genes detected. Remove cells from E30, E88, E119. This is all stored in Seurat @data slot. 
 ```{r filtercells, eval = T}
+seurat_raw<- readRDS(paste0(analysis_dir, "seurat_raw.Rds"))
+
 # Filter cells based on nGene, nHK, and percent.mito and store in @data slot 
 seurat_obj <- subset(seurat_raw, subset = nFeature_RNA > 500 & nFeature_RNA < 5000 & nHK_RNA > 20)
-```
+
 
 ## Plot PF rate
-```{r}
-## Add PF onto raw seurat
 seurat_raw$PF<- ifelse(colnames(seurat_raw) %in% colnames(seurat_obj), "Pass", "Fail")
 
-## Df with p/f cells
-df<- as.data.frame(table(seurat_raw$PF, seurat_raw$orig.ident))
-colnames(df)<- c("PF", "Sample", "NCells")
-
-ggplot(df, aes(x=Sample, y=NCells, fill=PF))+
-  geom_bar(stat="identity")
-ggsave(paste0(figure_dir, "Barplot_PF.png"), width=4, height = 4)
+  ## Df with p/f cells
+  df<- as.data.frame(table(seurat_raw$PF, seurat_raw$orig.ident))
+  colnames(df)<- c("PF", "Sample", "NCells")
+  
+  ggplot(df, aes(x=Sample, y=NCells, fill=PF))+
+    geom_bar(stat="identity")
+  ggsave(paste0(figure_dir, "Barplot_PF.png"), width=4, height = 4)
+  
+  ## Df with p/f cells- by batch
+  df<- as.data.frame(table(seurat_raw$PF, seurat_raw$seq_batch))
+  colnames(df)<- c("PF", "Sample", "NCells")
+  
+  ggplot(df, aes(x=Sample, y=NCells, fill=PF))+
+    geom_bar(stat="identity")
+  ggsave(paste0(figure_dir, "Barplot_PF_bySeqBatch.png"), width=4, height = 4)
+  
+saveRDS(seurat_obj, file=paste0(analysis_dir, "seurat_obj.Rds"))
 ```
+
+
 
 ## Score for cycling
 ```{r}
+seurat_obj<- readRDS(paste0(analysis_dir, "seurat_obj.Rds"))
+
 cycling_genes<- list(cycling=cycling_genes$V1)
 
 cm_list<- NormCenter(seurat_obj@assays$RNA@counts)
@@ -138,6 +176,8 @@ cycling_score<- scoreSignature(cm_list$center_data, cm_mean, s=cycling_genes$cyc
 sum(names(cycling_score)==colnames(seurat_obj)); ncol(seurat_obj); length(cycling_score)
 seurat_obj$cycling_score<- cycling_score
 seurat_obj$cycling_predicted<- ifelse(seurat_obj$cycling_score>=1, "cycling", "not_cycling")
+
+saveRDS(seurat_obj, file=paste0(analysis_dir, "seurat_obj.Rds"))
 ```
 
 ## Run clustering/UMAP
@@ -146,17 +186,18 @@ meta<- seurat_obj@meta.data
 seurat_obj<- RunFullSeurat(seurat_obj@assays$RNA@counts, samples=seurat_obj$sampleid, RunHarmony = FALSE)
 seurat_obj<- AddMetaData(seurat_obj, meta[,!colnames(meta) %in% colnames(seurat_obj@meta.data)])
 
-saveRDS(seurat_obj, file=paste0(analysis_dir, "immune_seurat.Rds"))
+saveRDS(seurat_obj, file=paste0(analysis_dir, "seurat_obj.Rds"))
 ```
 
 ## Low quality (mitochondrial) cluster- remove
 ```{r}
-seurat_obj<- readRDS(paste0(analysis_dir, "immune_seurat.Rds"))
+seurat_obj<- readRDS(paste0(analysis_dir, "seurat_obj.Rds"))
 FeaturePlot(seurat_obj, features="percent_mito")
 ggsave(paste0(figure_dir, "PercentMito_LowQualCluster.png"), width=5, height=4)
 
 ## Remove cells with percent mito > 20
 seurat_obj$percent_mito_PF<- ifelse(seurat_obj$percent_mito>=20, "Fail", "Pass")
+DimPlot(seurat_obj, group.by = "percent_mito_PF")
 ggsave(paste0(figure_dir, "PercentMito_PF.png"), width=5, height=4)
 
 seurat_obj<- subset(seurat_obj, percent_mito_PF == "Pass")
@@ -178,6 +219,6 @@ seurat_obj<- AddMetaData(seurat_obj, meta[,!colnames(meta) %in% colnames(seurat_
     geom_bar(stat="identity")
   ggsave(paste0(figure_dir, "Barplot_PF_postMitoRemoval.png"), width=4, height = 4)
 
-saveRDS(seurat_obj, file=paste0(analysis_dir, "immune_seurat.Rds"))
+saveRDS(seurat_obj, file=paste0(analysis_dir, "seurat_obj.Rds"))
 ```
 

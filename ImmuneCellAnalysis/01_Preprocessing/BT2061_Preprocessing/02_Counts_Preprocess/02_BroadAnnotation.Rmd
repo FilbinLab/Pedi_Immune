@@ -5,12 +5,7 @@ date: "11/04/21"
 output: html_document
 ---
 
-## Purpose:
-Broad level annotation (Tcell vs Myeloid, CD4 vs CD8) 
-
-
-## Approach:
-Expression of common marker genes, perform cluster-wise annotation. Have option to use harmony-integrated or non-integrated seurat objects (no integration used for final analysis for assigning tcell/myeloid)
+Annotate at broad level (myeloid, tcells) based on cluster-wise expression of marker genes. Identify and remove any non-immune normal cells
 
 ```{r}
 library(Seurat) 
@@ -36,7 +31,9 @@ source(nmf_helper)
 
 ## Load in processed seurat object 
 ```{r}
-immune_seurat<- readRDS("analysis/immune_seurat.Rds")
+immune_seurat<- readRDS("analysis/seurat_obj.Rds")
+
+immune_colors<- readRDS("../../../plot_colors/ImmuneCell.celltypes.Rds")
 ```
 
 
@@ -131,26 +128,22 @@ immune_seurat$astrocyte1<-NULL; immune_seurat$cytotoxicity1<-NULL
 
 ## Based on above graphs, assign each cluster to T cell or Myeloid
 ```{r}
-## Increase resolution to split off T cell cluster
-immune_seurat<- FindClusters(immune_seurat, resolution = 2.5)
-
-## Merge clusters- everything but 0/3 into single cluster
-immune_seurat$seurat_clusters_merged<- ifelse(!immune_seurat$seurat_clusters %in% c(0,3), 2, immune_seurat$seurat_clusters)
+## reduce resolution to merge myeloid clusters
+immune_seurat<- FindClusters(immune_seurat, resolution = 0.3)
 
 ## Vln plot of markers
-VlnPlot(immune_seurat, group.by = "seurat_clusters_merged", features=c("CD3G", "CSF1R")) + 
-  DimPlot(immune_seurat, group.by = "seurat_clusters_merged", label=TRUE)
+VlnPlot(immune_seurat,  features=c("CD3G", "CSF1R")) + 
+  DimPlot(immune_seurat,  label=TRUE)
 ggsave(paste0(figure_dir, "Vln_BroadMarkers_byCluster.png"), width=8, height=8)
 
 ## Identify markers
-immune_seurat<- SetIdent(immune_seurat, value=immune_seurat$seurat_clusters_merged)
 markers<- FindAllMarkers(immune_seurat)
 markers_filtered<- markers[markers$p_val_adj<0.05,]
 top_markers<- markers_filtered %>% group_by(cluster) %>% top_n(n=10, wt=avg_log2FC) %>% as.data.frame()
 
 ## Set as tcell/myeloid
-immune_seurat$broad_annot<- ifelse(immune_seurat$seurat_clusters_merged == 4, "Tcell", "Myeloid")
-DimPlot(immune_seurat, group.by = "broad_annot")
+immune_seurat$broad_annot<- ifelse(immune_seurat$seurat_clusters == 2, "Tcell", "Myeloid")
+DimPlot(immune_seurat, group.by = "broad_annot")+scale_color_manual(values=immune_colors[names(immune_colors) %in% immune_seurat$broad_annot])
 ggsave(paste0(figure_dir, "broad_annot.png"), width=5, height=4)
 ```
 
@@ -164,7 +157,8 @@ myeloid_seurat<- subset(immune_seurat, broad_annot=="Myeloid")
 tcell_seurat<- subset(immune_seurat, broad_annot=="Tcell")
 
 ## Save metadata for adding to seurat
-myeloid_meta<- myeloid_seurat@meta.data; tcell_meta<- tcell_seurat@meta.data
+myeloid_meta<- myeloid_seurat@meta.data
+tcell_meta<- tcell_seurat@meta.data
 
 ## Run full seurat pipeline on myeloid/tcell separately
 myeloid_seurat<- RunFullSeurat(myeloid_seurat@assays$RNA@counts, samples=myeloid_seurat$sampleid, RunHarmony = FALSE)
