@@ -1,0 +1,416 @@
+---
+title: "Compare de novo myeloid NMF to full cohort"
+author: "Jenna LaBelle"
+output: html_document
+---
+
+Correlate scores for de novo myeloid 10X programs with programs from full cohort
+
+```{r}
+library(Seurat) 
+library(clusterProfiler)
+library(biomaRt)
+library(stringr)
+library(grid)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/tenX/Immune/")
+
+analysis_dir<- paste0(working_dir, "/analysis/correlate_deNovo10X_fullCohort/Myeloid/")
+figure_dir<- paste0(working_dir, "/figures/correlate_deNovo10X_fullCohort/Myeloid/")
+data_dir <- paste0(working_dir, "analysis/nmf/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir,recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+
+```
+
+## Helper functions
+```{r}
+## correlate scores and plot heatmap
+## Input: dataframe of scores, rank used for naming
+my_correlationHeatmap<- function(scores,r, figure_dir=figure_dir_use){
+  ## NMF factor correlation based on cell score 
+  scores_factor_hc = clusterNmfFactors(scores)
+  scores_factor_cor = scores_factor_hc$cor_coef[scores_factor_hc$hc_obj$order, scores_factor_hc$hc_obj$order]
+  
+  ## Add on column for color
+  scores_factor_cor<- as.data.frame(scores_factor_cor)
+  scores_factor_cor$color<-gsub("_.*", "", rownames(scores_factor_cor))
+  scores_factor_cor$color<-ifelse(grepl("Denovo", scores_factor_cor$color), "red",
+                                  ifelse(grepl("Adult10X",scores_factor_cor$color),"green", "black"))
+  
+  ## Heatmap of correlations
+  hm_colors = rev((brewer.pal(n=9, name="RdBu")))
+  hm_colors = colorRampPalette(colors = hm_colors)
+  
+  p<-pheatmap(scores_factor_cor[,colnames(scores_factor_cor) != "color"], color = hm_colors(100), 
+         cluster_rows = F, cluster_cols = F, 
+         annotation_names_row = F, annotation_names_col =T,
+         show_rownames = T, show_colnames = F,
+         #filename = paste0(figure_dir , "CorHeatmap.png"),
+         width = 10, height = 6)
+  
+  cols=scores_factor_cor[order(match(rownames(scores_factor_cor), p$gtable$grobs[[2]]$label)), ]$color
+  p$gtable$grobs[[2]]$gp=gpar(col=cols)
+  
+  
+  return(list(p=p, factor_cor=scores_factor_hc))
+}
+```
+
+## Load in tenx seurat object and full cohort programs
+```{r}
+## Seurat- 10X
+myeloid_seurat<- readRDS("analysis/manual_broad_annot/myeloid_seurat.Rds")
+
+
+## Seurat- full cohort
+full_myeloid_seurat<- readRDS(paste0("../../",
+                               "01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/pedOnly_nomuv63/",
+                              "myeloid_seurat_noDC.B_harmony.Rds"))
+
+
+## Markers
+full_markers<- read.csv("../../02b_Myeloid/01a_NMF/analysis/de.novoNMF/pedOnly_nomuv63/top_DE_genes_10Xannotated_NMF_rank6.csv")
+
+## adult 10x markers and split
+adult_markers_top100<- readRDS(paste0("../../01_Preprocessing/03_PreprocessAdultDatasets/analysis/Preprocess_AdultMyeloid/", 
+                                      "GBM.10X_recurrent_myeloid_markers_top100.Rds"))
+
+
+## colors
+myeloid_colors<- readRDS("../../plot_colors/Myeloid_program_colors.Rds")
+myeloid_colors<- myeloid_colors$rank6
+```
+
+
+## Score 10x myeloid for: 
+full cohort programs
+de novo programs
+```{r}
+ranks<- c(6,7,9)
+
+## norm/center 10x
+cm_list<- NormCenter(myeloid_seurat@assays$RNA@counts)
+cm_mean<- rowMeans(log2(cm_list$raw_data + 1))
+
+## Full cohort markers  
+  ## split full markers to list
+  full_marker_list<- split(full_markers, f=full_markers$cluster)
+  full_marker_list<- lapply(full_marker_list, function(x){x$gene})
+  
+  ## score
+  full_scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, full_marker_list)))
+
+## de novo programs  
+  ## For each rank- load in markers, score 10x Myeloid
+  denovo_scores_list<- lapply(ranks, function(r){
+    ## Load markers
+    markers<- read.csv(paste0(data_dir, "Myeloid/top_DE_genes_NMF_rank", r, ".csv"))
+    
+    ## Split to list
+    markers<- split(markers, f=markers$cluster)
+    markers<- lapply(markers, function(x){x$gene})
+    names(markers)<- paste0("Denovo_NMF", names(markers))
+    
+    ## score
+    scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, markers)))
+    return(scores)
+    })
+  names(denovo_scores_list)<- paste0("Denovo_NMF", ranks)
+  
+saveRDS(full_scores, file=paste0(analysis_dir, "tenx_scores_fullPrograms.Rds"))  
+saveRDS(denovo_scores_list, file=paste0(analysis_dir, "tenx_scores_denovoPrograms_rank",paste(ranks, collapse = "."), ".Rds"))  
+```
+
+
+## Score SS2 for myeloid programs from full cohort + 10x adult GBM programs + de novo programs
+Note that I've definitely done this previously.. but easier to just redo and know I have the right marker set. I'm great at this.
+```{r}
+ranks<- c(6,7,9)
+
+## norm/center 10x
+cm_list_ss2<- NormCenter(full_myeloid_seurat@assays$RNA@counts)
+mean_ss2<- rowMeans (log2(cm_list_ss2$raw_data + 1))
+
+## myeloid programs from full cohort
+  ## split full markers to list
+  full_marker_list<- split(full_markers, f=full_markers$cluster)
+  full_marker_list<- lapply(full_marker_list, function(x){x$gene})
+  
+  ## score
+  full_scores<- as.data.frame(t(scoreNmfGenes(cm_list_ss2$center_data, mean_ss2, full_marker_list)))
+  
+## myeloid programs from adult 10X gbm
+  ## split full markers to list
+  adult_markers<- split(adult_markers_top100, f=adult_markers_top100$cluster)
+  adult_markers<- lapply(adult_markers, function(x){x$gene})
+  
+  ## score
+  full_scores_adult10X<- as.data.frame(t(scoreNmfGenes(cm_list_ss2$center_data, mean_ss2, adult_markers)))
+
+## de novo 10x programs
+denovo_scores_list<- lapply(ranks, function(r){
+  ## Load markers
+  markers<- read.csv(paste0(data_dir, "Myeloid/top_DE_genes_NMF_rank", r, ".csv"))
+  
+  ## Split to list
+  markers<- split(markers, f=markers$cluster)
+  markers<- lapply(markers, function(x){x$gene})
+  names(markers)<- paste0("Denovo_NMF", names(markers))
+  
+  ## score
+  scores<- as.data.frame(t(scoreNmfGenes(cm_list_ss2$center_data, mean_ss2, markers)))
+  return(scores)
+  })
+names(denovo_scores_list)<- paste0("Denovo_NMF", ranks)
+
+saveRDS(full_scores, file=paste0(analysis_dir, "SS2_scores_fullPrograms.Rds"))  
+saveRDS(full_scores_adult10X, file=paste0(analysis_dir, "SS2_scores_adult10XGBM.Rds"))  
+saveRDS(denovo_scores_list, file=paste0(analysis_dir, "SS2_scores_denovoPrograms_rank",paste(ranks, collapse = "."), ".Rds"))  
+```
+
+## for each rank, load marker genes, score TENX for de novo 10x nmf, then correlate with full cohort
+```{r}
+ranks<- c(10,12,13)
+
+analysis_dir_use<- paste0(analysis_dir, "scoreTenX/")
+figure_dir_use<- paste0(figure_dir, "scoreTenX/")
+for(i in c(analysis_dir_use, figure_dir_use)){if(!dir.exists(i)){dir.create(i)}}
+
+## Load scores for 10x for full program
+full_scores<- readRDS(paste0(analysis_dir, "tenx_scores_fullPrograms.Rds"))
+denovo_scores_list<- readRDS(paste0(analysis_dir, "tenx_scores_denovoPrograms_rank",paste(ranks, collapse = "."), ".Rds"))
+
+## For each rank- Merge full scores + de novo scores, correlate
+for(r in ranks){
+  print(r)
+  denovo_scores<- denovo_scores_list[[paste0("Denovo_NMF", r)]]
+  scores<- cbind(denovo_scores, full_scores)
+  
+  p<-my_correlationHeatmap(scores, r)
+  
+  ## Dendrogram of hierarchical clustering 
+  jpeg(filename=paste0(figure_dir, "HC_DenovoRank", r, "_fullCohort.png"), width = 400, height = 600)
+  plot(p$factor_cor$hc_obj)
+  dev.off()
+  
+  ## heatmap
+  png(filename=paste0(figure_dir_use, "Cor_DenovoRank", r, "_fullCohort.png"), width = 700, height = 400)
+  p$p
+  dev.off()
+  
+}
+```
+
+## for each rank, load marker genes, score SS2 for de novo 10x nmf, then correlate with full cohort
+```{r}
+ranks<- c(10,12,13)
+
+analysis_dir_use<- paste0(analysis_dir, "scoreSS2/")
+figure_dir_use<- paste0(figure_dir, "scoreSS2/")
+for(i in c(analysis_dir_use, figure_dir_use)){if(!dir.exists(i)){dir.create(i)}}
+
+## Load scores for ss2 for full program
+full_scores<- readRDS(paste0(analysis_dir, "ss2_scores_fullPrograms.Rds"))
+denovo_scores_list<- readRDS(paste0(analysis_dir, "SS2_scores_denovoPrograms_rank",paste(ranks, collapse = "."), ".Rds"))
+
+
+## For each rank- Merge full scores + de novo scores, correlate
+for(r in ranks){
+  print(r)
+  denovo_scores<- denovo_scores_list[[paste0("Denovo_NMF", r)]]
+  scores<- cbind(denovo_scores, full_scores)
+  
+  p<-my_correlationHeatmap(scores, r)
+  
+  png(filename=paste0(figure_dir_use, "Cor_DenovoRank", r, "_fullCohort.png"), width = 700, height = 400)
+  p$p
+  dev.off()
+  
+  ## Dendrogram of hierarchical clustering 
+  jpeg(filename=paste0(figure_dir_use, "HC_DenovoRank", r, "_fullCohort.png"), width = 400, height = 600)
+  plot(p$factor_cor$hc_obj)
+  dev.off()
+  
+}
+```
+
+## Correlate with adult 10X gbm- ss2 scored for new 10x programs + adult 10x programs
+```{r}
+ranks<- c(10,12,13)
+
+## set analysis/figure dir
+analysis_dir_use<- paste0(analysis_dir, "scoreSS2/")
+figure_dir_use<- paste0(figure_dir, "scoreSS2/")
+for(i in c(analysis_dir_use, figure_dir_use)){if(!dir.exists(i)){dir.create(i)}}
+
+## Load scores for ss2 for adult 10x programs
+full_scores<- readRDS(paste0(analysis_dir, "SS2_scores_adult10XGBM.Rds"))
+denovo_scores_list<- readRDS(paste0(analysis_dir, "SS2_scores_denovoPrograms_rank",paste(ranks, collapse = "."), ".Rds"))
+
+## For each rank- Merge full scores + de novo scores, correlate
+for(r in ranks){
+  print(r)
+  denovo_scores<- denovo_scores_list[[paste0("Denovo_NMF", r)]]
+  scores<- cbind(denovo_scores, full_scores)
+  
+  p<-my_correlationHeatmap(scores, r)
+  
+  png(filename=paste0(figure_dir_use, "Cor_DenovoRank", r, "_fullCohort_adult10XGBM.png"), width = 700, height = 400)
+  p$p
+  dev.off()
+  
+  ## Dendrogram of hierarchical clustering 
+  jpeg(filename=paste0(figure_dir_use, "HC_DenovoRank", r, "_fullCohort_adult10XGBM.png"), width = 400, height = 600)
+  plot(p$factor_cor$hc_obj)
+  dev.off()
+  
+}
+```
+
+## Correlate with adult 10X gbm + full cohort programs- ss2 scored for new 10x programs + adult 10x programs+ full cohort programs
+```{r}
+ranks<- c(10,12,13)
+
+## set analysis/figure dir
+analysis_dir_use<- paste0(analysis_dir, "scoreSS2/")
+figure_dir_use<- paste0(figure_dir, "scoreSS2/")
+for(i in c(analysis_dir_use, figure_dir_use)){if(!dir.exists(i)){dir.create(i)}}
+
+## Load scores 
+full_scores<- readRDS(paste0(analysis_dir, "ss2_scores_fullPrograms.Rds"))
+denovo_scores_list<- readRDS(paste0(analysis_dir, "SS2_scores_denovoPrograms_rank",paste(ranks, collapse = "."), ".Rds"))
+tenxAdultGBM_scores<- readRDS(paste0(analysis_dir, "SS2_scores_adult10XGBM.Rds"))
+
+## rename columns for coloring
+colnames(tenxAdultGBM_scores)<- paste0("Adult10X_", colnames(tenxAdultGBM_scores))
+
+## For each rank- Merge full scores + de novo scores, correlate
+for(r in ranks){
+  print(r)
+  denovo_scores<- denovo_scores_list[[paste0("Denovo_NMF", r)]]
+  scores<- cbind(denovo_scores, full_scores)
+  scores<- cbind(scores, tenxAdultGBM_scores)
+  
+  p<-my_correlationHeatmap(scores, r)
+  
+  png(filename=paste0(figure_dir_use, "Cor_DenovoRank", r, "_fullCohort_adult10XGBM.fullCohortPrograms.png"), width = 700, height = 400)
+  p$p
+  dev.off()
+  
+  ## Dendrogram of hierarchical clustering 
+  jpeg(filename=paste0(figure_dir_use, "HC_DenovoRank", r, "_fullCohort_adult10XGBM.fullCohortPrograms.png"), width = 400, height = 600)
+  plot(p$factor_cor$hc_obj)
+  dev.off()
+  
+}
+
+## For rank 13- remove AC, Merge full scores + de novo scores, correlate
+  r<- 13
+  denovo_scores<- denovo_scores_list[[paste0("Denovo_NMF13")]]
+  denovo_scores<- denovo_scores[,!grepl("NMF10", colnames(denovo_scores))]
+  scores<- cbind(denovo_scores, full_scores)
+  scores<- cbind(scores, tenxAdultGBM_scores)
+  
+  p<-my_correlationHeatmap(scores, r)
+  
+  png(filename=paste0(figure_dir_use, "Cor_DenovoRank", r, "_fullCohort_adult10XGBM.fullCohortPrograms_noAC.png"), width = 700, height = 400)
+  p$p
+  dev.off()
+  
+  ## Dendrogram of hierarchical clustering 
+  jpeg(filename=paste0(figure_dir_use, "HC_DenovoRank", r, "_fullCohort_adult10XGBM.fullCohortPrograms_noAC.png"), width = 400, height = 600)
+  plot(p$factor_cor$hc_obj)
+  dev.off()
+
+```
+
+
+## For ranks selected for follow up: annotate based on correlation with full cohort
+```{r}
+ranks_use<-9
+ranks_all<-c(6,7,9)
+
+## Assign annotations
+rank_annot<- list(NMF9=c("Inflammatory_Microglia", "Hypoxic_TAM1", "Hypoxic_TAM2", "IFN_TAM", "Monocytes1", 
+                         "IFN_Mo_TAM", "CD3pos_Myeloid","Monocytes2", "SEPP1_Mo_TAM"),
+                  NMF13=c("Inflammatory1", "CD3pos_Myeloid", "IFN_Mo_TAM", "Microglia", "SEPP1_Mo_TAM",
+                          "Hypoxic_TAM1", "Monocytes1", "Inflammatory2", "IFN_TAM1", "AC", "IFN_TAM2",
+                          "Hypoxic_TAM2", "Monocytes2"))
+rank_annot<- lapply(rank_annot, function(x){names(x)<- paste0("NMF", 1:length(x)); return(x)})
+
+## Annotate: markers, seurat cell assignments, scores
+for(r in ranks_use){
+  annots<- rank_annot[[paste0("NMF", r)]]
+  
+  ## annotate markers
+  markers<- read.csv(paste0(data_dir, "Myeloid/top_DE_genes_NMF_rank", r, ".csv"))
+  markers$cluster<- as.character(plyr::mapvalues(paste0("NMF", markers$cluster),
+                                                  names(annots), annots))
+  write.csv(markers, file=paste0(data_dir, "Myeloid/top_DE_genes_NMF_rank", r, "_annotated.csv"))
+  
+  ## annotate seurat assignments
+  nmf_column<- paste0("NMF_rank", r)
+  myeloid_seurat[[paste0(nmf_column, "_annot")]]<-as.character(plyr::mapvalues(paste0("NMF", as.character(myeloid_seurat[[nmf_column]][,1])),
+                                                  names(annots), annots))
+
+}
+
+## annotate scores
+  ## 10x
+  denovo_scores_list<- readRDS(paste0(analysis_dir, "tenx_scores_denovoPrograms_rank",paste(ranks_all, collapse = "."), ".Rds"))
+  denovo_scores_list<- denovo_scores_list[names(denovo_scores_list) %in% paste0("Denovo_NMF", ranks_use)]
+  denovo_scores_list<- lapply(names(denovo_scores_list), function(x) {
+    annots<- rank_annot[[gsub("Denovo_", "", x)]]
+    scores<- denovo_scores_list[[x]]
+    colnames(scores)<- gsub("Denovo_", "", colnames(scores))
+    colnames(scores)<- plyr::mapvalues(colnames(scores), names(annots), annots)
+    return(scores)
+  })
+  names(denovo_scores_list)<- paste0("Denovo_NMF", ranks_use)
+  saveRDS(denovo_scores_list, file=paste0(analysis_dir, "tenx_scores_denovoPrograms_rank",paste(ranks_use, collapse = "."), "_annot.Rds"))
+  
+  ## SS2 full cohort
+  denovo_scores_list<- readRDS(paste0(analysis_dir, "SS2_scores_denovoPrograms_rank",paste(ranks_all, collapse = "."), ".Rds"))
+  denovo_scores_list<- denovo_scores_list[names(denovo_scores_list) %in% paste0("Denovo_NMF", ranks_use)]
+  denovo_scores_list<- lapply(names(denovo_scores_list), function(x) {
+    annots<- rank_annot[[gsub("Denovo_", "", x)]]
+    scores<- denovo_scores_list[[x]]
+    colnames(scores)<- gsub("Denovo_", "", colnames(scores))
+    colnames(scores)<- plyr::mapvalues(colnames(scores), names(annots), annots)
+    return(scores)
+  })
+  names(denovo_scores_list)<- paste0("Denovo_NMF", ranks_use)
+  saveRDS(denovo_scores_list, file=paste0(analysis_dir, "SS2_scores_denovoPrograms_rank",paste(ranks_use, collapse = "."), "_annot.Rds"))
+
+saveRDS(myeloid_seurat, file="analysis/manual_broad_annot/myeloid_seurat.Rds")
+
+```
+
+## Using NMF rank 13, identified small AC subset. Remove these and rerun clustering
+```{r}
+myeloid_seurat<- readRDS("analysis/manual_broad_annot/myeloid_seurat.Rds")
+
+## Remove AC
+myeloid_seurat<- subset(myeloid_seurat, NMF_rank13_annot != "AC")
+
+## Rerun clustering
+myeloid_meta<- myeloid_seurat@meta.data
+myeloid_seurat<- RunFullSeurat(myeloid_seurat@assays$RNA@counts, RunHarmony = TRUE, samples=myeloid_meta$sample)
+myeloid_seurat<- AddMetaData(myeloid_seurat, myeloid_meta[,!colnames(myeloid_meta) %in% colnames(myeloid_seurat@meta.data)])
+
+saveRDS(myeloid_seurat, file="analysis/manual_broad_annot/myeloid_seurat_removeAC.byNMF.Rds")
+```
+
+

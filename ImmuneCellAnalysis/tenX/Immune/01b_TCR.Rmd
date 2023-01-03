@@ -1,0 +1,321 @@
+---
+title: "TCR"
+author: "Jenna LaBelle"
+date: "10/07/22"
+output: html_document
+---
+
+## Plot TCR results, clonotype expansion. Add to seurat object
+
+```{r}
+library(Seurat) 
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/tenX/Immune/")
+
+analysis_dir<- paste0(working_dir, "/analysis/TCR/")
+figure_dir<- paste0(working_dir, "/figures/TCR/")
+full_cohort_dir<- "../../"
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+sample_colors<- c(BT1857="grey30", BT2082="olivedrab", BT2083="violetred")
+```
+
+## Helper functions
+```{r}
+## Helper function to plot v/j gene usage
+my_plotVJgeneUsage<- function(seurat, plot_v_or_j, n_genes_plot){
+  ## Get df with all cells with V/J gene
+  tmp<- seurat@meta.data
+  tmp<- tmp[rownames(tmp)!=tmp[plot_v_or_j],]
+  tmp<- as.data.frame(table(tmp[plot_v_or_j]))
+  
+  ## Freq of V/J gene
+  tmp<- tmp[order(tmp$Freq, decreasing = TRUE),]
+  
+  ## Subset to top n V/J genes, order
+  tmp<- tmp[1:n_genes_plot,]
+  tmp$Var1<- factor(tmp$Var1, levels=tmp$Var1)
+  
+  ## Plot
+  ggplot(tmp, aes(x=Var1, y=Freq))+
+    geom_bar(stat="identity")+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle=45, hjust=1, face="bold"))+
+    xlab(plot_v_or_j)+
+    ylab("Occurence of gene")
+}
+
+## Helper function to get # of clonotypes per program, normalized by total number of cells per program
+my_getNormNClonotype<- function(seurat, program_column="Program_projected", clonotype_id_column="raw_clonotype_id"){
+  tmp<- seurat@meta.data
+  tmp<- tmp[rownames(tmp)!=tmp[clonotype_id_column],] ## getting rid of cells without tcr info
+  tmp<-as.data.frame(table(tmp[,clonotype_id_column], tmp[,program_column]))
+  colnames(tmp)<- c("Clonotype", "Program", "Ncells")
+  
+  ## Number of unique clonotypes present in each program
+  n_clonotypes_perProgram<- sapply(unique(as.character(tmp$Program)), function(program){
+    program_tmp<- tmp[tmp$Program==program & tmp$Ncells>0,]
+    return(length(unique(program_tmp$Clonotype)))
+  })
+  names(n_clonotypes_perProgram)<- unique(as.character(tmp$Program))
+  
+  
+  ## Normalize number of clonotypes by number of cells
+  n_CC_perProgram<- data.frame(Program=names(n_clonotypes_perProgram),
+                               n_clonotypes=n_clonotypes_perProgram,
+                               n_cells= as.numeric(table(seurat$Program_projected)))
+  n_CC_perProgram$n_clonotypes_norm<- n_CC_perProgram$n_clonotypes/n_CC_perProgram$n_cells
+  return(n_CC_perProgram)
+}
+
+## Helper function to get largest clonotype per program
+my_getMaxClonotype<- function(seurat, program_column="Program_projected", clonotype_id_column="raw_clonotype_id"){
+  tmp<- seurat@meta.data
+  tmp<- tmp[rownames(tmp)!=tmp[clonotype_id_column],] ## getting rid of cells without tcr info
+  tmp<-as.data.frame(table(tmp[,clonotype_id_column], tmp[,program_column]))
+  colnames(tmp)<- c("Clonotype", "Program", "Ncells")
+
+  
+  ## get largest clonotype for each program
+  max_clonotype<- tmp %>% group_by(Program) %>% summarise(maxClonotypeSize=max(Ncells)) %>% as.data.frame()
+  return(max_clonotype)
+}
+```
+
+## Load data: tcell seurat objects, TCR results, colors
+NOTE: vdj to be run on BT2080, will incorporate when finished (+ hopefully after rerunning 10x seq on bt2080)
+```{r}
+## Seurat
+seurat_obj<- readRDS("analysis/preprocessing/seurat_obj_noTumor.Rds")
+
+## TCR
+samples<- c("BT1857", "BT2082", "BT2083")
+tcr_list<- lapply(samples, function(x){
+  tcr<-read.csv(paste0("data/",x,"/VDJ/multi/per_sample_outs/", x, "/vdj_t/filtered_contig_annotations.csv"))
+  tcr$sample<- x
+  
+  ## for bt1857, add as "E167CD35resub"- that's how all tcells are named (only CD3+ used for VDJ)
+  tcr$barcode<- gsub("-", "_", tcr$barcode)
+  tcr$barcode<- ifelse(tcr$sample=="BT1857", paste0("E167CD35resub_", tcr$barcode),
+                                paste0(x, "_", tcr$barcode))
+  
+  ## Add on sample id to clonotype (can just use sample id, just for distinguishing b/w 3 samples)
+  tcr$raw_clonotype_id<- paste0(x, "_", tcr$raw_clonotype_id)
+  return(tcr)
+})
+tcr<- do.call("rbind", tcr_list)
+
+
+## Colors 
+tcell_colors<- readRDS(paste0(full_cohort_dir, "/plot_colors/Tcell.programs_rank8sharedByunion_reAnnot.Rds"))
+myeloid_colors<- readRDS(paste0(full_cohort_dir, "/plot_colors/Myeloid_program_colors.Rds"))
+myeloid_colors<- myeloid_colors$rank6
+
+saveRDS(tcr, file=paste0(analysis_dir, "TCR_info.Rds"))
+```
+
+
+## Add VDJ info to seurat objects
+```{r}
+tcr<- readRDS(paste0(analysis_dir, "TCR_info.Rds"))
+
+## Add clonotype id/vj gene
+seurat_obj$raw_clonotype_id<-ifelse(colnames(seurat_obj) %in% tcr$barcode, 
+                                    as.character(plyr::mapvalues(colnames(seurat_obj), 
+                                                                 tcr$barcode, tcr$raw_clonotype_id, warn_missing = FALSE)),"NA")
+seurat_obj$v_gene<- ifelse(colnames(seurat_obj) %in% tcr$barcode, 
+                           as.character(plyr::mapvalues(colnames(seurat_obj), 
+                                                        tcr$barcode, tcr$v_gene, warn_missing = FALSE)), "NA")
+seurat_obj$j_gene<- ifelse(colnames(seurat_obj) %in% tcr$barcode, 
+                           as.character(plyr::mapvalues(colnames(seurat_obj), 
+                                                        tcr$barcode, tcr$j_gene, warn_missing = FALSE)),"NA")
+
+
+
+## Add clonotype size + whether clonally expanded
+c_size<- as.data.frame(table(tcr$raw_clonotype_id))
+
+seurat_obj$tcr_reconstructed<- ifelse(colnames(seurat_obj) %in% tcr$barcode, "Yes", "No")
+
+seurat_obj$clonotype_size<- ifelse(colnames(seurat_obj) %in% tcr$barcode, 
+                                   as.numeric(as.character(plyr::mapvalues(seurat_obj$raw_clonotype_id, 
+                                                                           c_size$Var1, c_size$Freq, warn_missing = FALSE))), "NA")
+seurat_obj$clonal<- ifelse(seurat_obj$clonotype_size != "NA", 
+                           ifelse(as.numeric(seurat_obj$clonotype_size>1), "clonal",
+                                             "nonclonal"),  "NA")
+seurat_obj$clonotype_size_max20<- ifelse(seurat_obj$clonotype_size>20 & seurat_obj$clonotype_size != "NA", 20, seurat_obj$clonotype_size)
+
+saveRDS(seurat_obj, file="analysis/preprocessing/seurat_obj_noTumor.Rds")
+```
+
+## Plot V/J gene usage
+```{r}
+seurat_obj<- readRDS("analysis/preprocessing/seurat_obj_noTumor.Rds")
+
+
+my_plotVJgeneUsage(subset(seurat_obj,clonotype_size != "NA"), "v_gene", 20) + ggtitle("top V gene usage")
+ggsave(paste0(figure_dir, "TopV_geneUsage.png"), width=10, height=4)
+
+my_plotVJgeneUsage(subset(seurat_obj,clonotype_size != "NA"), "j_gene", 20)+ ggtitle("top J gene usage")
+ggsave(paste0(figure_dir, "TopJ_geneUsage.png"), width=10, height=4)
+
+```
+
+## Plot clonal expansion by sample
+```{r}
+clonal_meta<- seurat_obj@meta.data[,c("clonal", "tcr_reconstructed", "raw_clonotype_id","clonotype_size",  "sample")]
+
+## subset to cells with tcr reconstructed
+clonal_meta<- clonal_meta[clonal_meta$tcr_reconstructed=="Yes",]
+
+## proportion of clonal for each sample
+clonal_prop<- as.data.frame(table(clonal_meta$sample, clonal_meta$clonal))
+colnames(clonal_prop)<- c("Sample", "Clonal", "NCells")
+clonal_prop<- clonal_prop %>% group_by(Sample) %>% mutate(PerCells=NCells/sum(NCells)) %>% as.data.frame()
+
+ggplot(clonal_prop, aes(x=Sample, y=PerCells, fill=Clonal))+
+  geom_bar(stat="identity")+
+  scale_fill_manual(values=c(clonal="orange", nonclonal="navy"))+
+  theme_classic()+
+  theme(axis.text = element_text(face="bold", color="black"),
+        strip.text = element_text(face="bold", color="black"),
+        axis.text.x = element_text(angle=45, hjust=1))
+  xlab("")+ylab("Proportion of clonally expanded T cells")
+  ggsave(paste0(figure_dir, "Proportion_clonallyExpanded_bySample.png"), width = 4, height=4)
+```
+
+
+## Plot histogram of clonotype size by sample
+```{r}
+clonal_meta<- seurat_obj@meta.data[,c("clonal", "tcr_reconstructed", "raw_clonotype_id","clonotype_size",  "sample")]
+
+## subset to cells with tcr reconstructed
+clonal_meta<- clonal_meta[clonal_meta$tcr_reconstructed=="Yes",]
+clonal_meta$clonotype_size<- as.numeric(clonal_meta$clonotype_size)
+
+ggplot(clonal_meta, aes(x=clonotype_size, fill=sample))+
+  geom_histogram()+
+  theme_bw()+
+  scale_fill_manual(values=sample_colors)
+ggsave(paste0(figure_dir, "Hist_clonotypeSize_bySample.png"), width=4, height=3)
+```
+
+## Plot dotplot of clonotype size by sample
+```{r}
+clonal_meta<- seurat_obj@meta.data[,c("clonal", "tcr_reconstructed", "raw_clonotype_id","clonotype_size",  "sample")]
+
+## subset to cells with tcr reconstructed
+clonal_meta<- clonal_meta[clonal_meta$tcr_reconstructed=="Yes",]
+clonal_meta$clonotype_size<- as.numeric(clonal_meta$clonotype_size)
+
+## Number of cells in each clonotype size by sample
+clonal_prop<- as.data.frame(table(clonal_meta$clonotype_size, clonal_meta$sample))
+colnames(clonal_prop)<-c("Clonotype_size", "Sample", "NCells")
+clonal_prop$Clonotype_size<- as.numeric(clonal_prop$Clonotype_size)
+
+
+ggplot(clonal_prop, aes(x=Clonotype_size, y=NCells, color=Sample))+
+  geom_point()+
+  theme_bw()+
+  scale_color_manual(values=sample_colors)
+ggsave(paste0(figure_dir, "dotPlot_clonotypeSize_bySample.png"), width=6, height=3)
+```
+
+## Exploratory- potentially use downsampling approach to control for differences in cell count
+More cells sequenced --> artificially inflate clonotype size
+Can't just divide by n cells seq- will penalize highly sequenced samples
+Instead- try randomly sampling tcrs for each sample so that n=lowest # of Tcrs
+```{r}
+tcr<- readRDS(paste0(analysis_dir, "TCR_info.Rds"))
+
+## Get minimum tcr to downsample to
+n_tcr<- table(tcr$sample)
+min_tcr<- min(n_tcr)
+
+## randomly sample without replacement for all samples, then recalculate clonotype size
+samples<- c("BT1857", "BT2082", "BT2083")
+
+tcr_downsample<- lapply(samples, function(sample){
+  tcr_sample<- tcr[tcr$sample == sample,]
+  
+  ## Randomly select tcrs
+  set.seed(42)
+  tcr_barcodes_ds<- sample(tcr_sample$contig_id, size=min_tcr)
+  tcr_ds<- tcr_sample[tcr_sample$contig_id %in% tcr_barcodes_ds,]
+  
+  ## re-calculate clonotype size (note that even the min TCR n sample needs to be included here- clonotype size calculation)
+  c_size<- table(tcr_ds$raw_clonotype_id)
+  tcr_ds$clonotype_size<- plyr::mapvalues(tcr_ds$raw_clonotype_id, names(c_size), unname(c_size), warn_missing = FALSE)
+  
+  return(tcr_ds)
+})
+tcr_ds<-do.call("rbind", tcr_downsample)
+
+## Add downsampled results to seurat object
+  tcr<- tcr_ds
+  
+  ## Add clonotype id/vj gene
+  seurat_obj$raw_clonotype_id_ds<-ifelse(colnames(seurat_obj) %in% tcr$barcode, 
+                                      as.character(plyr::mapvalues(colnames(seurat_obj), 
+                                                                   tcr$barcode, tcr$raw_clonotype_id, warn_missing = FALSE)),"NA")
+  seurat_obj$v_gene_ds<- ifelse(colnames(seurat_obj) %in% tcr$barcode, 
+                             as.character(plyr::mapvalues(colnames(seurat_obj), 
+                                                          tcr$barcode, tcr$v_gene, warn_missing = FALSE)), "NA")
+  seurat_obj$j_gene_ds<- ifelse(colnames(seurat_obj) %in% tcr$barcode, 
+                             as.character(plyr::mapvalues(colnames(seurat_obj), 
+                                                          tcr$barcode, tcr$j_gene, warn_missing = FALSE)),"NA")
+  
+  
+  
+  ## Add clonotype size + whether clonally expanded
+  c_size<- as.data.frame(table(tcr$raw_clonotype_id))
+  
+  seurat_obj$tcr_reconstructed_ds<- ifelse(colnames(seurat_obj) %in% tcr$barcode, "Yes", "No")
+  
+  seurat_obj$clonotype_size_ds<- ifelse(colnames(seurat_obj) %in% tcr$barcode, 
+                                     as.numeric(as.character(plyr::mapvalues(seurat_obj$raw_clonotype_id_ds, 
+                                                                             c_size$Var1, c_size$Freq, warn_missing = FALSE))), "NA")
+  seurat_obj$clonal_ds<- ifelse(seurat_obj$clonotype_size_ds != "NA", 
+                             ifelse(as.numeric(seurat_obj$clonotype_size_ds>1), "clonal",
+                                               "nonclonal"),  "NA")
+  seurat_obj$clonotype_size_max20_ds<- ifelse(seurat_obj$clonotype_size_ds>20 & seurat_obj$clonotype_size_ds != "NA", 20,
+                                              seurat_obj$clonotype_size_ds)
+  
+  
+## Plot same as before with downsampled clonotype information
+  
+  clonal_meta<- seurat_obj@meta.data[,c("clonal_ds", "tcr_reconstructed_ds", "raw_clonotype_id_ds","clonotype_size_ds",  "sample")]
+  colnames(clonal_meta)<-gsub("_ds", "", colnames(clonal_meta))
+
+  ## subset to cells with tcr reconstructed
+  clonal_meta<- clonal_meta[clonal_meta$tcr_reconstructed=="Yes",]
+  
+  ## proportion of clonal for each sample
+  clonal_prop<- as.data.frame(table(clonal_meta$sample, clonal_meta$clonal))
+  colnames(clonal_prop)<- c("Sample", "Clonal", "NCells")
+  clonal_prop<- clonal_prop %>% group_by(Sample) %>% mutate(PerCells=NCells/sum(NCells)) %>% as.data.frame()
+  
+  ggplot(clonal_prop, aes(x=Sample, y=NCells, fill=Clonal))+
+    geom_bar(stat="identity")+
+    scale_fill_manual(values=c(clonal="orange", nonclonal="navy"))+
+    theme_classic()+
+    theme(axis.text = element_text(face="bold", color="black"),
+          strip.text = element_text(face="bold", color="black"),
+          axis.text.x = element_text(angle=45, hjust=1))
+    xlab("")+ylab("Proportion of clonally expanded T cells")
+    ggsave(paste0(figure_dir, "Proportion_clonallyExpanded_bySample_Downsampled.png"), width = 4, height=4)
+  
+  #saveRDS(seurat_obj, file="analysis/preprocessing/seurat_obj_noTumor.Rds")
+```
+

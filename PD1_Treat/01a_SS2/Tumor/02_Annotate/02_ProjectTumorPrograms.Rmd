@@ -1,0 +1,163 @@
+---
+title: "ProjectBroadAnnots"
+author: "Jenna LaBelle"
+output: html_document
+---
+
+## Project program annotations from the full immune cohort to tenx sample
+
+```{r}
+library(Seurat) 
+library(harmony)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/PD1_Treat/SS2/Tumor/02_Annotate/")
+
+analysis_dir<- paste0(working_dir, "/analysis/project_tumor_programs/")
+figure_dir<- paste0(working_dir, "/figures/project_tumor_programs/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+projection_helper<- paste0(base_dir, script_dir, "seurat_transferAnchors_helper.R")
+source(preprocessing)
+source(nmf_helper)
+source(projection_helper)
+```
+
+
+
+## Load seurat objects: pd-1  and full immune cohort 
+```{r}
+## Load seurat objects- PD1 (malignant cells only) or full cohort
+pd1_seurat<- readRDS("analysis/seurat/seurat_obj.Rds")
+load("../../../TumorCellAnnotation/AllSubtypesTogether/analysis/Merge_allSubtypes/AllTumorSeuratObj.Robj")
+tumor_seurat<- tumor_merged; rm(tumor_merged)
+tumor_seurat$CellAnnot<- gsub("cycling", "Cycling", tumor_seurat$CellAnnot)
+
+## Set colors to use
+tumor_colors<-c(Cycling="gold", `Neuronal-like`="turquoise", `AC-like`="olivedrab", `OPC-like`="violetred")
+
+## Set whether to keep or remove BT1857 from full seurat (clusters distantly from other 2, difficult to project annotations)
+## Downstream: BT1857 removed
+BT1857_remove<-TRUE
+if(BT1857_remove){figure_dir<-paste0(figure_dir, "BT1857_Remove/")
+}else{figure_dir<- paste0(figure_dir, "BT1857_Keep/")}
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+
+## Set tumor markers
+tumor_markers<- list(Neuronal=c("STMN2", "STMN1", "STMN4","TUBB3", "INA", "ELAVL4","SNAP25", "GABRG2", "ST18"),
+                     Cycling=c("TOP2A", "CDC20", "MCM5", "PCNA4",  "E2F8", "CDK1", "MKI67", "AURKB", "BUB1"),
+                     OPC=c("PDGFRA",  "CCND1", "CD24", "ASCL1","ETV1", "SEZ6L", "HES6"),
+                     AC=c("APOE", "AQP4", "AGT", "SPARCL1", "GFAP", "S100B", "ALDOC", "CLU"))
+```
+
+## Subset full cohort to just GBM and rerun clustering
+```{r}
+## Subset full cohort to GBM and rerun clustering
+if(!BT1857_remove){
+  gbm_seurat<- subset(tumor_seurat, sample %in% c("BT1478", "BT1857","BT1745"))
+  gbm_meta<- gbm_seurat@meta.data
+  gbm_seurat<- RunFullSeurat(gbm_seurat@assays$RNA@counts, RunHarmony = TRUE, samples=gbm_meta$sample)
+  gbm_seurat<- AddMetaData(gbm_seurat, gbm_meta[,!colnames(gbm_meta) %in% colnames(gbm_seurat@meta.data)])
+  
+    ## Plot by sample- BT1857 is very different from other 2 GBM (age difference?) throws off projection
+    DimPlot(gbm_seurat, group.by = "sample") + DimPlot(gbm_seurat, group.by = "CellAnnot")
+    ggsave(paste0(figure_dir, "UMAP_GBM_untreated_WithBT1857_bySample.CellAnnot.png"), width=12, height=5)
+} else if(BT1857_remove){
+  ## Remove BT1857 and re-run clustering
+  gbm_seurat<- subset(tumor_seurat, sample %in% c("BT1478","BT1745"))
+  gbm_meta<- gbm_seurat@meta.data
+  gbm_seurat<- RunFullSeurat(gbm_seurat@assays$RNA@counts, RunHarmony = TRUE, samples=gbm_meta$sample)
+  gbm_seurat<- AddMetaData(gbm_seurat, gbm_meta[,!colnames(gbm_meta) %in% colnames(gbm_seurat@meta.data)])
+  
+    ## Plot by sample- much better sample integration
+    DimPlot(gbm_seurat, group.by = "sample") + DimPlot(gbm_seurat, group.by = "CellAnnot")
+    ggsave(paste0(figure_dir, "UMAP_GBM_untreated_WithoutBT1857_bySample.CellAnnot.png"), width=12, height=5)
+}
+
+```
+
+
+## Projection of tumor programs to pd1 tumor cells
+```{r}
+## Project full to pd1
+pd1_seurat<- my_project_seurat(gbm_seurat, pd1_seurat, reference_annotation = "CellAnnot")
+
+## plot
+DimPlot(pd1_seurat, group.by="Program_projected", pt.size = 1, label=TRUE, label.size = 6)+ NoLegend()+
+  scale_color_manual(values=tumor_colors)
+ggsave(paste0(figure_dir, "UMAP_tumor_program_projectedFromFull.png"), width=5, height=5)
+
+## Proportion of programs by sample
+my_barchart_programProp(pd1_seurat, coloring_variable = "Program_projected", colors=tumor_colors)
+ggsave(paste0(figure_dir, "Breakdown_Tumor_programBySample.png"), width=4, height=4)
+
+## Expression of expected (same as full cohort) genes in predicted programs in dotplot
+my_dotplot(pd1_seurat, "Program_projected", unname(unlist(tumor_markers[c("Neuronal", "Cycling", "AC")])))
+ggsave(paste0(figure_dir, "DotPlot_Tumor_expectedMarkers.png"), width=6, height=8)
+
+## Expression of expected genes in heatmap 
+pd1_seurat_rescaled<- ScaleData(pd1_seurat, do.scale = FALSE, do.center = TRUE, features=rownames(pd1_seurat))
+DoHeatmap(pd1_seurat_rescaled, group.by = "Program_projected", 
+          features = unname(unlist(tumor_markers[c("Neuronal", "Cycling", "AC")])),
+          group.colors = tumor_colors)+
+  scale_fill_gradient2(low="blue", mid="white", high="red")
+ggsave(paste0(figure_dir, "Heatmap_Tumor_expectedMarkers.png"), width=6, height=5)
+
+## Expression of subset of expected markers by featureplot
+cowplot::plot_grid(plotlist=lapply(c("TUBB3", "STMN4", "STMN2", 
+                                     "TOP2A", "CDK1", "CDC20",
+                                     "GFAP", "CLU", "S100B",
+                                     "PDGFRA", "ETV1", "SEZ6L"), function(x){
+  FeaturePlot(pd1_seurat_rescaled, features=x, slot="scale.data")+
+    scale_color_gradient2(low="blue", mid="white", high="red")
+}), ncol = 3)
+ggsave(paste0(figure_dir, "UMAP_ExpectedMarkers.png"), width=9, height=12)
+
+
+saveRDS(pd1_seurat, file="analysis/seurat/seurat_obj.Rds")
+```
+
+## Based on expression of OPC markers in FeaturePlot, seem to have cluster of OPC-like cells misclassified as neuronal
+Manually reannotate (based on clustering)
+```{r}
+pd1_seurat<- readRDS("analysis/seurat/seurat_obj.Rds")
+
+## Plot by seurat clustering- adjust resolution so that fits opc/neuronal split
+pd1_seurat<- FindClusters(pd1_seurat, resolution = 1.8)
+DimPlot(pd1_seurat, label=TRUE) + NoLegend() +VlnPlot(pd1_seurat, features=c("PDGFRA", "STMN2", "GFAP", "TOP2A"), ncol=2)
+ggsave(paste0(figure_dir, "Recluster_annotatedOPC.png"), width=8, height=5)
+
+## Reannotate, plot
+pd1_seurat$Program_projected_manualOPC<- ifelse(pd1_seurat$seurat_clusters %in% c(2,3), "OPC-like", pd1_seurat$Program_projected)
+
+## plot UMAP by updated annotations
+DimPlot(pd1_seurat, group.by="Program_projected_manualOPC", pt.size = 1, label=TRUE, label.size = 6)+ NoLegend()+
+  scale_color_manual(values=tumor_colors)
+ggsave(paste0(figure_dir, "UMAP_tumor_program_projectedFromFull_manualOPC.png"), width=5, height=5)
+
+## Proportion of programs by sample
+my_barchart_programProp(pd1_seurat, coloring_variable = "Program_projected_manualOPC", colors=tumor_colors)
+ggsave(paste0(figure_dir, "Breakdown_Tumor_programBySample_manualOPC.png"), width=4, height=4)
+
+## Expression of expected (same as full cohort) genes in predicted programs in dotplot
+my_dotplot(pd1_seurat, "Program_projected_manualOPC", unname(unlist(tumor_markers[c("OPC", "Neuronal", "Cycling", "AC" )])))
+ggsave(paste0(figure_dir, "DotPlot_Tumor_expectedMarkers_manualOPC.png"), width=6, height=8)
+
+## Expression of expected genes in heatmap 
+pd1_seurat_rescaled<- ScaleData(pd1_seurat, do.scale = FALSE, do.center = TRUE, features=rownames(pd1_seurat))
+DoHeatmap(pd1_seurat_rescaled, group.by = "Program_projected_manualOPC", 
+          features = unname(unlist(tumor_markers[c("OPC", "Neuronal", "Cycling", "AC")])),
+          group.colors = tumor_colors)+
+  scale_fill_gradient2(low="blue", mid="white", high="red")
+ggsave(paste0(figure_dir, "Heatmap_Tumor_expectedMarkers_manualOPC.png"), width=6, height=5)
+
+saveRDS(pd1_seurat, file="analysis/seurat/seurat_obj.Rds")
+```
+

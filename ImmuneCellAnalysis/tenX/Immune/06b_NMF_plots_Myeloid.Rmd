@@ -1,0 +1,297 @@
+---
+title: "Plot Myeloid NMF programs"
+author: "Jenna LaBelle"
+output: html_document
+---
+
+Plot annotated myeloid program scores, markers, etc
+
+```{r}
+library(Seurat) 
+library(clusterProfiler)
+library(biomaRt)
+library(stringr)
+library(grid)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/tenX/Immune/")
+
+analysis_dir<- paste0(working_dir, "/analysis/NMF_plots/Myeloid/")
+figure_dir<- paste0(working_dir, "/figures/NMF_plots/Myeloid/")
+data_dir <- paste0(working_dir, "analysis/nmf/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir,recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+
+```
+
+
+## Load in tenx seurat object, scores
+```{r}
+rank_use<- 13
+
+## TenX seurat object. for rank 13- removed 61 myeloid as AC
+rank_use<- 9
+if(rank_use==13){
+  myeloid_seurat<- readRDS("analysis/manual_broad_annot/myeloid_seurat_removeAC.byNMF.Rds")
+}else{
+  myeloid_seurat<- readRDS("analysis/manual_broad_annot/myeloid_seurat.Rds")
+}
+
+## Seurat- full cohort
+full_myeloid_seurat<- readRDS(paste0("../../",
+                               "01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/pedOnly_nomuv63/",
+                              "myeloid_seurat_noDC.B_harmony.Rds"))
+
+## Load monocyte/mg/mo markers
+adult_markers_top100<- readRDS(paste0("../../01_Preprocessing/03_PreprocessAdultDatasets/", 
+                                      "analysis/Preprocess_AdultMyeloid/", 
+                                      "GBM.10X_recurrent_mg.mo.monocyte.prol_markers_top100.Rds"))
+adult_myeloid_markers<- split(adult_markers_top100, f=adult_markers_top100$cluster)
+adult_myeloid_markers<- lapply(adult_myeloid_markers, function(x){x$gene})
+names(adult_myeloid_markers)<- paste0("Adult_", names(adult_myeloid_markers))
+
+  ## Remove proliferating
+  adult_myeloid_markers<- adult_myeloid_markers[names(adult_myeloid_markers) != "Adult_prol_TAM"]
+
+## Scores- tenx scored
+tenx_scores_list<-readRDS(paste0("analysis/correlate_deNovo10X_fullCohort/Myeloid/tenx_scores_denovoPrograms_rank",paste(rank_use, collapse = "."), "_annot.Rds"))
+tenx_scores<- tenx_scores_list[[paste0("Denovo_NMF", rank_use)]]
+
+## Scores- ss2 scored
+ss2_scores_list<-readRDS(paste0("analysis/correlate_deNovo10X_fullCohort/Myeloid/SS2_scores_denovoPrograms_rank",paste(rank_use, collapse = "."), "_annot.Rds"))
+ss2_scores<- ss2_scores_list[[paste0("Denovo_NMF", rank_use)]]
+
+
+
+## colors
+myeloid_colors<- readRDS("../../plot_colors/Myeloid_program_colors.Rds")
+myeloid_colors<- myeloid_colors$rank6
+myeloid_colors<- c(myeloid_colors,Inflammatory_Microglia="olivedrab", CD3pos_Myeloid="salmon", IFN_Mo_TAM="magenta",
+                   Monocytes1="turquoise", Monocytes2="turquoise4",Monocytes3="turquoise2", 
+                   Hypoxic_TAM1="navy", Hypoxic_TAM2="blue2",
+                   Inflammatory1="red", Inflammatory2="tomato1",
+                   Microglia="olivedrab4",
+                   IFN_TAM1="purple", IFN_TAM2="purple4")
+```
+
+
+
+
+
+## UMAP
+```{r}
+## Umap by program
+all_plots<- lapply(ranks, function(r){
+  myeloid_seurat$tmp<- myeloid_seurat@meta.data[[paste0("NMF_rank", r, "_annot")]]
+  DimPlot(myeloid_seurat, group.by = "tmp")+
+    scale_color_manual(values=myeloid_colors[names(myeloid_colors) %in% myeloid_seurat$tmp])+
+    ggtitle(paste0("rank ", r))
+})
+cowplot::plot_grid(plotlist = all_plots, ncol=length(ranks))
+ggsave(paste0(figure_dir, "UMAP_byAnnotProgram_ranks", paste(ranks, collapse = "."), ".png"), 
+       width=6*length(ranks), height=5)
+
+```
+
+
+## barchart by sample
+```{r}
+## Proportion of program by sample
+all_plots<- lapply(ranks, function(r){
+  myeloid_seurat$tmp<- myeloid_seurat@meta.data[[paste0("NMF_rank", r, "_annot")]]
+  my_barchart_programProp(myeloid_seurat, coloring_variable = "tmp", colors=myeloid_colors)+
+    ggtitle(paste0("rank ", r))
+})
+cowplot::plot_grid(plotlist = all_plots, ncol=length(ranks))
+ggsave(paste0(figure_dir, "Barchart_proportionProgram_bySample_ranks", paste(ranks, collapse = "."), ".png"), 
+       width=4*length(ranks), height=4)
+```
+
+
+## expression of expected GOI
+```{r}
+## Expression of expected markers by sample
+top_markers<- full_markers %>% group_by(cluster) %>% top_n(n=5, wt=avg_log2FC) %>% as.data.frame()
+top_markers<- top_markers[,c("cluster", "gene")]
+
+  ## Rename as needed
+  if(ranks==9){
+    top_markers$cluster<- gsub("Inflammatory", "Inflammatory_Microglia", gsub("Stress_Response", "Inflammatory_Microglia", top_markers$cluster))
+  } 
+  if(ranks==13){
+    top_markers$cluster<- gsub("Stress_Response", "Microglia", top_markers$cluster)
+  }
+
+  ## Add on CD3 for CD3 macrophages
+  top_markers<- rbind(top_markers, data.frame(cluster=rep("CD3pos_Myeloid", 3), gene=c("CD3G", "CD3E", "CD3D")))
+
+top_markers$cluster<- factor(top_markers$cluster, levels=sort(unique(top_markers$cluster)))
+top_markers<- top_markers[order(top_markers$cluster),]
+
+all_plots<- lapply(ranks, function(r){
+    myeloid_seurat$tmp<- myeloid_seurat@meta.data[[paste0("NMF_rank", r, "_annot")]]
+    
+    ## Remove 1/2/3 distinction
+    #myeloid_seurat$tmp<- gsub("1","", gsub("2", "",gsub("Monocytes3", "Monocytes", myeloid_seurat$tmp)))
+    myeloid_seurat$tmp<- factor(myeloid_seurat$tmp, levels=sort(unique(myeloid_seurat$tmp)))
+    
+    ## plot
+    DotPlot(myeloid_seurat, group.by = "tmp", features=top_markers$gene)+
+      theme(axis.text.x = element_text(angle=45, hjust=1))+
+      scale_color_gradient2(low="blue", mid="white", high="red")+
+      ggtitle(paste0("rank", r))+
+      xlab("")+ylab("")
+})
+cowplot::plot_grid(plotlist = all_plots, ncol=1)
+ggsave(paste0(figure_dir, "DotPlot_expectedMarkers", paste(ranks, collapse = "."),"_withSubsets.png"), width=14, height=4*length(ranks))
+```
+
+## Density plots by mg/mo/monocyte tam score
+Score 10X
+```{r}
+## score 10x 
+cm_list<- NormCenter(myeloid_seurat@assays$RNA@counts)
+cm_mean<- rowMeans(log2(cm_list$raw_data + 1))
+scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean,  
+                                                   c(adult_myeloid_markers))))
+scores$MaxProgram<- apply(scores, 1, function(x){names(x)[which.max(x)]})
+scores$MaxScore<- apply(scores[,colnames(scores) != "MaxProgram"], 1, function(x){x[which.max(x)]})
+
+## Add to seurat object
+myeloid_seurat$MgMoMonocyte_annot<- plyr::mapvalues(colnames(myeloid_seurat), rownames(scores), scores$MaxProgram)
+myeloid_seurat$MgMoMonocyte_score<- plyr::mapvalues(colnames(myeloid_seurat), rownames(scores), scores$MaxScore)
+
+colors_use<- c(Adult_Monocytes="turquoise3", Adult_Mg_TAM="blue", Adult_Mo_TAM="red")
+
+
+## Create df for plotting
+scores<- tenx_scores
+programs<- colnames(scores)
+myeloid_df<-myeloid_seurat@meta.data[,c("sample", "MgMoMonocyte_annot", paste0("NMF_rank", rank_use, "_annot"))]
+myeloid_df<- merge(myeloid_df,scores[,!grepl("Max", colnames(scores))], by=0 )
+rownames(myeloid_df)<- myeloid_df$Row.names; myeloid_df$Row.names<- NULL
+
+
+myeloid_df$MgMoMonocyte_annot<- factor(myeloid_df$MgMoMonocyte_annot, 
+                                          levels=c("Adult_prol_TAM", "Adult_Monocytes", "Adult_Mg_TAM", "Adult_Mo_TAM"))
+
+## Plot each nmf program
+all_plots<- list()
+programs<- as.character(unique(myeloid_seurat@meta.data[[paste0("NMF_rank", rank_use, "_annot")]]))
+for(i in programs){
+  df<- myeloid_df[,c(as.character(i), "MgMoMonocyte_annot")]
+  colnames(df)<- c("score", "CellType")
+  p<-ggplot(df, aes(x=score, fill=CellType))+
+    geom_density(alpha=0.6)+
+    ggtitle(i)+
+    scale_fill_manual(values=colors_use)+
+    theme_classic()+
+    theme(legend.title = element_blank(),
+          legend.position = "none",
+          plot.title = element_text(size=20, face="bold", hjust=0.5))
+
+  all_plots[[i]]<-p
+}
+
+## add legend separately
+legend<-ggplot(df, aes(x=score, fill=CellType))+
+    geom_density(alpha=0.6)+
+    ggtitle(i)+
+    scale_fill_manual(values=colors_use)+
+    theme_classic()+
+    theme(legend.title = element_blank(),
+          legend.key.size = unit(1.5, 'cm'),
+          legend.text = element_text(size=20))
+all_plots$legend<-  as_ggplot(get_legend(legend))
+#all_plots<- all_plots[c(1:5,13,6:12)]
+cowplot::plot_grid(plotlist = all_plots, ncol=5)
+
+ggsave(paste0(figure_dir, "scoreTenX_DensityOfNMFByMgMoMonocytes_rank", rank_use,".pdf"), device="pdf", width=20, height=8)
+
+## KS test comparing Mg vs Mo for each program (not sure if you can do a 3 variable test with KS?)
+sapply(colnames(myeloid_df)[4:ncol(myeloid_df)], function(x){
+  print(x)
+  ks.test(myeloid_df[,x][myeloid_df$MgMoMonocyte_annot=="Adult_Mg_TAM"],
+        myeloid_df[,x][myeloid_df$MgMoMonocyte_annot=="Adult_Mo_TAM"])
+})
+
+if(rank_use==13){
+  saveRDS(myeloid_seurat, "analysis/manual_broad_annot/myeloid_seurat_removeAC.byNMF.Rds")
+}else{
+  saveRDS(myeloid_seurat, "analysis/manual_broad_annot/myeloid_seurat.Rds")
+}
+
+```
+
+## Density plots by mg/mo/monocyte tam score
+Score Full cohort SS2
+```{r}
+colors_use<- c(Adult_Monocytes="turquoise3", Adult_Mg_TAM="blue", Adult_Mo_TAM="red")
+
+## Read in scores for programs
+scores<- ss2_scores
+programs<- colnames(scores)
+scores$MaxProgram<- apply(scores,1, function(x){names(x)[which.max(x)]})
+
+
+## Create df for plotting
+myeloid_df<-full_myeloid_seurat@meta.data[,c("sample", "MgMoMonocyte_annot")]
+myeloid_df<- merge(myeloid_df,scores, by=0 )
+rownames(myeloid_df)<- myeloid_df$Row.names; myeloid_df$Row.names<- NULL
+
+
+myeloid_df$MgMoMonocyte_annot<- factor(myeloid_df$MgMoMonocyte_annot, 
+                                          levels=c("Adult_prol_TAM", "Adult_Monocytes", "Adult_Mg_TAM", "Adult_Mo_TAM"))
+
+## Plot each nmf program
+all_plots<- list()
+programs<- as.character(unique(myeloid_df$MaxProgram))
+for(i in programs){
+  df<- myeloid_df[,c(as.character(i), "MgMoMonocyte_annot")]
+  colnames(df)<- c("score", "CellType")
+  p<-ggplot(df, aes(x=score, fill=CellType))+
+    geom_density(alpha=0.6)+
+    ggtitle(i)+
+    scale_fill_manual(values=colors_use)+
+    theme_classic()+
+    theme(legend.title = element_blank(),
+          legend.position = "none",
+          plot.title = element_text(size=20, face="bold", hjust=0.5))
+
+  all_plots[[i]]<-p
+}
+
+## add legend separately
+legend<-ggplot(df, aes(x=score, fill=CellType))+
+    geom_density(alpha=0.6)+
+    ggtitle(i)+
+    scale_fill_manual(values=colors_use)+
+    theme_classic()+
+    theme(legend.title = element_blank(),
+          legend.key.size = unit(1.5, 'cm'),
+          legend.text = element_text(size=20))
+all_plots$legend<-  as_ggplot(get_legend(legend))
+#all_plots<- all_plots[c(1:5,13,6:12)]
+cowplot::plot_grid(plotlist = all_plots, ncol=5)
+
+ggsave(paste0(figure_dir, "scoreSS2_DensityOfNMFByMgMoMonocytes_rank", rank_use,".pdf"), device="pdf", width=20, height=8)
+
+## KS test comparing Mg vs Mo for each program (not sure if you can do a 3 variable test with KS?)
+sapply(colnames(myeloid_df)[4:ncol(myeloid_df)], function(x){
+  print(x)
+  ks.test(myeloid_df[,x][myeloid_df$MgMoMonocyte_annot=="Adult_Mg_TAM"],
+        myeloid_df[,x][myeloid_df$MgMoMonocyte_annot=="Adult_Mo_TAM"])
+})
+
+
+```

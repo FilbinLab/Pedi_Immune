@@ -1,0 +1,486 @@
+---
+title: "ProjectBroadAnnots.Rmd"
+author: "Jenna LaBelle"
+date: "10/07/22"
+output: html_document
+---
+
+## Expression patterns of various genes of interest acros PD1 treated samples/untreated GBM
+
+```{r}
+library(Seurat) 
+library(ggplot2)
+library(ggpubr)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/PD1_Treat/02_Merge_SS2.tenX/")
+
+analysis_dir<- paste0(working_dir, "/analysis/clonal_analysis/")
+figure_dir<- paste0(working_dir, "/figures/clonal_analysis/")
+data_dir<- "analysis/Merge/"
+full_cohort_dir<- "../../ImmuneCellAnalysis/"
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+source(paste0(base_dir, script_dir, "seurat_transferAnchors_helper.R"))
+
+```
+
+
+## Load seurat objects, colors, tcr info
+```{r}
+## Load in tenx/ss2 merged seurat objects
+files<- list.files(data_dir)
+files<- files[!grepl("myeloid", files)]
+seurat_list<- lapply(files, function(f){
+   readRDS(paste0(data_dir, f))
+})
+names(seurat_list)<- gsub("_seurat.Rds", "", files)
+
+## Colors 
+tcell_colors<- readRDS(paste0(full_cohort_dir, "/plot_colors/Tcell.programs_rank8sharedByunion_reAnnot.Rds"))
+myeloid_colors<- readRDS(paste0(full_cohort_dir, "/plot_colors/Myeloid_program_colors.Rds"))
+myeloid_colors<- myeloid_colors$rank6
+immune_colors<- c(tcell_colors, myeloid_colors)
+colors_treatment<- c(PD1="orange", Untreated="purple")
+
+## tenx/ss2 clonal info named differently- fix
+seurat_list<- lapply(seurat_list, function(x){
+  x$clonal_group<- ifelse(x$Sequencing=="TenX", x$raw_clonotype_id, x$clonal_group)
+  x$group_size<- ifelse(x$Sequencing=="TenX", x$clonotype_size, x$group_size)
+  x$tcr_reconstructed<- ifelse(x$Sequencing=="TenX", ifelse(is.na(x$clonotype_size), "No", "Yes"), x$tcr_reconstructed)
+  
+  ## sometimes NA is character, sometimes it's special- change so that all are character
+  x$clonal<- ifelse(is.na(x$clonal), "NA", x$clonal)
+  x$clonal_group<- ifelse(is.na(x$clonal_group), "NA", x$clonal_group)
+  x$group_size<- ifelse(is.na(x$group_size), "NA", x$group_size)
+  
+  ## if tcr is reconstructed but group size =1 or NA: reassign as nonclonal
+  x$clonal<- ifelse( (is.na(x$group_size) | x$group_size==1 | x$group_size=="NA") & x$tcr_reconstructed=="Yes", "nonclonal", x$clonal)
+  
+  ## if tcr was not reconstructed- reassign clonal as NA
+  x$clonal<- ifelse(x$tcr_reconstructed=="No", "NA", x$clonal)
+  
+  ## if tcr was reconstructed but group size is NA- reassign to 1
+  x$group_size<- ifelse(x$tcr_reconstructed=="Yes" & x$group_size=="NA", 1, x$group_size)
+  
+  return(x)
+})
+
+## TEMPORARY MEASURE: BT1857 tenx does not have clonality info added. Add manually here- note that once untreated 10x analysis is rerun/organized, will be added at that time and this chunk can be deleted
+bt1857TenX_dir<-"../..//ImmuneCellAnalysis/tenX/Immune/BT1857/data/VDJ/multi/per_sample_outs/BT1857/vdj_t/"
+tcr<- read.csv(paste0(bt1857TenX_dir, "filtered_contig_annotations.csv"))
+tcr$sample<- "BT1857_TenX"
+tcr$barcode<- gsub("_", "-", tcr$barcode)
+tcr$barcode<- paste0( "BT1857_TenX_",  tcr$barcode)
+c_size<- as.data.frame(table(tcr$raw_clonotype_id))
+
+
+  seurat_list<- lapply(seurat_list, function(seurat){
+    seurat$clonal_group<- ifelse(seurat$sample=="BT1857_TenX",
+                                 ifelse(paste0("BT1857_TenX_", colnames(seurat)) %in% tcr$barcode,
+                                        as.character(plyr::mapvalues(paste0("BT1857_TenX_", colnames(seurat)),
+                                                                     tcr$barcode, tcr$raw_clonotype_id, warn_missing = FALSE)),"NA"),
+                                 seurat$clonal_group)
+    
+    seurat$group_size<- ifelse(seurat$sample=="BT1857_TenX",
+                               as.character(plyr::mapvalues(seurat$clonal_group, c_size$Var1, c_size$Freq, warn_missing = FALSE)),
+                               seurat$group_size)
+    
+    seurat$tcr_reconstructed<- ifelse(seurat$sample=="BT1857_TenX",
+                                      ifelse(paste0("BT1857_TenX_", colnames(seurat)) %in% tcr$barcode,
+                                             "Yes", "No"),
+                                      seurat$tcr_reconstructed)
+    seurat$clonal<- ifelse(seurat$sample=="BT1857_TenX",
+                           ifelse(seurat$group_size>1 & seurat$group_size!="NA", "clonal",
+                                  ifelse(seurat$group_size=="NA", "NA",
+                                         ifelse(seurat$group_size==1, "nonclonal", "issue"))),
+                           seurat$clonal)
+    return(seurat)
+    
+    
+  })
+```
+
+## Percentage of clonally expanded T cells in treated vs untreated
+separate for 10x/ss2
+```{r}
+ss2_list<- lapply(seurat_list, function(x){subset(x, Sequencing=="SS2")})
+tenx_list<- lapply(seurat_list, function(x){subset(x, Sequencing=="TenX")})
+
+## SS2
+all_plots<- lapply(names(ss2_list), function(celltype){
+  seurat<- ss2_list[[celltype]]
+  clonal_meta<- seurat@meta.data[,c("clonal", "tcr_reconstructed", "clonal_group", "group_size", "Treatment", "sample")]
+  
+  ## subset to cells with tcr reconstructed
+  clonal_meta<- clonal_meta[clonal_meta$tcr_reconstructed=="Yes",]
+  
+  ## proportion of clonal for treated/untreated
+  clonal_prop<- as.data.frame(table(clonal_meta$sample, clonal_meta$clonal))
+  colnames(clonal_prop)<- c("Sample", "Clonal", "NCells")
+  clonal_prop<- clonal_prop %>% group_by(Sample) %>% mutate(PerCells=NCells/sum(NCells)) %>% as.data.frame()
+  clonal_prop$Treatment<-as.character(plyr::mapvalues(clonal_prop$Sample, clonal_meta$sample, clonal_meta$Treatment, warn_missing = FALSE))
+  clonal_prop$Treatment<- factor(clonal_prop$Treatment, levels=c("Untreated", "PD1"))
+  
+  ggplot(clonal_prop, aes(x=Sample, y=PerCells, fill=Clonal))+
+    geom_bar(stat="identity")+
+    scale_fill_manual(values=c(clonal="orange", nonclonal="navy"))+
+    theme_classic()+
+    ggtitle(celltype)+
+    theme(axis.text = element_text(face="bold", color="black"),
+          strip.text = element_text(face="bold", color="black"),
+          axis.text.x = element_text(angle=45, hjust=1))+
+    facet_grid(cols=vars(Treatment), space="free", scale="free")+
+    xlab("")+ylab("Proportion of clonally expanded T cells")
+  
+})
+cowplot::plot_grid(plotlist = all_plots, ncol=2)
+ggsave(paste0(figure_dir,"barchart_SS2_proportionClonallExpanded.png"), width=8, height=3)
+
+## TenX
+all_plots<- lapply(names(tenx_list), function(celltype){
+  seurat<- tenx_list[[celltype]]
+  clonal_meta<- seurat@meta.data[,c("clonal", "tcr_reconstructed", "clonal_group", "group_size", "Treatment", "sample")]
+  
+  ## subset to cells with tcr reconstructed
+  clonal_meta<- clonal_meta[clonal_meta$tcr_reconstructed=="Yes",]
+  
+  ## proportion of clonal for treated/untreated
+  clonal_prop<- as.data.frame(table(clonal_meta$sample, clonal_meta$clonal))
+  colnames(clonal_prop)<- c("Sample", "Clonal", "NCells")
+  clonal_prop<- clonal_prop %>% group_by(Sample) %>% mutate(PerCells=NCells/sum(NCells)) %>% as.data.frame()
+  clonal_prop$Treatment<-as.character(plyr::mapvalues(clonal_prop$Sample, clonal_meta$sample, clonal_meta$Treatment, warn_missing = FALSE))
+  clonal_prop$Treatment<- factor(clonal_prop$Treatment, levels=c("Untreated", "PD1"))
+  
+  ggplot(clonal_prop, aes(x=Sample, y=PerCells, fill=Clonal))+
+    geom_bar(stat="identity")+
+    scale_fill_manual(values=c(clonal="orange", nonclonal="navy"))+
+    theme_classic()+
+    ggtitle(celltype)+
+    theme(axis.text = element_text(face="bold", color="black"),
+          strip.text = element_text(face="bold", color="black"),
+          axis.text.x = element_text(angle=45, hjust=1))+
+    facet_grid(cols=vars(Treatment), space="free", scale="free")+
+    xlab("")+ylab("Proportion of clonally expanded T cells")
+  
+})
+cowplot::plot_grid(plotlist = all_plots, ncol=2)
+ggsave(paste0(figure_dir,"barchart_TenX_proportionClonallExpanded.png"), width=8, height=3)
+```
+
+## clonal group size by treatment
+only for tenx- really not enough cells for ss2
+```{r}
+tenx_list<- lapply(seurat_list, function(x){subset(x, Sequencing=="TenX")})
+
+## tenx- boxplot
+all_plots<- lapply(names(tenx_list), function(celltype){
+  seurat<- tenx_list[[celltype]]
+  clonal_meta<- seurat@meta.data[,c("clonal", "tcr_reconstructed", "clonal_group", "group_size", "Treatment", "sample")]
+  
+  ## subset to cells with tcr reconstructed
+  clonal_meta<- clonal_meta[clonal_meta$tcr_reconstructed=="Yes",]
+  clonal_meta$group_size<- as.numeric(clonal_meta$group_size)
+
+  clonal_meta$Treatment<- factor(clonal_meta$Treatment, levels=c("Untreated", "PD1"))  
+  ggplot(clonal_meta, aes(x=Treatment, y=log(group_size), fill=Treatment))+
+    geom_boxplot(outlier.size=0)+
+    geom_jitter(width=0.1, size=0.1)+
+    scale_fill_manual(values=colors_treatment)+
+    stat_compare_means(method="t.test")+
+    theme_classic()+
+    ggtitle(celltype)+
+    theme(axis.text = element_text(face="bold", color="black"),
+          strip.text = element_text(face="bold", color="black"),
+          axis.text.x = element_text(angle=45, hjust=1))
+  
+})
+cowplot::plot_grid(plotlist = all_plots, ncol=2)
+ggsave(paste0(figure_dir,"boxplot_TenX_groupSize.png"), width=8, height=4)
+
+## Barchart by binned group size
+
+all_plots<- lapply(names(tenx_list), function(celltype){
+  seurat<- tenx_list[[celltype]]
+  clonal_meta<- seurat@meta.data[,c("clonal", "tcr_reconstructed", "clonal_group", "group_size", "Treatment", "sample")]
+  
+  ## subset to cells with tcr reconstructed
+  clonal_meta<- clonal_meta[clonal_meta$tcr_reconstructed=="Yes",]
+  clonal_meta$group_size<- as.numeric(clonal_meta$group_size)
+  
+  clonal_meta<- clonal_meta %>% mutate(size_bin = cut(group_size, breaks=c(0, 2, 5, 10, 15, 20,50,75, max(clonal_meta$group_size))))
+  clonal_meta$firstNumber<- as.numeric(gsub("\\(", "", gsub(",.*", "", as.character(clonal_meta$size_bin))))
+  clonal_meta$size_bin<- gsub("\\(", "", gsub(",", "-", gsub("]", "", clonal_meta$size_bin)))
+  bin_size_order<- clonal_meta$size_bin; names(bin_size_order)<- clonal_meta$firstNumber
+  clonal_meta$size_bin<- factor(clonal_meta$size_bin, levels=unique(clonal_meta$size_bin[order(clonal_meta$firstNumber)] ))
+  clonal_meta$Treatment<- factor(clonal_meta$Treatment, levels=c("Untreated", "PD1"))  
+  
+  ## number of cells in each bin
+  clonal_prop<- as.data.frame(table(clonal_meta$Treatment, clonal_meta$size_bin))
+  colnames(clonal_prop)<- c("Treatment", "SizeBin", "NCells")
+  clonal_prop<- clonal_prop %>% group_by(Treatment) %>% mutate(PerCells=NCells/sum(NCells)) %>% as.data.frame()
+
+
+  ggplot(clonal_prop, aes(x=Treatment, y=PerCells, fill=rev(SizeBin)))+
+    geom_bar(stat="identity")
+    geom_jitter(width=0.1, size=0.1)+
+    scale_fill_manual(values=colors_treatment)+
+    stat_compare_means(method="t.test")+
+    theme_classic()+
+    ggtitle(celltype)+
+    theme(axis.text = element_text(face="bold", color="black"),
+          strip.text = element_text(face="bold", color="black"),
+          axis.text.x = element_text(angle=45, hjust=1))
+  
+})
+cowplot::plot_grid(plotlist = all_plots, ncol=2)
+ggsave(paste0(figure_dir,"boxplot_TenX_groupSize.png"), width=8, height=3)
+```
+
+## Vln of clone size 
+```{r}
+ss2_list<- lapply(seurat_list, function(x){subset(x, Sequencing=="SS2")})
+tenx_list<- lapply(seurat_list, function(x){subset(x, Sequencing=="TenX")})
+
+## Tenx- by treatment
+all_plots<- lapply(c("cd4", "cd8"), function(celltype){
+  seurat<- tenx_list[[celltype]]
+  seurat<- subset(seurat, group_size != "NA")
+  seurat$group_size<- as.numeric(seurat$group_size)
+  VlnPlot(seurat, group.by = "Treatment", features="group_size", sort=TRUE)+NoLegend()+
+    scale_fill_manual(values=colors_treatment)+
+    ggtitle(paste0("Group size: ", celltype))+
+    xlab("")+ ylab("clonotype group size")
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=1)
+ggsave(paste0(figure_dir, "Vln_clonotypeSize_byTreatment_TenX.png"), width=4, height=8)
+
+## Tenx- by program
+all_plots<- lapply(c("cd4", "cd8"), function(celltype){
+  seurat<- tenx_list[[celltype]]
+  seurat<- subset(seurat, group_size != "NA")
+  seurat$group_size<- as.numeric(seurat$group_size)
+  VlnPlot(seurat, group.by = "Program_projected", features="group_size", sort=TRUE)+NoLegend()+
+    scale_fill_manual(values=immune_colors)+
+    ggtitle(paste0("Group size: ", celltype))+
+    xlab("")+ ylab("clonotype group size")
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=1)
+ggsave(paste0(figure_dir, "Vln_clonotypeSize_byProgram_TenX.png"), width=6, height=8)
+
+## tenx- by program, treated/untreated separately
+all_plots<- lapply(c("cd4", "cd8"), function(celltype){
+  seurat<- tenx_list[[celltype]]
+  seurat<- subset(seurat, group_size != "NA")
+  seurat$group_size<- as.numeric(seurat$group_size)
+  p1<- VlnPlot(subset(seurat, Treatment=="Untreated"), group.by = "Program_projected", features="group_size", sort=TRUE)+NoLegend()+
+    scale_fill_manual(values=immune_colors)+
+    ggtitle(paste0("Untreated Group size: ", celltype))+
+    xlab("")+ ylab("clonotype group size")
+  
+  p2<- VlnPlot(subset(seurat, Treatment=="PD1"), group.by = "Program_projected", features="group_size", sort=TRUE)+NoLegend()+
+    scale_fill_manual(values=immune_colors)+
+    ggtitle(paste0("PD1 Group size: ", celltype))+
+    xlab("")+ ylab("clonotype group size")
+  p1+p2
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=2)
+ggsave(paste0(figure_dir, "Vln_clonotypeSize_byProgram.Treatment_TenX.png"), width=12, height=8)
+
+## tenx- by program, treated/untreated separately, normalized by program size
+all_plots<- lapply(c("cd4", "cd8"), function(celltype){
+  seurat<- tenx_list[[celltype]]
+  seurat<- subset(seurat, group_size != "NA")
+  seurat$group_size<- as.numeric(seurat$group_size)
+  
+  ## Normalize by size of program
+  nCells_program<- as.data.frame(table(seurat$Program_projected))
+  seurat$NCells<- as.numeric(as.character(plyr::mapvalues(seurat$Program_projected, 
+                                                              nCells_program$Var1, nCells_program$Freq, warn_missing = FALSE)))
+  seurat$group_size_norm<- seurat$group_size / seurat$NCells * 1000
+  
+  p1<- VlnPlot(subset(seurat, Treatment=="Untreated"), group.by = "Program_projected", features="group_size_norm", sort=TRUE)+NoLegend()+
+    scale_fill_manual(values=immune_colors)+
+    ggtitle(paste0("Untreated Group size: ", celltype))+
+    xlab("")+ ylab("clonotype group size")
+  
+  p2<- VlnPlot(subset(seurat, Treatment=="PD1"), group.by = "Program_projected", features="group_size_norm", sort=TRUE)+NoLegend()+
+    scale_fill_manual(values=immune_colors)+
+    ggtitle(paste0("PD1 Group size: ", celltype))+
+    xlab("")+ ylab("clonotype group size")
+  p1+p2
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=2)
+ggsave(paste0(figure_dir, "Vln_clonotypeSizeNorm_byProgram.Treatment_TenX.png"), width=12, height=8)
+
+
+
+
+## SS2- by treatment
+all_plots<- lapply(c("cd4", "cd8"), function(celltype){
+  seurat<- ss2_list[[celltype]]
+  seurat<- subset(seurat, group_size != "NA")
+  seurat$group_size<- as.numeric(seurat$group_size)
+  VlnPlot(seurat, group.by = "Treatment", features="group_size", sort=TRUE)+NoLegend()+
+    scale_fill_manual(values=colors_treatment)+
+    ggtitle(paste0("Group size: ", celltype))+
+    xlab("")+ ylab("clonotype group size")
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=1)
+ggsave(paste0(figure_dir, "Vln_clonotypeSize_byTreatment_SS2.png"), width=4, height=8)
+
+## ss2- by program
+all_plots<- lapply(c("cd4", "cd8"), function(celltype){
+  seurat<- ss2_list[[celltype]]
+  seurat<- subset(seurat, group_size != "NA")
+  seurat$group_size<- as.numeric(seurat$group_size)
+  VlnPlot(seurat, group.by = "Program_projected", features="group_size", sort=TRUE)+NoLegend()+
+    scale_fill_manual(values=immune_colors)+
+    ggtitle(paste0("Group size: ", celltype))+
+    xlab("")+ ylab("clonotype group size")
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=1)
+ggsave(paste0(figure_dir, "Vln_clonotypeSize_byProgram_SS2.png"), width=6, height=8)
+
+## SS2- by program, treated/untreated separately
+all_plots<- lapply(c("cd4", "cd8"), function(celltype){
+  seurat<- ss2_list[[celltype]]
+  seurat<- subset(seurat, group_size != "NA")
+  seurat$group_size<- as.numeric(seurat$group_size)
+  p1<- VlnPlot(subset(seurat, Treatment=="Untreated"), group.by = "Program_projected", features="group_size", sort=TRUE)+NoLegend()+
+    scale_fill_manual(values=immune_colors)+
+    ggtitle(paste0("Untreated Group size: ", celltype))+
+    xlab("")+ ylab("clonotype group size")
+  
+  p2<- VlnPlot(subset(seurat, Treatment=="PD1"), group.by = "Program_projected", features="group_size", sort=TRUE)+NoLegend()+
+    scale_fill_manual(values=immune_colors)+
+    ggtitle(paste0("PD1 Group size: ", celltype))+
+    xlab("")+ ylab("clonotype group size")
+  p1+p2
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=2)
+ggsave(paste0(figure_dir, "Vln_clonotypeSize_byProgram.Treatment_SS2.png"), width=12, height=8)
+```
+
+
+NOT RUN
+## Plot group size of clonotype (including clones where n=1; i.e., TCR reconstructed but not expanded) in a histogram
+```{r}
+seurat_list<- seurat_list
+
+## Plot clonotype sizes (raw)
+all_plots<- lapply(seurat_list, function(seurat){
+  meta<- seurat@meta.data
+  
+  ## Subset to cells with TCR
+  meta<- meta[meta$tcr_reconstructed=="Yes",]
+  meta$group_size<- as.numeric(meta$group_size)
+  
+  ## Plot in hist, by treatment
+  ggplot(meta, aes(x=group_size, fill=Treatment))+
+    geom_histogram(bins=4)+
+    ggtitle(unique(meta$detailed_annot))+
+    theme_bw()+
+    scale_fill_manual(values=colors_treatment)+
+    xlab("Clonotype size")
+})
+cowplot::plot_grid(plotlist=all_plots)
+
+## Plot clonotype sizes as a proportion of total TCRs
+## % of all TCRs with clonotype size 1, etc
+all_plots<- lapply(seurat_list, function(seurat){
+  meta<- seurat@meta.data
+  
+  ## Subset to cells with TCR
+  meta<- meta[meta$tcr_reconstructed=="Yes",]
+
+  ## Get number/proportion of all cells (with TCR) in each clonotype size
+  meta$group_size<- as.numeric(meta$group_size)
+  bd<- as.data.frame(table(meta$group_size, meta$Treatment))
+  colnames(bd)<- c("ClonotypeSize", "Treatment", "NumberCells")
+  bd<- bd %>% group_by(Treatment) %>% mutate(PerCells=NumberCells/sum(NumberCells)) %>% as.data.frame()
+  
+  ## Plot
+  ggplot(bd, aes(x=ClonotypeSize, y=PerCells, fill=Treatment))+
+    geom_bar(stat="identity")+
+    theme_bw()+
+    xlab("Clonotype size")+
+    ylab("Percentage of cells in clonotype size")+
+    scale_fill_manual(values=colors_treatment)+
+    ggtitle(unique(meta$detailed_annot))
+})
+cowplot::plot_grid(plotlist=all_plots)
+
+## Boxplot of clonotype size by program
+all_plots<- lapply(seurat_list, function(seurat){
+  meta<- seurat@meta.data
+  
+  ## Subset to cells with TCR
+  meta<- meta[meta$tcr_reconstructed=="Yes",]
+  meta$group_size<- as.numeric(meta$group_size)
+  
+
+  ## Plot
+  ggplot(meta, aes(x=Program_projected, y=group_size, fill=Treatment))+
+    #geom_boxplot()+
+    geom_bar(stat="identity", position="dodge")+
+    theme_bw()+
+    xlab("Clonotype size")+
+    ylab("Percentage of cells in clonotype size")+
+    scale_fill_manual(values=colors_treatment)+
+    ggtitle(unique(meta$detailed_annot))
+})
+cowplot::plot_grid(plotlist=all_plots)
+```
+
+```{r}
+
+  
+## TCR data- load for PD1, BT1857, BT1478, 10X (treated and untreated)
+  ## SmartSeq2
+  ## BT1857 and BT1478 data load separately bc the latter processed by Orr, former by me/Li
+    ## PD1- raw cell_data.csv from tracer available
+    pd1_tcr_dir<- "../SS2/Immune/data/tracer_output/"
+    pd1_tcr_samples<- list.files(pd1_tcr_dir)
+    all_tcr<- lapply(pd1_tcr_samples, function(sample){
+      tmp<- read.csv(paste0(pd1_tcr_dir, sample, "/cell_data.csv"))
+      tmp$sample<- sample
+      return(tmp)
+    })
+    pd1_tcr<- do.call(rbind, all_tcr)
+    
+    ## BT1478 (whole cohort, subset to just this sample)
+    fullCohort_tcr_dir<-"../../ImmuneCellAnalysis/data/data_fromOrr"
+    load(paste0(working_dir, fullCohort_tcr_dir, "2020_12_10_clonalTcells_cluster.Rda"))
+    bt1478_cells_with_tcr<- tcell.reconstructed$BT1478
+    bt1478_clonotypes<- clonotypes.all[clonotypes.all$experiment=="BT1478",]
+    rm(clonal); rm(clonotypes.all); rm(gcdata); rm(clonotypes.cells)
+    
+    ## BT1857- raw cell_data.csv from tracer available
+    newSamples_tcr_dir<- "../../ImmuneCellAnalysis/01_Preprocessing/01_Tracer_Preprocess/data/BT1857/output/filtered_TCRAB_summary/"
+    bt1857_tcr<- read.csv(paste0(newSamples_tcr_dir, "cell_data.csv"))
+    bt1857_tcr$sample<- "BT1857"
+    
+   ## Add BT1857/pd1 TCR info together + subset to "productive" TCRs (either A or B is not "")
+    pd1_bt1857_tcr<- rbind(pd1_tcr, bt1857_tcr)
+    rownames(pd1_bt1857_tcr)<- pd1_bt1857_tcr$cell_name
+    pd1_bt1857_tcr<-pd1_bt1857_tcr[pd1_bt1857_tcr$A_productive != "" | pd1_bt1857_tcr$B_productive != "",]
+    pd1_bt1857_tcr<- pd1_bt1857_tcr[,c("clonal_group", "group_size")]
+    rownames(pd1_bt1857_tcr)<- gsub( "_", "\\.",rownames(pd1_bt1857_tcr))
+  
+  ## tenX
+  pd1_tenx_tcr<- read.csv("../tenX/data/multi/per_sample_outs/BT2062/vdj_t/filtered_contig_annotations.csv")
+  bt1857_tenx_tcr<- read.csv("../../ImmuneCellAnalysis/tenX/unTreatedAlone/data/VDJ/multi/per_sample_outs/BT1857/vdj_t/filtered_contig_annotations.csv")
+  pd1_tenx_tcr$raw_clonotype_id_sample<- paste0("BT2062_", pd1_tenx_tcr$raw_clonotype_id)
+  bt1857_tenx_tcr$raw_clonotype_id_sample<- paste0("BT1857_", bt1857_tenx_tcr$raw_clonotype_id)
+  tenx_tcr<- rbind(pd1_tenx_tcr, bt1857_tenx_tcr)
+```

@@ -1,0 +1,122 @@
+---
+title: "Merge all tenx GBM"
+output: html_document
+---
+
+## Merge all GBM tenx seurat objects, both pd1 and untreated
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(harmony)
+
+base_dir = "/Users/jlabelle/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/PD1_Treat/01b_tenX/")
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/Scripts/"
+
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+source(paste0(base_dir, script_dir, "seurat_transferAnchors_helper.R"))
+
+
+analysis_dir<- "analysis/Merge/"
+figure_dir<- "figures/Merge/"
+full_dir<- "../../ImmuneCellAnalysis/"
+
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+
+```
+
+
+## Load in seurat objects
+```{r}
+## untreated (need to run these lines from terminal?)
+## note- going to rerun bt1857 processing with other 2 (non-gbm) 10x untreated samples. so this will change slightly and will need to be rerun
+ut_myeloid<- readRDS(paste0(full_dir, "tenX/Immune/BT1857/analysis/project_broad.detailed_annot/myeloid_tenx_noDC.B_seurat.Rds"))
+ut_cd4<- readRDS(paste0(full_dir, "tenX/Immune/BT1857/analysis/project_broad.detailed_annot/cd4_tenx_seurat.Rds"))
+ut_cd8<- readRDS(paste0(full_dir, "tenX/Immune/BT1857/analysis/project_broad.detailed_annot/cd8_tenx_seurat.Rds"))
+
+  ## fix ut seurat objects- should be able to delete once untreated 10x analysis is rerun
+  ut_myeloid$sample<- "BT1857"; ut_cd4$sample<- "BT1857"; ut_cd8$sample<- "BT1857"
+
+
+##  treated
+pd1_myeloid<- readRDS("analysis/project_broad.detailed_annot/myeloid_noDC.B_seurat.Rds")
+pd1_cd8<- readRDS("analysis/project_broad.detailed_annot/cd8_seurat.Rds")
+pd1_cd4<- readRDS("analysis/project_broad.detailed_annot/cd4_seurat.Rds")
+
+## Set colors
+colors_treatment<- c(PD1="orange", Untreated="purple")
+colors_samples<-c( BT1857="skyblue", BT2062="gold", BT2080="salmon")
+```
+
+
+
+## Merge 
+```{r}
+## Add treatment info
+ut_myeloid$Treatment<- "Untreated"; ut_cd8$Treatment<- "Untreated"; ut_cd4$Treatment<- "Untreated"
+pd1_myeloid$Treatment<- "PD1"; pd1_cd8$Treatment<- "PD1"; pd1_cd4$Treatment<- "PD1"
+
+## Add annotation column (named same way for merging)
+pd1_cd4$detailed_annot<- pd1_cd4$detailed_annot_projected_manual
+pd1_cd8$detailed_annot<- pd1_cd8$detailed_annot_projected_manual
+pd1_myeloid$detailed_annot<- pd1_myeloid$detailed_annot_projected_manual
+
+
+
+## Merge and rerun clustering- with harmony integration
+tenx_myeloid<-my_mergeRerunClustering(ut_myeloid, pd1_myeloid, Integration="Harmony")
+tenx_cd4<-my_mergeRerunClustering(ut_cd4, pd1_cd4, Integration="Harmony")
+tenx_cd8<-my_mergeRerunClustering(ut_cd8, pd1_cd8, Integration="Harmony")
+
+saveRDS(tenx_myeloid, file=paste0(analysis_dir, "myeloid_seurat.Rds"))
+saveRDS(tenx_cd4, file=paste0(analysis_dir, "cd4_seurat.Rds"))
+saveRDS(tenx_cd8, file=paste0(analysis_dir, "cd8_seurat.Rds"))
+```
+
+
+
+## Plot tenx by sample/treatment
+```{r}
+files<- list.files(analysis_dir)
+all_seurat<- lapply(files, function(f){
+   readRDS(paste0(analysis_dir, f))
+})
+names(all_seurat)<- gsub("_seurat.Rds", "", files)
+
+
+## Plot by treatment
+all_plots<- lapply(names(all_seurat), function(x){
+  seurat_tmp<- all_seurat[[x]]
+  DimPlot(seurat_tmp, group.by = "Treatment")+scale_color_manual(values=colors_treatment)+ggtitle(x)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "UMAP_Harmony_Treatment.png"), width=18, height=6)
+
+## bar plot by treatment
+all_plots<- lapply(names(all_seurat), function(x){
+  seurat_tmp<- all_seurat[[x]]
+  my_barchart_programProp(seurat_tmp, grouping_variable = "Treatment", coloring_variable = "Treatment", 
+                          colors = colors_treatment, number_or_proportion = "number")+ggtitle(x)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "NumberCells_perTreatment.png"), width=7, height=3)
+
+## Plot by sample
+all_plots<- lapply(names(all_seurat), function(x){
+  seurat_tmp<- all_seurat[[x]]
+  DimPlot(seurat_tmp, group.by = "sample")+scale_color_manual(values=colors_samples[names(colors_samples) %in% unique(seurat_tmp$sample)])+
+    ggtitle(x)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "UMAP_sample.png"), width=15, height=6)
+```
+
+
+
+

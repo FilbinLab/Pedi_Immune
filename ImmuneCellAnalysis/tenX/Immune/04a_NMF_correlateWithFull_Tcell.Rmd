@@ -1,0 +1,297 @@
+---
+title: "Compare de novo Tcell NMF to full cohort"
+author: "Jenna LaBelle"
+output: html_document
+---
+
+Correlate scores for de novo tcell 10X programs with programs from full cohort
+
+```{r}
+library(Seurat) 
+library(clusterProfiler)
+library(biomaRt)
+library(stringr)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/tenX/Immune/")
+
+analysis_dir<- paste0(working_dir, "/analysis/correlate_deNovo10X_fullCohort/Tcelsl/")
+figure_dir<- paste0(working_dir, "/figures/correlate_deNovo10X_fullCohort/Tcells/")
+data_dir <- paste0(working_dir, "analysis/nmf/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir,recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+
+```
+
+## Load in tenx seurat object and full cohort programs
+```{r}
+## Seurat- 10X
+tcell_seurat<- readRDS("analysis/manual_broad_annot/tcell_seurat.Rds")
+
+## Seurat- full cohort
+full_tcell_seurat<- readRDS(paste0("../../",
+                           "02a_Tcells/02_Ped.Adult/03_Visualize.Reannotate_programs/analysis/Reannotate_programs/rank8_sharedByunion/",
+                           "ped_seurat_tcell_harmony.Rds"))
+
+## Markers
+full_markers<-readRDS("../../02a_Tcells/02_Ped.Adult/01_compare_NMF/analysis/newMarkers_deNovoPed.AdultTcell/new_markers_NMFrank8_bySeurat_sharedByunion_reAnnot.Rds")
+
+## colors
+tcell_colors<- readRDS("../../plot_colors/Tcell.programs_rank8sharedByunion_reAnnot.Rds")
+
+```
+
+
+## Score 10x Tcellfor full cohort programs
+```{r}
+## norm/center 10x
+cm_list<- NormCenter(tcell_seurat@assays$RNA@counts)
+cm_mean<- row_means (log2(cm_list$raw_data + 1))
+
+## split full markers to list
+full_marker_list<- split(full_markers, f=full_markers$cluster)
+full_marker_list<- lapply(full_marker_list, function(x){x$gene})
+
+## score
+full_scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, full_marker_list)))
+  
+saveRDS(full_scores, file=paste0(analysis_dir, "tenx_scores_fullPrograms.Rds"))  
+```
+
+
+## Score SS2 for tcell/myeloid programs from full cohort
+Note that I've definitely done this previously.. but easier to just redo and know I have the right marker set. I'm great at this.
+```{r}
+## Tcell
+  ## norm/center 10x
+  cm_list_ss2<- NormCenter(full_tcell_seurat@assays$RNA@counts)
+  mean_ss2<- row_means (log2(cm_list_ss2$raw_data + 1))
+  
+  ## split full markers to list
+  full_marker_list<- split(full_markers, f=full_markers$cluster)
+  full_marker_list<- lapply(full_marker_list, function(x){x$gene})
+  
+  ## score
+  full_scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, mean, full_marker_list)))
+  
+saveRDS(full_scores, file=paste0(analysis_dir, "SS2_scores_fullPrograms.Rds"))  
+```
+
+## for each rank, load marker genes, score TENX for de novo 10x nmf, then correlate with full cohort
+```{r}
+analysis_dir_use<- paste0(analysis_dir, "Tcells/scoreTenX/")
+figure_dir_use<- paste0(figure_dir, "Tcells/scoreTenX/")
+for(i in c(analysis_dir_use, figure_dir_use)){if(!dir.exists(i)){dir.create(i)}}
+
+## Load scores for 10x for full program
+full_scores<- readRDS(paste0(analysis_dir, "tenx_scores_fullPrograms.Rds"))
+
+## For each rank- load in markers, score 10x tcells
+ranks<- 6:10
+denovo_scores<- lapply(ranks, function(r){
+  ## Load markers
+  markers<- read.csv(paste0(data_dir, "Tcell/top_DE_genes_NMF_rank", r, ".csv"))
+  
+  ## Split to list
+  markers<- split(markers, f=markers$cluster)
+  markers<- lapply(markers, function(x){x$gene})
+  names(markers)<- paste0("Denovo_NMF", names(markers))
+  
+  ## score
+  scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, markers)))
+  return(scores)
+  })
+names(denovo_scores)<- paste0("Denovo_NMF", ranks)
+
+## For each rank- Merge full scores + de novo scores, correlate
+for(r in ranks){
+  print(r)
+  denovo_scores<- denovo_scores[[paste0("Denovo_NMF", r)]]
+  scores<- cbind(denovo_scores, full_scores)
+  
+  ## NMF factor correlation based on cell score 
+  scores_factor_hc = clusterNmfFactors(scores)
+  scores_factor_cor = scores_factor_hc$cor_coef[scores_factor_hc$hc_obj$order, scores_factor_hc$hc_obj$order]
+  
+  ## Add on column for color
+  scores_factor_cor<- as.data.frame(scores_factor_cor)
+  scores_factor_cor$color<-gsub("_.*", "", rownames(scores_factor_cor))
+  scores_factor_cor$color<-ifelse(grepl("Denovo", scores_factor_cor$color), "red", "black")
+  
+  ## Heatmap of correlations
+  hm_colors = rev((brewer.pal(n=9, name="RdBu")))
+  hm_colors = colorRampPalette(colors = hm_colors)
+  
+  p<-pheatmap(scores_factor_cor[,colnames(scores_factor_cor) != "color"], color = hm_colors(100), 
+         cluster_rows = F, cluster_cols = F, 
+         annotation_names_row = F, annotation_names_col =T,
+         show_rownames = T, show_colnames = F,
+         #filename = paste0(figure_dir , "CorHeatmap.png"),
+         width = 10, height = 6)
+  
+  cols=scores_factor_cor[order(match(rownames(scores_factor_cor), p$gtable$grobs[[2]]$label)), ]$color
+  p$gtable$grobs[[2]]$gp=gpar(col=cols)
+  
+  png(filename=paste0(figure_dir_use, "Cor_DenovoRank", r, "_fullCohort.png"), width = 700, height = 400)
+  p
+  dev.off()
+  
+  ## Dendrogram of hierarchical clustering 
+  jpeg(filename=paste0(figure_dir_use, "HC_DenovoRank", r, "_fullCohort.png"), width = 400, height = 600)
+  plot(scores_factor_hc$hc_obj)
+  dev.off()
+  
+}
+```
+
+## for each rank, load marker genes, score SS2 for de novo 10x nmf, then correlate with full cohort
+```{r}
+analysis_dir_use<- paste0(analysis_dir, "Tcells/scoreSS2/")
+figure_dir_use<- paste0(figure_dir, "Tcells/scoreSS2/")
+for(i in c(analysis_dir_use, figure_dir_use)){if(!dir.exists(i)){dir.create(i)}}
+
+## Load scores for 10x for full program
+full_scores<- readRDS(paste0(analysis_dir, "ss2_scores_fullPrograms.Rds"))
+
+## For each rank- load in de novo 10x markers, score ss2 tcells
+ranks<- 6:10
+denovo_scores<- lapply(ranks, function(r){
+  ## Load markers
+  markers<- read.csv(paste0(data_dir, "Tcell/top_DE_genes_NMF_rank", r, ".csv"))
+  
+  ## Split to list
+  markers<- split(markers, f=markers$cluster)
+  markers<- lapply(markers, function(x){x$gene})
+  names(markers)<- paste0("Denovo_NMF", names(markers))
+  
+  ## score
+  scores<- as.data.frame(t(scoreNmfGenes(cm_list_ss2$center_data, mean_ss2, markers)))
+  return(scores)
+  })
+names(denovo_scores)<- paste0("Denovo_NMF", ranks)
+
+## For each rank- Merge full scores + de novo scores, correlate
+for(r in ranks){
+  print(r)
+  denovo_scores<- denovo_scores[[paste0("Denovo_NMF", r)]]
+  scores<- cbind(denovo_scores, full_scores)
+  
+  ## NMF factor correlation based on cell score 
+  scores_factor_hc = clusterNmfFactors(scores)
+  scores_factor_cor = scores_factor_hc$cor_coef[scores_factor_hc$hc_obj$order, scores_factor_hc$hc_obj$order]
+  
+  ## Add on column for color
+  scores_factor_cor<- as.data.frame(scores_factor_cor)
+  scores_factor_cor$color<-gsub("_.*", "", rownames(scores_factor_cor))
+  scores_factor_cor$color<-ifelse(grepl("Denovo", scores_factor_cor$color), "red", "black")
+  
+  ## Heatmap of correlations
+  hm_colors = rev((brewer.pal(n=9, name="RdBu")))
+  hm_colors = colorRampPalette(colors = hm_colors)
+  
+  p<-pheatmap(scores_factor_cor[,colnames(scores_factor_cor) != "color"], color = hm_colors(100), 
+         cluster_rows = F, cluster_cols = F, 
+         annotation_names_row = F, annotation_names_col =T,
+         show_rownames = T, show_colnames = F,
+         #filename = paste0(figure_dir , "CorHeatmap.png"),
+         width = 10, height = 6)
+  
+  cols=scores_factor_cor[order(match(rownames(scores_factor_cor), p$gtable$grobs[[2]]$label)), ]$color
+  p$gtable$grobs[[2]]$gp=gpar(col=cols)
+  
+  png(filename=paste0(figure_dir_use, "Cor_DenovoRank", r, "_fullCohort.png"), width = 700, height = 400)
+  p
+  dev.off()
+  
+  ## Dendrogram of hierarchical clustering 
+  jpeg(filename=paste0(figure_dir_use, "HC_DenovoRank", r, "_fullCohort.png"), width = 400, height = 600)
+  plot(scores_factor_hc$hc_obj)
+  dev.off()
+  
+}
+```
+
+## For ranks selected for follow up: annotate based on correlation with full cohort
+```{r}
+ranks<- 9:10
+
+## Assign annotations
+rank_annot<- list(NMF9=c("Stress", "Cycling", "Predysfunctional", "IFN.Response", "Cytotoxic.NKreceptor_Alt",
+                                 "Treg", "Memory", "Activated_EM", "Cytotoxic.NKreceptor"),
+                  NMF10=c("Cycling", "Stress", "Effector.Memory", "IFN.Response", "Cytotoxic.NKreceptor_Alt",
+                                  "Memory", "Treg", "Cytotoxic.NKreceptor", "Predysfunctional", "Activated_EM"))
+rank_annot<- lapply(rank_annot, function(x){names(x)<- paste0("NMF", 1:length(x)); return(x)})
+
+## Annotate: markers, seurat cell assignments
+for(r in ranks){
+  annots<- rank_annot[[paste0("NMF", r)]]
+  
+  ## annotate markers
+  markers<- read.csv(paste0(data_dir, "Tcell/top_DE_genes_NMF_rank", r, ".csv"))
+  markers$cluster<- as.character(plyr::mapvalues(paste0("NMF", markers$cluster),
+                                                  names(annots), annots))
+  write.csv(markers, file=paste0(data_dir, "Tcell/top_DE_genes_NMF_rank", r, "_annotated.csv"))
+  
+  ## annotate seurat assignments
+  nmf_column<- paste0("NMF_rank", r)
+  tcell_seurat[[paste0(nmf_column, "_annot")]]<-as.character(plyr::mapvalues(paste0("NMF", as.character(tcell_seurat[[nmf_column]][,1])),
+                                                  names(annots), annots))
+}
+
+saveRDS(tcell_seurat, file="analysis/manual_broad_annot/tcell_seurat.Rds")
+```
+
+## Basic plots- UMAP, barchart by sample, expression of expected GOI
+```{r}
+tcell_seurat<- readRDS("analysis/manual_broad_annot/tcell_seurat.Rds")
+ranks<- 9:10
+tcell_colors<- c(tcell_colors,"Cytotoxic.NKreceptor_Alt"="green", Activated_EM="red")
+
+## Umap by program
+all_plots<- lapply(ranks, function(r){
+  tcell_seurat$tmp<- tcell_seurat@meta.data[[paste0("NMF_rank", r, "_annot")]]
+  DimPlot(tcell_seurat, group.by = "tmp")+
+    scale_color_manual(values=tcell_colors[names(tcell_colors) %in% tcell_seurat$tmp])+
+    ggtitle(paste0("rank ", r))
+})
+cowplot::plot_grid(plotlist = all_plots, ncol=2)
+ggsave(paste0(figure_dir, "UMAP_byAnnotProgram_ranks", paste(ranks, collapse = "."), ".png"), width=12, height=5)
+
+## Proportion of program by sample
+all_plots<- lapply(ranks, function(r){
+  tcell_seurat$tmp<- tcell_seurat@meta.data[[paste0("NMF_rank", r, "_annot")]]
+  my_barchart_programProp(tcell_seurat, coloring_variable = "tmp", colors=tcell_colors)+
+    ggtitle(paste0("rank ", r))
+})
+cowplot::plot_grid(plotlist = all_plots, ncol=2)
+ggsave(paste0(figure_dir, "Barchart_proportionProgram_bySample_ranks", paste(ranks, collapse = "."), ".png"), width=8, height=4)
+
+## Expression of expected markers by sample
+top_markers<- full_markers %>% group_by(cluster) %>% top_n(n=5, wt=avg_log2FC) %>% as.data.frame()
+top_markers$cluster<- gsub("Inhibitory", "Activated_EM", top_markers$cluster)
+top_markers$cluster<- factor(top_markers$cluster, levels=sort(unique(top_markers$cluster)))
+top_markers<- top_markers[order(top_markers$cluster),]
+
+all_plots<- lapply(ranks, function(r){
+    tcell_seurat$tmp<- tcell_seurat@meta.data[[paste0("NMF_rank", r, "_annot")]]
+    tcell_seurat$tmp<- factor(tcell_seurat$tmp, levels=sort(unique(tcell_seurat$tmp)))
+    DotPlot(tcell_seurat, group.by = "tmp", features=top_markers$gene)+
+      theme(axis.text.x = element_text(angle=45, hjust=1))+
+      scale_color_gradient2(low="blue", mid="white", high="red")+
+      ggtitle(paste0("rank", r))+
+      xlab("")+ylab("")
+})
+cowplot::plot_grid(plotlist = all_plots, ncol=1)
+ggsave(paste0(figure_dir, "DotPlot_expectedMarkers", paste(ranks, collapse = "."),".png"), width=14, height=8)
+```
+

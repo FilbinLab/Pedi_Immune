@@ -1,0 +1,85 @@
+---
+title: "DE between PD1/Untreated programs"
+author: "Jenna LaBelle"
+date: "10/07/22"
+output: html_document
+---
+
+DE analysis comparing each program in PD1 vs Untreated
+
+```{r}
+library(Seurat) 
+library(ggalluvial)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/PD1_Treat/01a_SS2/Immune/")
+
+analysis_dir<- paste0(working_dir, "/analysis/program_de/")
+figure_dir<- paste0(working_dir, "/figures/program_de/")
+data_dir<- paste0(working_dir, "analysis/Merge/")
+full_cohort_dir<- "../../ImmuneCellAnalysis/"
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+source(paste0(base_dir, script_dir, "seurat_transferAnchors_helper.R"))
+
+```
+
+
+## Load seurat objects: pd-1 (processed in 01b_Preprocess2QC_ToSeurat.Rmd) and full immune cohort (both myeloid and t cells)
+
+```{r}
+## Load in tenx/ss2 merged seurat objects
+files<- list.files(data_dir)
+files<- files[!grepl("tcell", files)]
+seurat_list<- lapply(files, function(f){
+   readRDS(paste0(data_dir, f))
+})
+names(seurat_list)<- gsub("ss2_", "", gsub("_seurat.Rds", "", files))
+
+```
+
+
+
+## DE between programs by treatment
+```{r}
+
+de_list<-lapply(seurat_list, function(seurat){
+  ## Identify programs to test- >3 cells in program in both treated/untreated
+  programs_in_both<- table(seurat$Treatment, seurat$Program_projected)>3
+  programs_in_both<- colnames(programs_in_both)[colSums(programs_in_both)==2]
+  message(paste0("Programs testing: ", paste(programs_in_both, collapse = ", ")))
+  
+  ## Cycle through each program shared by treated/untreated (>3 cells in program)
+  programs_de<- lapply(programs_in_both, function(program){
+    print(program)
+    seurat_subset<- subset(seurat, Program_projected==program)
+    seurat_subset<- SetIdent(seurat_subset, value=seurat_subset$Treatment)
+    markers<- FindMarkers(seurat_subset, ident.1 = "Untreated", ident.2="PD1")
+    markers$program<- program
+    markers$gene<- rownames(markers)
+    return(markers)
+  })
+  programs_de<- do.call("rbind", programs_de)
+  
+  return(programs_de)
+})
+
+## Remove any cell types with no degs
+de_list<- de_list[lapply(de_list, class)=="data.frame"]
+
+
+saveRDS(de_list, file=paste0(analysis_dir, "DE_Untreated.v.PD1_byProgram.Rds"))
+  
+```
+
+
+

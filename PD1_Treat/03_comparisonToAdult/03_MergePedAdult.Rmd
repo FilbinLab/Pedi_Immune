@@ -1,0 +1,254 @@
+---
+title: "ProjectBroadAnnots.Rmd"
+author: "Jenna LaBelle"
+date: "10/07/22"
+output: html_document
+---
+
+## Merge our ped (10x) + adult PD1 treated 
+
+```{r}
+library(Seurat) 
+library(ggplot2)
+library(ggpubr)
+library(ggh4x)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/PD1_Treat/03_comparisonToAdult/")
+
+analysis_dir<- paste0(working_dir, "/analysis/Merge/")
+figure_dir<- paste0(working_dir, "/figures/Merge/")
+data_dir<- paste0(working_dir, "analysis/preprocess_adult/")
+full_cohort_dir<- "../../ImmuneCellAnalysis/"
+
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+source(paste0(base_dir, script_dir, "seurat_transferAnchors_helper.R"))
+
+```
+
+## Load seurat objects
+```{r}
+## adult
+adult_files<- list.files(data_dir, pattern="seurat")
+adult_files<- adult_files[!grepl("tcell", adult_files)]
+adult_seurat_list<- lapply(adult_files, function(x){readRDS(paste0(data_dir, x))})
+names(adult_seurat_list)<- gsub("_seurat.Rds", "", adult_files)
+adult_seurat_list<-lapply(adult_seurat_list, function(x){x$Age_Group<-"Adult"; return(x)})
+adult_seurat_list<- lapply(adult_seurat_list, function(x){x$Treatment<- gsub("Treated", "PD1", x$Treatment); return(x)})
+
+## Pediatric (SS2 and 10X)
+ped_files<- list.files("../02_Merge_SS2.tenX/analysis/Merge/")
+ped_seurat_list<- lapply(ped_files, function(f){readRDS(paste0("../02_Merge_SS2.tenX/analysis/Merge/", f))})
+names(ped_seurat_list)<- gsub("_seurat.Rds", "", ped_files)
+ped_seurat_list<- lapply(ped_seurat_list, function(x){x$Age_Group<-"Ped"; return(x)})
+
+
+## colors
+tcell_colors<- readRDS(paste0(full_cohort_dir, "/plot_colors/Tcell.programs_rank8sharedByunion_reAnnot.Rds"))
+myeloid_colors<- readRDS(paste0(full_cohort_dir, "/plot_colors/Myeloid_program_colors.Rds"))
+myeloid_colors<- myeloid_colors$rank6
+immune_colors<- c(tcell_colors, myeloid_colors)
+colors_treatment<- c(PD1="orange", Untreated="purple")
+
+```
+
+## Merge
+
+```{r}
+## Merge- no need to run clustering (umap not really useful here). Really just merging for barchart/heatmap purposes
+seurat_list<- lapply(names(adult_seurat_list), function(x){
+  print(x)
+  ped<- ped_seurat_list[[x]]
+  adult<- adult_seurat_list[[x]]
+  seurat<- merge(ped,adult)
+  seurat$sample<- seurat$sample_backup
+  return(seurat)
+})
+names(seurat_list)<-names(adult_seurat_list)
+
+## Save
+for(i in names(seurat_list)){
+  print(i)
+  seurat<- seurat_list[[i]]
+  saveRDS(seurat, file=paste0(analysis_dir, i, "_seurat.Rds"))
+}
+```
+
+
+## Plot by program
+```{r}
+files<- list.files(analysis_dir)
+seurat_list<- lapply(files, function(f){
+   readRDS(paste0(analysis_dir, f))
+})
+names(seurat_list)<- gsub("_seurat.Rds", "", files)
+seurat_list<- lapply(seurat_list, function(x){x$Treatment<- gsub("Treated", "PD1", x$Treatment); return(x)})
+
+subset_adult_gbm<- TRUE
+if(subset_adult_gbm) {
+  figure_dir<- paste0(figure_dir, "onlyAdultGBM/")
+  if(!dir.exists(figure_dir)){dir.create(figure_dir)}
+}
+
+if(subset_adult_gbm){
+  seurat_list<- lapply(seurat_list, function(x){
+    subset(x, Age_Group=="Ped" | IDH_status=="WT")
+  })
+}
+
+## Can plot adult program based on projected or scored.
+## Projected
+all_plots<- lapply(names(seurat_list), function(x){
+  seurat_tmp<- seurat_list[[x]]
+  seurat_tmp$xAxis<- paste0(seurat_tmp$Age_Group, "\n", seurat_tmp$Treatment)
+  my_barchart_programProp(seurat_tmp, grouping_variable = "xAxis", coloring_variable = "Program_projected",
+                          colors = immune_colors, 
+                          grouping_variable_order = c("Ped\nUntreated", "Ped\nPD1", "Adult\nUntreated", "Adult\nPD1"))+
+    ggtitle(x)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "Barchart_programProjected_byTreatment.Age.png"), width=13, height=3)
+
+
+## scored
+all_plots<- lapply(names(seurat_list), function(x){
+  seurat_tmp<- seurat_list[[x]]
+  seurat_tmp$xAxis<- paste0(seurat_tmp$Age_Group, "\n", seurat_tmp$Treatment)
+  seurat_tmp$Program_projected<- ifelse(seurat_tmp$Age_Group=="Adult", seurat_tmp$MaxScoringProgram, seurat_tmp$Program_projected)
+  my_barchart_programProp(seurat_tmp, grouping_variable = "xAxis", coloring_variable = "Program_projected",
+                          colors = immune_colors, 
+                          grouping_variable_order = c("Ped\nUntreated", "Ped\nPD1", "Adult\nUntreated", "Adult\nPD1"))+
+    ggtitle(x)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "Barchart_programProjectedPed.scoredAdult_byTreatment.Age.png"), width=13, height=3)
+```
+
+## Plot fold change in program proportion, from untreated --> treated
+Take mean program % for each sample. Take mean of this for untreated. Then calculate FC for each treated sample compared to the mean for untreated
+```{r}
+## Get mean of each program for each sample, with metadata (treatment, sequencing)
+mean_program_prop_all<- lapply(seurat_list, function(seurat_tmp){
+  
+  ## fix sample id (?)
+  seurat_tmp$sample<- ifelse(seurat_tmp$Age_Group=="Adult", seurat_tmp$ID, seurat_tmp$sample)
+  
+  ## Use score as program for adult
+  seurat_tmp$Program_projected<- ifelse(seurat_tmp$Age_Group=="Adult", seurat_tmp$MaxScoringProgram, seurat_tmp$Program_projected)
+  
+  ## Add sequencing method for adult (used for norm for ped)
+  seurat_tmp$Sequencing<- ifelse(seurat_tmp$Age_Group=="Adult", "TenX", seurat_tmp$Sequencing)
+  
+  ## number cells per sample
+  program_prop<- as.data.frame(table(seurat_tmp$sample, seurat_tmp$Program_projected))
+  colnames(program_prop)<- c("Sample", "Program", "NCells")
+  
+  ## Proportion program per sample
+  program_prop<- program_prop %>% group_by(Sample) %>% mutate(perCells=NCells/sum(NCells)) %>% as.data.frame()
+  
+  ## Add on metadata
+  program_prop$Treatment<- as.character(plyr::mapvalues(program_prop$Sample, seurat_tmp$sample, seurat_tmp$Treatment, warn_missing = FALSE))
+  program_prop$Age<- as.character(plyr::mapvalues(program_prop$Sample, seurat_tmp$sample, seurat_tmp$Age_Group, warn_missing = FALSE))
+  program_prop$Sequencing<- as.character(plyr::mapvalues(program_prop$Sample, seurat_tmp$sample, seurat_tmp$Sequencing, warn_missing = FALSE))
+  
+  return(program_prop)
+})
+
+## calculate mean untreated (by age + sequencing method)
+mean_program_prop_untreated<- lapply(mean_program_prop_all, function(x){
+  x<- x[x$Treatment=="Untreated",]
+  mean_byProgram<- x %>% group_by(Age, Sequencing, Program) %>% summarise(meanProgram=mean(perCells)) %>% as.data.frame()
+  colnames(mean_byProgram)<- c("Age", "Sequencing", "Program", "meanProportion_untreated")
+  return(mean_byProgram)
+})
+
+## For treated, calculate fold change (treated / untreated) for each program (by age, sequencing)
+foldchange_program_treated<- lapply(names(mean_program_prop_all), function(celltype){
+  mean_allSamples<- mean_program_prop_all[[celltype]]
+  mean_unTreated<- mean_program_prop_untreated[[celltype]]
+  mean_Treated<- mean_allSamples[mean_allSamples$Treatment=="PD1",]
+  
+  ## Add on untreated info
+  mean_Treated<- merge(mean_Treated, mean_unTreated, by=c("Program", "Sequencing", "Age"))
+  
+  ## calculate fold change for each treated sample
+  mean_Treated$FoldChange<- (mean_Treated$perCells + 0.1) / (mean_Treated$meanProportion_untreated + 0.1)
+  return(mean_Treated)
+})
+names(foldchange_program_treated)<- names(mean_program_prop_all)
+
+## log fold change by sample
+all_plots<- lapply(names(foldchange_program_treated), function(celltype){
+  mean_Treated<- foldchange_program_treated[[celltype]]
+  
+  ggplot(mean_Treated, aes(x=Sample, y=log(FoldChange), fill=Program))+
+    geom_bar(stat="identity", position="dodge")+
+    scale_fill_manual(values=immune_colors)+
+    facet_nested_wrap(vars(Program, Age), 
+                             scales="free")+
+    theme_bw()+
+    theme(axis.text.x = element_text(angle=45, hjust=1))+
+    ggtitle(celltype)+
+    ylim(min(log(mean_Treated$FoldChange )), max(log(mean_Treated$FoldChange)))
+})
+cowplot::plot_grid(plotlist = all_plots, ncol=3)
+ggsave(paste0(figure_dir, "LogFoldChange_Treated.vs.Untreated_bySample.png"), width=30, height=8)
+
+## log fold change by age
+all_plots<- lapply(names(foldchange_program_treated), function(celltype){
+  mean_Treated<- foldchange_program_treated[[celltype]]
+  
+  ## mean logFC by age
+  mean_Treated_byAge<- mean_Treated %>% group_by(Age, Program) %>% summarise(FoldChange=mean(FoldChange)) %>% as.data.frame()
+  
+  ggplot(mean_Treated_byAge, aes(x=Age, y=log(FoldChange), fill=Program))+
+    geom_bar(stat="identity", position="dodge")+
+    scale_fill_manual(values=immune_colors)+
+    facet_grid(cols=vars(Program))+
+    theme_bw()+
+    theme(axis.text.x = element_text(angle=45, hjust=1),
+          legend.position = "none",
+          axis.text = element_text(face="bold", color="black"),
+          axis.title = element_text(face="bold", color="black"),
+          strip.text = element_text(face="bold", color="black"))+
+    ggtitle(celltype)+
+    xlab("")
+})
+cowplot::plot_grid(plotlist = all_plots, ncol=3)
+ggsave(paste0(figure_dir, "LogFoldChange_Treated.vs.Untreated_byAge.png"), width=16, height=4)
+
+## log fold change by sample, boxplots
+all_plots<- lapply(names(foldchange_program_treated), function(celltype){
+  mean_Treated<- foldchange_program_treated[[celltype]]
+
+  
+  ggplot(mean_Treated, aes(x=Age, y=log(FoldChange)))+
+    geom_boxplot(aes(fill=Program), outlier.size = 0)+
+    geom_jitter(size=0.3, width=0.1)+
+    scale_fill_manual(values=immune_colors)+
+    facet_grid(cols=vars(Program))+
+    theme_bw()+
+    theme(axis.text.x = element_text(angle=45, hjust=1),
+          legend.position = "none",
+          axis.text = element_text(face="bold", color="black"),
+          axis.title = element_text(face="bold", color="black"),
+          strip.text = element_text(face="bold", color="black"))+
+    ggtitle(celltype)+
+    xlab("")+
+    geom_hline(yintercept = 0, linetype="dashed", color="black")+
+    stat_compare_means(method="t.test", comparisons = list(c("Adult", "Ped")))
+})
+cowplot::plot_grid(plotlist = all_plots, ncol=3)
+ggsave(paste0(figure_dir, "LogFoldChange_Treated.vs.Untreated_bySample_Boxplot.png"), width=20, height=4)
+```
+

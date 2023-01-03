@@ -1,0 +1,265 @@
+---
+title: ""
+author: "Jenna LaBelle"
+date: "10/07/22"
+output: html_document
+---
+
+## Preprocess published adult PD1 treated/untreated GBM 10X data
+Splitting into Tcell/myeloid based on cluster annotations from paper
+Splitting into CD4/CD8 based on projection from full cohort
+
+```{r}
+library(Seurat) 
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/PD1_Treat/03_comparisonToAdult/")
+
+analysis_dir<- paste0(working_dir, "/analysis/preprocess_adult/")
+figure_dir<- paste0(working_dir, "/figures/preprocess_adult/")
+data_dir<- paste0(working_dir, "analysis/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+source(paste0(base_dir, script_dir, "seurat_transferAnchors_helper.R"))
+
+```
+
+
+## Load seurat objects: published adult PD1 and full immune cohort (both myeloid and t cells)
+```{r}
+full_cohort_dir<- "../../ImmuneCellAnalysis/"
+
+
+## Load adult 10X pd1 treated
+pd1_seurat<- readRDS("data/GSE154795_GBM.AllCell.Integrated.Scaled.ClusterRes.0.1.Rds")
+
+
+## Full cohort seurat objects
+full_tcell_seurat<- readRDS(paste0(full_cohort_dir,
+                                   "02a_Tcells/02_Ped.Adult/03_Visualize.Reannotate_programs/analysis/Reannotate_programs/",
+                                   "rank8_sharedByunion/",
+                                   "ped_seurat_tcell_harmony.Rds"))
+
+## Colors 
+colors_treatment<- c(GBM.PD1="orange", GBM.new="purple", GBM.rec="navy")
+
+
+```
+
+## Split into myeloid/tcell based on cluster annotation from paper
+```{r}
+DimPlot(pd1_seurat, group.by="integrated_snn_res.0.1")
+
+## Assign tcell/myeloid based on figure 1E
+tcell_clusters<-c(4)
+myeloid_clusters<-c(0,2)
+
+pd1_seurat$broad_annot<- ifelse(pd1_seurat$integrated_snn_res.0.1 %in% tcell_clusters, "Tcell",
+                                ifelse(pd1_seurat$integrated_snn_res.0.1 %in% myeloid_clusters, "Myeloid", "Other"))
+
+## plot to show annots
+p1<-DimPlot(pd1_seurat, group.by="integrated_snn_res.0.1")
+p2<- DimPlot(pd1_seurat, group.by = "broad_annot", label=TRUE) + scale_color_manual(values=c(Tcell="slateblue3", Myeloid="gold", Other="grey"))
+p1+p2
+ggsave(paste0(figure_dir, "UMAP_Adult_AllCells_byClusterAnnot.png"), width=12, height=5)
+
+## Subset to tcells/myeloid and run clustering
+  ## T cells
+  pd1_tcell<- subset(pd1_seurat, broad_annot=="Tcell")
+  pd1_tcell_meta<- pd1_tcell@meta.data
+  pd1_tcell<-RunFullSeurat(pd1_tcell@assays$RNA@counts, RunHarmony = TRUE, samples=pd1_tcell$orig.ident)
+  pd1_tcell<- AddMetaData(pd1_tcell, pd1_tcell_meta[,!colnames(pd1_tcell_meta) %in% colnames(pd1_tcell@meta.data)])
+  
+  saveRDS(pd1_tcell, file=paste0(analysis_dir, "tcell_seurat.Rds"))
+  
+  ## Myeloid
+  ## Note- too computationally intensive to run locally. Run on O2, transferred back
+  pd1_myeloid<- subset(pd1_seurat, broad_annot=="Myeloid")
+  pd1_myeloid_meta<- pd1_myeloid@meta.data
+  pd1_myeloid<-RunFullSeurat(pd1_myeloid@assays$RNA@counts, RunHarmony = TRUE, samples=pd1_myeloid$orig.ident)
+  pd1_myeloid<- AddMetaData(pd1_myeloid, pd1_myeloid_meta[,!colnames(pd1_myeloid_meta) %in% colnames(pd1_myeloid@meta.data)])
+  
+  saveRDS(pd1_myeloid, file=paste0(analysis_dir, "myeloid_seurat.Rds"))
+```
+
+
+## Annotate as CD4/CD8- cell wise
+this is the method used in the adult PD1 paper. Results in loss of ~50% of T cells that are annotated as "double positive" or "double negative"
+
+```{r}
+pd1_tcell<- readRDS(paste0(analysis_dir, "tcell_seurat.Rds"))
+
+## Based on adult PD1 methods- annotate as CD4, CD8, double positive, or double negative
+cd4_cd8_expr<- as.data.frame(t(pd1_tcell@assays$RNA@counts[c("CD4", "CD8A", "CD8B"),]))
+cd4_cd8_expr$CD8<- ifelse(cd4_cd8_expr$CD8A>0 | cd4_cd8_expr$CD8B>0, "Expressed", "NotExpressed")
+cd4_cd8_expr$detailed_annot<- ifelse(cd4_cd8_expr$CD4>0 & cd4_cd8_expr$CD8=="NotExpressed", "CD4", 
+                                     ifelse(cd4_cd8_expr$CD4==0 & cd4_cd8_expr$CD8=="Expressed", "CD8", 
+                                            ifelse(cd4_cd8_expr$CD4>0 & cd4_cd8_expr$CD8=="Expressed", "DoublePositive",
+                                                   "DoubleNegative")))
+
+## Add to seurat
+pd1_tcell$detailed_annot<- cd4_cd8_expr$detailed_annot
+DimPlot(pd1_tcell, group.by = "detailed_annot")
+ggsave(paste0(figure_dir, "UMAP_Tcells_detailedAnnot_byCellExpr_paperMethods.png"), width=6, height=5)
+
+VlnPlot(pd1_tcell, group.by="detailed_annot", features=c("rna_CD4", "rna_CD8A"), pt.size = 0)
+ggsave(paste0(figure_dir, "Vln_Tcells_detailedAnnot_byCellExpr_paperMethods.png"), width=6, height=4)
+
+## Number of cell type by condition
+bd<- as.data.frame(table(pd1_tcell$detailed_annot, pd1_tcell$condition))
+colnames(bd)<- c("CD4_CD8", "Condition", "NCells")
+ggplot(bd, aes(x=Condition, y=NCells, fill=CD4_CD8))+
+  geom_bar(stat="identity")
+ggsave(paste0(figure_dir, "BarGraph_Tcells_detailedAnnot_byCondition_basedOnCellExpr.png"), width=4, height=4)
+
+my_subsetAndRerun<- function(subset_seurat){
+    seurat_meta<- subset_seurat@meta.data
+    subset_seurat<- RunFullSeurat(subset_seurat@assays$RNA@counts, RunHarmony = TRUE, samples=subset_seurat$sample)
+    subset_seurat<- AddMetaData(subset_seurat, seurat_meta[,!colnames(seurat_meta) %in% colnames(subset_seurat@meta.data)])
+    return(subset_seurat)
+}
+
+pd1_cd4<- my_subsetAndRerun(subset(pd1_tcell, detailed_annot=="CD4"))
+pd1_cd8<- my_subsetAndRerun(subset(pd1_tcell, detailed_annot=="CD8"))
+
+
+saveRDS(pd1_cd4, file=paste0(analysis_dir, "cd4_seurat.Rds"))
+saveRDS(pd1_cd8, file=paste0(analysis_dir, "cd8_seurat.Rds"))
+saveRDS(pd1_tcell, file=paste0(analysis_dir, "tcell_seurat.Rds"))
+
+```
+
+## Alternatively: use projection from pediatric to annotate- tried this + manual annotation, but very unclear. Many DP/DN cells
+NOT USED DOWNSTREAM
+```{r}
+## Project annotations from full cohort
+pd1_tcell<- my_project_seurat(full_tcell_seurat,pd1_tcell, 
+                                         reference_annotation = "Final_detailed_annot")
+
+## Check if expression is as expected
+## Spoiler alert: it does not
+DimPlot(pd1_tcell, group.by = "Program_projected")
+FeaturePlot(pd1_tcell, features=c("CD4", "CD8A"))
+
+
+
+my_checkCD4.CD8<- function(seurat){
+  p1<-FeaturePlot(seurat, features=c("CD4"))
+  p2<-FeaturePlot(seurat, features=c("CD8A"))
+  p3<-DimPlot(seurat, label=TRUE)+NoLegend()
+  p4<- VlnPlot(seurat, features=c("CD4"))+NoLegend()
+  p5<- VlnPlot(seurat, features=c("CD8A"))+NoLegend()
+  cowplot::plot_grid(plotlist=list(p1, p2, p3, p4, p5), ncol=2)
+}
+
+my_moveCells<- function(seurat1, seurat2, clusterToMoveFrom1=NULL, clusterToMoveFrom2=NULL){
+  if(!is.null(clusterToMoveFrom2)){
+    seurat1$seurat_clusters<- as.character(seurat1$seurat_clusters)
+    seurat1<- merge(seurat1, subset(seurat2, seurat_clusters %in% clusterToMoveFrom2))
+  }
+
+  if(!is.null(clusterToMoveFrom1)){
+    seurat2$seurat_clusters<- as.character(seurat2$seurat_clusters)
+    seurat2<- merge(seurat2, subset(seurat1, seurat_clusters %in% clusterToMoveFrom1))
+  }
+
+  if(!is.null(clusterToMoveFrom1)){
+    seurat1<- subset(seurat1, seurat_clusters %in% unique(seurat1$seurat_clusters)[!unique(seurat1$seurat_clusters) %in% clusterToMoveFrom1])
+  }
+  
+  if(!is.null(clusterToMoveFrom2)){
+    seurat2<- subset(seurat2, seurat_clusters %in% unique(seurat2$seurat_clusters)[!unique(seurat2$seurat_clusters) %in% clusterToMoveFrom2])
+  }
+  
+  
+  seurat1<- my_subsetAndRerun(seurat1)
+  seurat2<- my_subsetAndRerun(seurat2)
+  return(list(seurat1, seurat2))
+}
+
+## Need to do manual CD4/CD8 annotation
+## Start with projections, recluster
+pd1_cd4<- my_subsetAndRerun(subset(pd1_tcell, Program_projected=="CD4"))
+my_checkCD4.CD8(pd1_cd4)
+
+pd1_cd8<- my_subsetAndRerun(subset(pd1_tcell, Program_projected=="CD8"))
+my_checkCD4.CD8(pd1_cd8)
+
+## Reannotate #1- cluster 7 from cd4, cluster 10 from cd8
+seurat_list<- my_moveCells(pd1_cd4, pd1_cd8, 7, 10)
+
+my_checkCD4.CD8(seurat_list[[1]])
+my_checkCD4.CD8(seurat_list[[2]])
+
+
+## Increase res for cd4
+seurat_list[[1]]<- FindClusters(seurat_list[[1]], resolution = 1.5)
+my_checkCD4.CD8(seurat_list[[1]])
+
+## Reannotate #2- cluster 15 from cd4
+seurat_list2<- my_moveCells(seurat_list[[1]],seurat_list[[2]], 15) ## saved cd4
+
+my_checkCD4.CD8(seurat_list2[[1]])
+my_checkCD4.CD8(seurat_list2[[2]])
+
+## For CD4: recluster (separately) cluster 2 and 8- clearly has some CD8, but increasing resolution doesn't split
+  ## cluster 2
+  cd4_c2<- my_subsetAndRerun(subset(seurat_list2[[1]], seurat_clusters == 2))
+  cd4_c2<- FindClusters(cd4_c2, resolution = 2)
+  cells_remove<- colnames(cd4_c2)[cd4_c2$seurat_clusters==0]
+  seurat_list2[[1]]$cells_remove<- ifelse(colnames(seurat_list2[[1]]) %in% cells_remove, "Remove", "Keep")
+  
+  ## cluster 8
+  cd4_c8<- my_subsetAndRerun(subset(seurat_list2[[1]], seurat_clusters == 8))
+  cd4_c8<- FindClusters(cd4_c8, resolution = 2)
+  cells_remove<- colnames(cd4_c8)[cd4_c8$seurat_clusters==4]
+  seurat_list2[[1]]$cells_remove<- ifelse(colnames(seurat_list2[[1]]) %in% cells_remove | seurat_list2[[1]]$cells_remove=="Remove", 
+                                          "Remove", "Keep")
+
+## Reannotate #3: cluster 0 from subclustered cd4 cluster 2 is CD8, cluster 4 from subclustered cd4 cluster 8 is CD8
+seurat_list2[[2]]<- my_subsetAndRerun(merge(seurat_list2[[2]], 
+                                            subset(seurat_list2[[1]], cells_remove=="Remove"))) 
+seurat_list2[[1]]<- my_subsetAndRerun(subset(seurat_list2[[1]], cells_remove=="Keep"))
+my_checkCD4.CD8(seurat_list2[[1]])
+my_checkCD4.CD8(seurat_list2[[2]])
+
+pd1_cd4<- seurat_list2[[1]]
+pd1_cd8<- seurat_list2[[2]]
+```
+
+
+
+## Rescale so that counts are TPM
+Note that really should have done this prior to annotations- but since done on cell wise basis, really doesn't matter
+```{r}
+## list files
+adult_files<- list.files(analysis_dir, pattern="seurat")
+
+
+## rescale- myeloid and tcell on O2 for memory issues
+adult_files<- adult_files[!grepl("tcell", adult_files) & !grepl("myeloid", adult_files) ]
+for(file in adult_files){
+  seurat<- readRDS(paste0(analysis_dir, file))
+  cm<- seurat@assays$RNA@counts
+  cm<- apply(cm, 2, function(x){x/sum(x) * 1e06})
+  meta<- seurat@meta.data
+  seurat<- RunFullSeurat(cm, RunHarmony = TRUE, samples=meta$sample)
+  seurat<- AddMetaData(seurat, meta[,!colnames(meta) %in% colnames(seurat@meta.data)])
+  saveRDS(seurat, file=paste0(analysis_dir, file))
+}
+
+
+
+
+```
+
+

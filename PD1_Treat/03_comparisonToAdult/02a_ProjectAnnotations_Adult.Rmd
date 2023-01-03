@@ -1,0 +1,177 @@
+---
+title: ""
+author: "Jenna LaBelle"
+date: "10/07/22"
+output: html_document
+---
+
+## Project program annotations from the full immune cohort to tenx adult data
+
+```{r}
+library(Seurat) 
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/PD1_Treat/03_comparisonToAdult/")
+
+analysis_dir<- paste0(working_dir, "/analysis/project_programs/")
+figure_dir<- paste0(working_dir, "/figures/project_programs/")
+data_dir<- paste0(working_dir, "analysis/preprocess_adult/")
+full_cohort_dir<- "../../ImmuneCellAnalysis/"
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+source(paste0(base_dir, script_dir, "seurat_transferAnchors_helper.R"))
+
+```
+
+
+## Load seurat objects: published adult PD1 and full immune cohort (both myeloid and t cells)
+
+```{r}
+## Load adult 10X pd1 treated
+pd1_cd4<- readRDS(paste0(data_dir, "cd4_seurat.Rds"))
+pd1_cd8<- readRDS(paste0(data_dir, "cd8_seurat.Rds"))
+pd1_myeloid<- readRDS(paste0(data_dir, "myeloid_seurat.Rds"))
+
+## rename treatment- untreated/treated
+pd1_cd4$Treatment<- factor(ifelse(pd1_cd4$condition=="GBM.PD1", "Treated", "Untreated"), levels=c("Untreated", "Treated"))
+pd1_cd8$Treatment<- factor(ifelse(pd1_cd8$condition=="GBM.PD1", "Treated", "Untreated"), levels=c("Untreated", "Treated"))
+pd1_myeloid$Treatment<- factor(ifelse(pd1_myeloid$condition=="GBM.PD1", "Treated", "Untreated"), levels=c("Untreated", "Treated"))
+
+## Full cohort seurat objects
+full_myeloid_seurat<- readRDS(paste0(full_cohort_dir,
+                                     "01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/",
+                                     "pedOnly_nomuv63/",
+                                     "myeloid_seurat_noDC.B_harmony.Rds"))
+full_myeloid_seurat$Final_Annot<-full_myeloid_seurat$NMF_rank6_annotByAdult10X
+full_cd4_seurat<- readRDS(paste0(full_cohort_dir,
+                                   "02a_Tcells/02_Ped.Adult/03_Visualize.Reannotate_programs/analysis/Reannotate_programs/",
+                                   "rank8_sharedByunion/",
+                                   "ped_seurat_cd4_harmony.Rds"))
+full_cd8_seurat<- readRDS(paste0(full_cohort_dir,
+                                   "02a_Tcells/02_Ped.Adult/03_Visualize.Reannotate_programs/analysis/Reannotate_programs/",
+                                   "rank8_sharedByunion/",
+                                   "ped_seurat_cd8_harmony.Rds"))
+
+## Colors 
+tcell_colors<- readRDS(paste0(full_cohort_dir, "/plot_colors/Tcell.programs_rank8sharedByunion_reAnnot.Rds"))
+myeloid_colors<- readRDS(paste0(full_cohort_dir, "/plot_colors/Myeloid_program_colors.Rds"))
+myeloid_colors<- myeloid_colors$rank6
+immune_colors<- c(tcell_colors, myeloid_colors)
+colors_treatment<- c(PD1="orange", Untreated="purple")
+
+## Full cohort marker genes
+tcell_markers<- readRDS(paste0(full_cohort_dir, 
+                             "02a_Tcells/02_Ped.Adult/01_compare_NMF/analysis/newMarkers_deNovoPed.AdultTcell/", 
+                             "new_markers_NMFrank8_bySeurat_sharedByunion_reAnnot.Rds"))
+myeloid_markers<- read.csv(paste0(full_cohort_dir,
+                               "02b_Myeloid/01a_NMF/analysis/de.novoNMF/pedOnly_nomuv63/", 
+                               "top_DE_genes_10Xannotated_NMF_rank6.csv"))
+
+  ## Top markers per program
+  top_tcell_markers<- tcell_markers %>% group_by(cluster) %>% top_n(n=5, wt=avg_log2FC) %>% as.data.frame()
+  top_myeloid_markers<- myeloid_markers %>% group_by(cluster) %>% top_n(n=5, wt=avg_log2FC) %>% as.data.frame()
+
+```
+
+
+
+## Project programs from full cohort to gbm (10x, with treated/untreated together)
+```{r}
+pd1_cd4<- my_project_seurat(full_cd4_seurat,pd1_cd4, reference_annotation = "Final_Annot")
+pd1_cd8<- my_project_seurat(full_cd8_seurat,pd1_cd8, reference_annotation = "Final_Annot")
+pd1_myeloid<- my_project_seurat(full_myeloid_seurat,pd1_myeloid, reference_annotation = "Final_Annot")
+
+
+saveRDS(pd1_cd4, file=paste0(data_dir, "cd4_seurat.Rds"))
+saveRDS(pd1_cd8, file=paste0(data_dir, "cd8_seurat.Rds"))
+saveRDS(pd1_myeloid, file=paste0(data_dir, "myeloid_seurat.Rds"))
+
+
+tenx_seurat<- list(CD4=pd1_cd4, CD8=pd1_cd8, Myeloid=pd1_myeloid)
+```
+
+
+
+
+## UMAPs of projected programs
+```{r}
+all_plots<- lapply(names(tenx_seurat), function(x){
+  tmp<- tenx_seurat[[x]]
+  DimPlot(tmp, group.by="Program_projected", pt.size = 1, label=FALSE, label.size = 6)+ 
+    scale_color_manual(values=immune_colors[names(immune_colors) %in% tmp$Program_projected])+
+    ggtitle(x)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "TenX_UMAP_PredictedProgram.png"), width=18, height=5)
+```
+
+## Barchart of program proportions
+```{r}
+
+all_plots<- lapply(names(tenx_seurat), function(x){
+  tmp<- tenx_seurat[[x]]
+  my_barchart_programProp(tmp,grouping_variable = "Treatment", coloring_variable = "Program_projected", colors=immune_colors)+ggtitle(x)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "TenX_Barchart_PredictedProgram.png"), width=18, height=5)
+
+
+```
+
+## Pseudobulked heatmap of expression of marker genes
+```{r}
+marker_list<- list(CD4=top_tcell_markers[!top_tcell_markers$cluster %in% c("Predysfunctional", "Cytotoxic.NKreceptor"),], 
+                   CD8=top_tcell_markers[!top_tcell_markers$cluster %in% c("Treg", "Inhibitory"),], 
+                   Myeloid=top_myeloid_markers)
+
+all_plots<- lapply(names(tenx_seurat), function(x){
+  tmp<- tenx_seurat[[x]]
+  markers_use<-marker_list[[x]]
+  markers_use<- markers_use[markers_use$cluster %in% unique(tmp$Program_projected),]
+  markers_use<- markers_use[markers_use$gene %in% rownames(tmp),]
+  
+  ## Create pseudobulking variable
+  tmp$pb<- paste0(tmp$Treatment, "_", gsub("\\.", "\n", gsub("_", "\n", tmp$Program_projected)))
+  pb<- pseudobulk_byVariable(tmp, tmp@meta.data, "pb")
+  
+  
+  ## center for each sample separately
+  center_bySample<- lapply(unique(tmp$Treatment), function(sample){
+    pb_tmp<- pb[,grepl(sample, colnames(pb))]
+    if(class(pb_tmp)=="numeric"){
+      pb_tmp<- as.data.frame(pb_tmp)
+      colnames(pb_tmp)<- colnames(pb)[grepl(sample, colnames(pb))]
+    }
+    pb_list_tmp<- NormCenter(pb_tmp)
+    pb_center_tmp<- pb_list_tmp$center_data
+    return(pb_center_tmp)
+  })
+  center_bySample<- do.call("cbind", center_bySample)
+  center_bySample<- NormCenter(pb)
+  center_bySample<- center_bySample$center_data
+
+  
+  ## Plot
+  myHeatmap(center_bySample, GOI=markers_use$gene, min.value = -3, max.value = 3, 
+                orderFactors =  gsub("\\.", "\n",gsub("_", "\n", unique(markers_use$cluster))),
+            orderSubtypes =c("Untreated", "Treated") ) +
+    scale_fill_gradient2(high="red", low="blue", mid="white", name="Centered log2(TPM)")+
+    ggtitle(x)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "Heatmap_ExpectedMarkerGenes_All.png"), width=35, height=9)
+```
+
+
+
+
+

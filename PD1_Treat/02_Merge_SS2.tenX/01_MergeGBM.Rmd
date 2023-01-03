@@ -1,0 +1,147 @@
+---
+title: "Merge all GBM"
+output: html_document
+---
+
+Merge SS2 GBM (pd1, untreated) and 10x GBM (pd1, untreated). All broad, detailed, program annotations done prior to merging across sequencing modality. Merging here primarily for visualization purposes
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(harmony)
+
+base_dir = "/Users/jlabelle/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/PD1_Treat/02_Merge_SS2.tenX/")
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/Scripts/"
+
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+source(paste0(base_dir, script_dir, "seurat_transferAnchors_helper.R"))
+
+
+analysis_dir<- "analysis/Merge/"
+figure_dir<- "figures/Merge/"
+full_dir<- "../../ImmuneCellAnalysis/"
+
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+
+```
+
+
+## Load in seurat objects
+```{r}
+## SS2- pd1, untreated gbm
+ss2_data_dir<-"../01a_SS2/Immune/analysis/Merge/"
+ss2_files<- list.files(ss2_data_dir, pattern="seurat")
+ss2_files<- ss2_files[!grepl("tcell", ss2_files)]
+ss2_seurat_list<- lapply(ss2_files, function(x){readRDS(paste0(ss2_data_dir, x))})
+names(ss2_seurat_list)<- gsub("ss2_", "", gsub("_seurat.Rds", "", ss2_files))
+
+## TenX- pd1, untreated gbm
+tenx_data_dir<-"../01b_tenX/analysis/Merge/"
+tenx_files<- list.files(tenx_data_dir, pattern="seurat")
+tenx_files<- tenx_files[!grepl("tcell", tenx_files)]
+tenx_seurat_list<- lapply(tenx_files, function(x){readRDS(paste0(tenx_data_dir, x))})
+names(tenx_seurat_list)<- gsub("_seurat.Rds", "", tenx_files)
+
+
+## Set colors
+colors_treatment<- c(PD1="orange", Untreated="purple")
+colors_samples<-c( BT1857="skyblue", BT2062="gold", BT2080="salmon",
+                   BT1478="purple", BT1745="blue", BT1857="cyan",
+                    BT1910="orange", BT1935="khaki")
+colors_sequencing<- c(SS2="magenta", TenX="green")
+```
+
+
+
+## Merge 
+```{r}
+## Add Seq info
+tenx_seurat_list<- lapply(tenx_seurat_list, function(x){x$Sequencing<-"TenX"; return(x)})
+ss2_seurat_list<- lapply(ss2_seurat_list, function(x){x$Sequencing<- "SS2"; return(x)})
+
+## BT1857 is in ss2 and tenx cohort- add to sample id to distinguish these samples
+tenx_seurat_list<- lapply(tenx_seurat_list, function(x){
+  x$sample<- ifelse(x$sample=="BT1857", paste0("BT1857_TenX"), x$sample)
+  return(x)
+  })
+
+ss2_seurat_list<- lapply(ss2_seurat_list, function(x){
+  x$sample<- ifelse(x$sample=="BT1857", paste0("BT1857_SS2"), x$sample)
+  return(x)
+  })
+
+
+## Merge and rerun clustering- with harmony integration
+seurat_list<- lapply(names(tenx_seurat_list), function(x){
+  print(x)
+  tenx<- tenx_seurat_list[[x]]
+  ss2<- ss2_seurat_list[[x]]
+  tenx$sample_backup<- tenx$sample
+  ss2$sample_backup<- ss2$sample
+  seurat<- my_mergeRerunClustering(tenx, ss2, Integration="Harmony", integrateBy = "Sequencing")
+  seurat$sample<- seurat$sample_backup
+  return(seurat)
+})
+names(seurat_list)<-names(tenx_seurat_list)
+
+for(i in names(seurat_list)){
+  print(i)
+  seurat<- seurat_list[[i]]
+  saveRDS(seurat, file=paste0(analysis_dir, i, "_seurat.Rds"))
+}
+```
+
+
+
+## Plot by sequencing, treatment, sample
+```{r}
+files<- list.files(analysis_dir)
+seurat_list<- lapply(files, function(f){
+   readRDS(paste0(analysis_dir, f))
+})
+names(seurat_list)<- gsub("_seurat.Rds", "", files)
+
+## Plot by sequencing
+all_plots<- lapply(names(seurat_list), function(x){
+  seurat_tmp<- seurat_list[[x]]
+  DimPlot(seurat_tmp, group.by = "Sequencing")+scale_color_manual(values=colors_sequencing)+ggtitle(x)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "UMAP_Sequencing.png"), width=18, height=5)
+
+## Plot by treatment
+all_plots<- lapply(names(seurat_list), function(x){
+  seurat_tmp<- seurat_list[[x]]
+  DimPlot(seurat_tmp, group.by = "Treatment")+scale_color_manual(values=colors_treatment)+ggtitle(x)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "UMAP_Treatment.png"), width=18, height=5)
+
+## bar plot by treatment
+all_plots<- lapply(names(seurat_list), function(x){
+  seurat_tmp<- seurat_list[[x]]
+  my_barchart_programProp(seurat_tmp, grouping_variable = "Treatment", coloring_variable = "Treatment", 
+                          colors = colors_treatment, number_or_proportion = "number")+ggtitle(x)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "NumberCells_perTreatment.png"), width=7, height=3)
+
+## Plot by sample
+all_plots<- lapply(names(seurat_list), function(x){
+  seurat_tmp<- seurat_list[[x]]
+  DimPlot(seurat_tmp, group.by = "sample")+scale_color_manual(values=colors_samples[names(colors_samples) %in% unique(seurat_tmp$sample)])+
+    ggtitle(x)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "UMAP_sample.png"), width=15, height=6)
+```
+
+
+
+

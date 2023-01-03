@@ -1,0 +1,212 @@
+---
+title: "Identify shared DEGs"
+output: html_document
+---
+
+DE ran separately for ss2 and 10x, comparing pd1 vs untreated for each program. These results imported and probed for any genes that are DE in the same direction for both SS2 and 10X
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(harmony)
+
+base_dir = "/Users/jlabelle/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/PD1_Treat/02_Merge_SS2.tenX/")
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/Scripts/"
+
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+source(paste0(base_dir, script_dir, "seurat_transferAnchors_helper.R"))
+
+
+analysis_dir<- "analysis/SharedDEGs/"
+figure_dir<- "figures/SharedDEGs/"
+full_cohort_dir<- "../../ImmuneCellAnalysis/"
+data_dir<- "analysis/Merge/"
+
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+
+```
+
+
+## Load in seurat objects, DE results
+```{r}
+## Load in tenx/ss2 merged seurat objects
+files<- list.files(data_dir)
+seurat_list<- lapply(files, function(f){
+   readRDS(paste0(data_dir, f))
+})
+names(seurat_list)<- gsub("_seurat.Rds", "", files)
+
+
+## DE results
+ss2_de<- readRDS("../01a_SS2/Immune/analysis/program_de/DE_Untreated.v.PD1_byProgram.Rds")
+tenx_de<- readRDS("../01b_tenX/analysis/program_de/DE_Untreated.v.PD1_byProgram.Rds")
+
+## Colors 
+tcell_colors<- readRDS(paste0(full_cohort_dir, "/plot_colors/Tcell.programs_rank8sharedByunion_reAnnot.Rds"))
+myeloid_colors<- readRDS(paste0(full_cohort_dir, "/plot_colors/Myeloid_program_colors.Rds"))
+myeloid_colors<- myeloid_colors$rank6
+immune_colors<- c(tcell_colors, myeloid_colors)
+
+colors_treatment<- c(PD1="orange", Untreated="purple")
+colors_samples<-c( BT1857="skyblue", BT2062="gold", BT2080="salmon",
+                   BT1478="purple", BT1745="blue", BT1857="cyan",
+                    BT1910="orange", BT1935="khaki")
+colors_sequencing<- c(SS2="magenta", TenX="green")
+
+
+```
+
+
+## Venn diagram of overlaps
+Note here that it doesn't take into account logFC direction
+```{r}
+pvalue_thresh<- .9
+
+ss2_de_filtered<- lapply(ss2_de, function(x){x[x$p_val_adj <=pvalue_thresh,]})
+tenx_de_filtered<- lapply(tenx_de, function(x){x[x$p_val_adj <=pvalue_thresh,]})
+
+## Venn diagram of overlaps
+all_plots<- lapply(names(ss2_de_filtered), function(x){
+  ss2<- ss2_de_filtered[[x]]
+  tenx<- tenx_de_filtered[[x]]
+  
+  programs<- unique(ss2$program)[unique(ss2$program) %in% unique(tenx$program)]
+  program_plots<- lapply(programs, function(y){
+    ggVennDiagram::ggVennDiagram(list(ss2=ss2[ss2$program==y, "gene"],
+                                      tenx=tenx[tenx$program==y, "gene"]))+
+      scale_fill_gradient(low="white", high="red")+
+      scale_color_manual(values=rep("black", 4))+
+      ggtitle(y)
+  })
+  cowplot::plot_grid(plotlist = program_plots, ncol=length(programs))
+})
+cowplot::plot_grid(plotlist = all_plots, ncol=1)
+ggsave(paste0(figure_dir, "Venn_DEGoverlap_padjThresh", pvalue_thresh, ".png"), width=12, height=8)
+```
+
+## Get shared DEGs
+```{r}
+pvalue_thresh<- .9
+
+ss2_de_filtered<- lapply(ss2_de, function(x){x[x$p_val_adj <=pvalue_thresh,]})
+tenx_de_filtered<- lapply(tenx_de, function(x){x[x$p_val_adj <=pvalue_thresh,]})
+
+shared_degs<- lapply(names(ss2_de_filtered), function(x){
+  ss2<- ss2_de_filtered[[x]]
+  tenx<- tenx_de_filtered[[x]]
+  
+  ## Subset to columns of interest
+  ss2<- ss2[,c("avg_log2FC", "p_val_adj", "program", "gene")]
+  tenx<- tenx[,c("avg_log2FC", "p_val_adj", "program", "gene")]
+  
+  ## rename columns- will merge by gene
+  colnames(ss2)<-ifelse(!colnames(ss2) %in% c("gene", "program"), paste0("SS2_", colnames(ss2)), colnames(ss2))
+  colnames(tenx)<-ifelse(!colnames(tenx) %in% c("gene", "program"), paste0("TenX_", colnames(tenx)), colnames(tenx))
+  
+  ## Merge by gene and program
+  de_merged<- merge(ss2, tenx, by=c("gene", "program"))
+  
+  ## Add column whether logFC matches
+  de_merged$sameLogFCDirection<- ifelse(sign(de_merged$SS2_avg_log2FC) == sign(de_merged$TenX_avg_log2FC), "Same", "Different")
+  return(de_merged)
+    
+})
+names(shared_degs)<- names(ss2_de_filtered)
+
+saveRDS(shared_degs, file=paste0(analysis_dir, "shared_degs_tenx.ss2_pvalueThresh", pvalue_thresh, ".Rds"))
+```
+
+## Plot logFC in ss2 vs tenx for each shared gene
+```{r}
+pvalue_thresh<- 0.9
+shared_degs<- readRDS(paste0(analysis_dir, "shared_degs_tenx.ss2_pvalueThresh", pvalue_thresh, ".Rds"))
+
+all_plots<-lapply(names(shared_degs), function(celltype){
+  celltype_degs<- shared_degs[[celltype]]
+  
+  minLogFC<- min(celltype_degs$SS2_avg_log2FC, celltype_degs$TenX_avg_log2FC)
+  maxLogFC<- max(celltype_degs$SS2_avg_log2FC, celltype_degs$TenX_avg_log2FC)
+  
+  celltype_degs$mean_padj<- apply(celltype_degs, 1, function(x){mean(as.numeric(x["SS2_p_val_adj"]), 
+                                                                     as.numeric(x["TenX_p_val_adj"]))})
+  
+  ## linear regression for r2/pvalue
+  model<- summary(lm(SS2_avg_log2FC ~ TenX_avg_log2FC, celltype_degs))
+  
+  ## Plot
+  ggplot(celltype_degs, aes(x=SS2_avg_log2FC, y=TenX_avg_log2FC, color=mean_padj))+
+    geom_point()+
+    theme_bw()+
+    xlim(minLogFC, maxLogFC )+
+    ylim(minLogFC, maxLogFC)+
+    scale_color_gradientn(colours = rainbow(10))+
+    ggtitle(celltype, 
+            subtitle = paste0("R2: ", round(model$r.squared, 2),
+                              "\npvalue: ", formatC(model$coefficients["TenX_avg_log2FC", "Pr(>|t|)"])))+
+    geom_smooth(method="lm", color="black", linetype="dashed", se=FALSE)
+    
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "Correlation_logFC_pvalueThresh", pvalue_thresh, ".png"), width=15, height=4)
+```
+
+## Heatmap of shared DEGs
+```{r}
+pvalue_thresh<- 0.1
+shared_degs<- readRDS(paste0(analysis_dir, "shared_degs_tenx.ss2_pvalueThresh", pvalue_thresh, ".Rds"))
+shared_degs<- lapply(shared_degs, function(x){x[x$sameLogFCDirection=="Same",]})
+
+samples<- c("BT1478" , "BT1745","BT1857.SS2","BT1857.TenX","BT1910" ,"BT1935", "BT2062","BT2080")
+
+all_plots<- lapply(names(seurat_list), function(x){
+  tmp<- seurat_list[[x]]
+  markers_use<-shared_degs[[x]]
+  
+  ## subset to programs with degs
+  tmp<- subset(tmp, Program_projected %in% unique(markers_use$program))
+  markers_use<- markers_use[markers_use$gene %in% rownames(tmp),]
+  markers_use<- markers_use[order(markers_use$program, markers_use$SS2_avg_log2FC),]
+  
+  ## Fix samples with underscores
+  tmp$sample<- gsub("_", "\\.", tmp$sample)
+  
+  samples_use<-samples[samples %in% unique(tmp$sample)]
+  
+  ## Create pseudobulking variable
+  tmp$pb<- paste0(tmp$sample, "_", gsub("\\.", "\n", gsub("_", "\n", tmp$Program_projected)))
+  pb<- pseudobulk_byVariable(tmp, tmp@meta.data, "pb")
+  
+  
+  ## center for each sample separately
+  #center_bySample<- lapply(unique(tmp$sample), function(sample){
+  #  pb_tmp<- pb[,grepl(sample, colnames(pb))]
+  #  if(class(pb_tmp)=="numeric"){
+  #    pb_tmp<- as.data.frame(pb_tmp)
+  #    colnames(pb_tmp)<- colnames(pb)[grepl(sample, colnames(pb))]
+  #  }
+  #  pb_list_tmp<- NormCenter(pb_tmp)
+  #  pb_center_tmp<- pb_list_tmp$center_data
+  #  return(pb_center_tmp)
+  #})
+  #center_bySample<- do.call("cbind", center_bySample)
+  cm_list<- NormCenter(pb)
+  center_bySample<- cm_list$center_data
+  
+  
+  ## Plot
+  myHeatmap(center_bySample, GOI=unique(markers_use$gene), min.value = -3, max.value = 3, 
+                orderFactors =  gsub("\\.", "\n",gsub("_", "\n", unique(markers_use$program))),
+            orderSubtypes =samples_use) +
+    scale_fill_gradient2(high="red", low="blue", mid="white", name="Centered log2(TPM)")+
+    ggtitle(x)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "Heatmap_SharedDEGs_pvalueThresh",pvalue_thresh, ".png"), width=25, height=5)
+```
+

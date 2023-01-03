@@ -1,0 +1,190 @@
+---
+title: "Visualize_programs"
+output: html_document
+---
+
+## Purpose:
+After re-annotating programs based on correlation with full cohort, visualize updated programs (CD8 only) here
+
+
+## Approach:
+Using updated annotations, plot nice plots for heatmap, UMAP, density, etc
+
+
+```{r}
+library(Seurat) 
+library(clusterProfiler)
+library(biomaRt)
+library(stringr)
+library(harmony)
+library(ggpubr)
+
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/tenX/Immune/")
+analysis_dir_tmp<- paste0(working_dir, "/analysis/NMF_plots/CD4/")
+figure_dir_tmp<- paste0(working_dir, "/figures/NMF_plots/CD4/")
+
+if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp,recursive = TRUE)}
+if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+```
+
+## Read in data
+```{r}
+rank_use<-9
+data_dir<- paste0("analysis/identifyCD4.CD8_byNMF/", "rank",rank_use, "/" )
+
+## figure/analysis dir based on rank + how shared programs are merged
+figure_dir<- paste0(figure_dir_tmp, "rank", rank_use,  "/")
+analysis_dir<- paste0(analysis_dir_tmp, "rank", rank_use, "/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir,recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+  
+## ped/adult tcell seurat object
+cd4_seurat<- readRDS(paste0(data_dir, "cd4_seurat.Rds"))
+
+
+## Read in marker genes
+program_markers<- read.csv(paste0("analysis/nmf/Tcell/top_DE_genes_NMF_rank", rank_use, "_annotated.csv"))
+
+
+## Read in scores
+all_scores<- readRDS(paste0(data_dir, "cd4_program_scores.Rds"))
+
+## Read in colors to use
+program_colors<- readRDS(paste0("../../plot_colors/Tcell.programs_rank8sharedByunion_reAnnot.Rds"))
+celltype_colors<- readRDS(paste0("../../plot_colors/Tcell.celltypes.Rds"))
+program_colors<- c(program_colors, Cytotoxic.NKreceptor_Alt="palegreen", Activated_EM="red")
+```
+
+
+## Subset to top markers for each nmf- top 10
+```{r}
+marker_genes<- program_markers
+
+## If any genes are top markers for multiple clusters- remove, then find top 10 again
+top_markers<- marker_genes %>% group_by(cluster) %>% slice_max(order_by = avg_log2FC, n = 10) %>% as.data.frame()
+if(sum(duplicated(top_markers$gene))!=0){
+  duplicated<- top_markers$gene[duplicated(top_markers$gene)]
+  print(paste0("Shared top markers: ", paste(duplicated, collapse=",")))
+  marker_genes<- marker_genes[!marker_genes$gene %in% duplicated,]
+  top_markers<- marker_genes %>% group_by(cluster) %>% slice_max(order_by = avg_log2FC, n = 10) %>% as.data.frame()
+}
+all_markers<- top_markers
+all_markers$cluster<- as.character(all_markers$cluster)
+```
+
+
+
+## Plot heatmaps of top marker gene expression
+```{r}
+rank<- "9"
+add_lines<- TRUE
+program_name<-paste0("NMF_rank", rank_use, "_annot")
+
+top_markers<-all_markers[!all_markers$cluster %in% c("Cytotoxic.NKreceptor", "Cytotoxic.NKreceptor_Alt", "Predysfunctional"),]
+
+## Pseudobulk
+cd4_seurat$PB_variable<- paste0(cd4_seurat$sample, "_", 
+                                gsub("\\.", "\n", gsub("_", "\n",cd4_seurat@meta.data[[program_name]])))
+
+pb<- pseudobulk_byVariable(cd4_seurat@assays$RNA@counts, cd4_seurat@meta.data, "PB_variable")
+
+## center and score
+pb_list<- NormCenter(pb)
+pb_center<- pb_list$center_data
+
+## Plot
+p<- myHeatmap(pb_center, GOI=top_markers$gene, min.value = -3, max.value = 3, 
+              orderFactors =  gsub("\\.", "\n",gsub("_", "\n", unique(top_markers$cluster)))) +
+  scale_fill_gradient2(high="red", low="blue", mid="white", name="Centered log2(TPM)")
+
+## Add horizontal lines around each set of nmf genes
+if(add_lines){
+  tmp<- split(top_markers, f=top_markers$cluster)
+  lastGene<- lapply(tmp, function(x){
+    x$tmp<- 1:nrow(x)
+    x<- x[x$gene %in% rownames(pb), ]
+    return(x[max(x$tmp), "gene"])
+  })
+  linePositions<- as.data.frame(pb_center[top_markers$gene,])
+  linePositions$tmp<- 1:nrow(linePositions)
+  linePositions<- linePositions[unlist(lastGene),"tmp"]
+  linePositions<- linePositions[1:length(linePositions)-1]+ 0.5
+  
+  p+geom_hline(yintercept = linePositions, linetype="dashed",size=1)
+}else{p}
+
+  
+ggsave(paste0(figure_dir, "CD4_Heatmap_TopNMFgenes_annot_rank", rank_use,".png"), width=14, height=11)
+
+
+```
+
+## Dotplot of selected marker genes
+```{r}
+rank<- "9"
+add_lines<- TRUE
+program_name<-paste0("NMF_rank", rank_use, "_annot")
+
+cd4_seurat@meta.data[[program_name]]<- factor(cd4_seurat@meta.data[[program_name]],
+                                              levels=c("Treg", "Activated_EM", "Cycling", 
+                                                        "Memory",
+                                                       "IFN.Response", "Stress"))
+DotPlot(cd4_seurat, group.by =program_name,
+        features=c("FOXP3", "CTLA4", "CD40LG", "TIMP1", "KLRB1","TOP2A", "UBE2C",
+                   "LMNA", "CCR7", "SELL", "IFIT3","IFIT1",
+                     "HSPA6", "HSPA1A"))+
+  coord_flip()+
+  theme(axis.text.x = element_text(angle=45, hjust=1))+
+  scale_color_gradient2(low="blue", mid="white", high="red")
+ggsave(paste0(figure_dir, "DotPlot_MarkersOfInterest_byProgram.png"), width=6, height=8)
+```
+
+## UMAP with annotations
+```{r}
+rank<- "9"
+program_name<-paste0("NMF_rank", rank_use, "_annot")
+program_colors_use<- program_colors[names(program_colors) %in% unique(cd4_seurat@meta.data[[program_name]])]
+
+DimPlot(cd4_seurat, group.by = program_name)+
+  scale_color_manual(values=program_colors_use)+
+  ggtitle("")
+ggsave(paste0(figure_dir, "CD4_UMAP_annot.pdf"), device="pdf", width=6, height=4)
+
+## Plot each program one at a time
+seurat_tmp<- cd4_seurat
+all_plots<- lapply(as.character(unique(cd4_seurat@meta.data[[program_name]])), function(x){
+  seurat_tmp$tmp<- ifelse(seurat_tmp@meta.data[[program_name]]==x,
+                          x, "Other")
+  p<-DimPlot(seurat_tmp, group.by = "tmp")+scale_color_manual(values=c(program_colors_use, Other="grey"))+ggtitle(x)+NoLegend()
+  return(p)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol = 2)
+ggsave(paste0(figure_dir, "CD4_UMAP_indv.png"), width=6, height=10)
+```
+
+
+## Programs by sample
+```{r}
+program_name<-paste0("NMF_rank", rank_use, "_annot")
+cd4_seurat$tmp<- cd4_seurat@meta.data[[program_name]]
+
+my_barchart_programProp(cd4_seurat, coloring_variable = "tmp", colors=program_colors)
+ggsave(paste0(figure_dir, "Barchart_programProportion_bySample.png"), width=5, height=4)
+```
+
+
+
+
+

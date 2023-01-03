@@ -1,0 +1,250 @@
+---
+title: "TCR"
+author: "Jenna LaBelle"
+date: "10/07/22"
+output: html_document
+---
+
+## Plot TCR results, clonotype expansion. Add to seurat object
+
+```{r}
+library(Seurat) 
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/PD1_Treat/01b_tenX/")
+
+analysis_dir<- paste0(working_dir, "/analysis/TCR/")
+figure_dir<- paste0(working_dir, "/figures/TCR/")
+full_cohort_dir<- "../../ImmuneCellAnalysis/"
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+```
+
+## Helper functions
+```{r}
+## Helper function to plot v/j gene usage
+my_plotVJgeneUsage<- function(seurat, plot_v_or_j, n_genes_plot){
+  ## Get df with all cells with V/J gene
+  tmp<- seurat@meta.data
+  tmp<- tmp[rownames(tmp)!=tmp[plot_v_or_j],]
+  tmp<- as.data.frame(table(tmp[plot_v_or_j]))
+  
+  ## Freq of V/J gene
+  tmp<- tmp[order(tmp$Freq, decreasing = TRUE),]
+  
+  ## Subset to top n V/J genes, order
+  tmp<- tmp[1:n_genes_plot,]
+  tmp$Var1<- factor(tmp$Var1, levels=tmp$Var1)
+  
+  ## Plot
+  ggplot(tmp, aes(x=Var1, y=Freq))+
+    geom_bar(stat="identity")+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle=45, hjust=1, face="bold"))+
+    xlab(plot_v_or_j)+
+    ylab("Occurence of gene")
+}
+
+## Helper function to get # of clonotypes per program, normalized by total number of cells per program
+my_getNormNClonotype<- function(seurat, program_column="Program_projected", clonotype_id_column="raw_clonotype_id"){
+  tmp<- seurat@meta.data
+  tmp<- tmp[rownames(tmp)!=tmp[clonotype_id_column],] ## getting rid of cells without tcr info
+  tmp<-as.data.frame(table(tmp[,clonotype_id_column], tmp[,program_column]))
+  colnames(tmp)<- c("Clonotype", "Program", "Ncells")
+  
+  ## Number of unique clonotypes present in each program
+  n_clonotypes_perProgram<- sapply(unique(as.character(tmp$Program)), function(program){
+    program_tmp<- tmp[tmp$Program==program & tmp$Ncells>0,]
+    return(length(unique(program_tmp$Clonotype)))
+  })
+  names(n_clonotypes_perProgram)<- unique(as.character(tmp$Program))
+  
+  
+  ## Normalize number of clonotypes by number of cells
+  n_CC_perProgram<- data.frame(Program=names(n_clonotypes_perProgram),
+                               n_clonotypes=n_clonotypes_perProgram,
+                               n_cells= as.numeric(table(seurat$Program_projected)))
+  n_CC_perProgram$n_clonotypes_norm<- n_CC_perProgram$n_clonotypes/n_CC_perProgram$n_cells
+  return(n_CC_perProgram)
+}
+
+## Helper function to get largest clonotype per program
+my_getMaxClonotype<- function(seurat, program_column="Program_projected", clonotype_id_column="raw_clonotype_id"){
+  tmp<- seurat@meta.data
+  tmp<- tmp[rownames(tmp)!=tmp[clonotype_id_column],] ## getting rid of cells without tcr info
+  tmp<-as.data.frame(table(tmp[,clonotype_id_column], tmp[,program_column]))
+  colnames(tmp)<- c("Clonotype", "Program", "Ncells")
+
+  
+  ## get largest clonotype for each program
+  max_clonotype<- tmp %>% group_by(Program) %>% summarise(maxClonotypeSize=max(Ncells)) %>% as.data.frame()
+  return(max_clonotype)
+}
+```
+
+## Load data: tcell seurat objects, TCR results, colors
+NOTE: vdj to be run on BT2080, will incorporate when finished (+ hopefully after rerunning 10x seq on bt2080)
+```{r}
+## Seurat
+seurat_obj<- readRDS("analysis/preprocessing/immune_seurat.Rds")
+
+## TCR
+samples<- c("BT2062") ## NOTE-if/when bt2080 is added here, need to add sample id to clonotype to distinguish b/w samples
+tcr_list<- lapply(samples, function(x){
+  tcr<-read.csv(paste0("data/",x,"/multi/per_sample_outs/", x, "/vdj_t/filtered_contig_annotations.csv"))
+  tcr$sample<- x
+  tcr$barcode<- paste0(x, "_", gsub("-","_",  tcr$barcode))
+  return(tcr)
+})
+tcr<- do.call("rbind", tcr_list)
+
+
+## Colors 
+tcell_colors<- readRDS(paste0(full_cohort_dir, "/plot_colors/Tcell.programs_rank8sharedByunion_reAnnot.Rds"))
+myeloid_colors<- readRDS(paste0(full_cohort_dir, "/plot_colors/Myeloid_program_colors.Rds"))
+myeloid_colors<- myeloid_colors$rank6
+```
+
+
+## Add VDJ info to seurat objects
+```{r}
+## Add clonotype id/vj gene
+seurat_obj$raw_clonotype_id<-ifelse(colnames(seurat_obj) %in% tcr$barcode, 
+                                    as.character(plyr::mapvalues(colnames(seurat_obj), 
+                                                                 tcr$barcode, tcr$raw_clonotype_id, warn_missing = FALSE)),"NA")
+seurat_obj$v_gene<- ifelse(colnames(seurat_obj) %in% tcr$barcode, 
+                           as.character(plyr::mapvalues(colnames(seurat_obj), 
+                                                        tcr$barcode, tcr$v_gene, warn_missing = FALSE)), "NA")
+seurat_obj$j_gene<- ifelse(colnames(seurat_obj) %in% tcr$barcode, 
+                           as.character(plyr::mapvalues(colnames(seurat_obj), 
+                                                        tcr$barcode, tcr$j_gene, warn_missing = FALSE)),"NA")
+
+
+
+## Add clonotype size + whether clonally expanded
+c_size<- as.data.frame(table(tcr$raw_clonotype_id))
+
+seurat_obj$clonotype_size<- ifelse(colnames(seurat_obj) %in% tcr$barcode, 
+                                   as.numeric(as.character(plyr::mapvalues(seurat_obj$raw_clonotype_id, 
+                                                                           c_size$Var1, c_size$Freq, warn_missing = FALSE))), "NA")
+seurat_obj$clonal<- ifelse(seurat_obj$clonotype_size != "NA", 
+                           ifelse(as.numeric(seurat_obj$clonotype_size>1), "clonal",
+                                             "nonclonal"),  "NA")
+seurat_obj$clonotype_size_max20<- ifelse(seurat_obj$clonotype_size>20 & seurat_obj$clonotype_size != "NA", 20, seurat_obj$clonotype_size)
+
+saveRDS(seurat_obj, file="analysis/preprocessing/immune_seurat.Rds")
+```
+
+## Plot V/J gene usage
+```{r}
+seurat_obj<- readRDS("analysis/preprocessing/immune_seurat.Rds")
+
+
+my_plotVJgeneUsage(subset(seurat_obj,clonotype_size != "NA"), "v_gene", 20) + ggtitle("top V gene usage")
+ggsave(paste0(figure_dir, "TopV_geneUsage.png"), width=10, height=4)
+
+my_plotVJgeneUsage(subset(seurat_obj,clonotype_size != "NA"), "j_gene", 20)+ ggtitle("top J gene usage")
+ggsave(paste0(figure_dir, "TopJ_geneUsage.png"), width=10, height=4)
+
+```
+
+
+THIS NOT RUN
+Kept for reference for later- will do these plots after program projection
+## Plot number of clonotypes per program
+```{r}
+## Get number of clonotypes per program, normalized by total number of cells per program
+norm_clonotypes_perProgram<- lapply(tenx_seurat_list, function(seurat){
+  my_getNormNClonotype(seurat)
+})
+
+## Plot raw # clonotypes per program
+cowplot::plot_grid(plotlist=lapply(names(norm_clonotypes_perProgram), function(x){
+  df<- norm_clonotypes_perProgram[[x]]
+  ggplot(df, aes(x=Program, y=n_clonotypes, fill=Program))+
+    geom_bar(stat="identity")+
+    scale_fill_manual(values=tcell_colors)+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle=45, hjust=1, face="bold"),
+          legend.position = "none")+
+    ggtitle(paste0("Number of clonotypes per program: ", x))+
+    xlab("")
+}))
+ggsave(paste0(figure_dir, "NumberRawClonotypes_perProgram.png"), width=8, height=4)
+
+
+## Plot normalized clonotypes per program
+cowplot::plot_grid(plotlist=lapply(names(norm_clonotypes_perProgram), function(x){
+  df<- norm_clonotypes_perProgram[[x]]
+  ggplot(df, aes(x=Program, y=n_clonotypes_norm, fill=Program))+
+    geom_bar(stat="identity")+
+    scale_fill_manual(values=tcell_colors)+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle=45, hjust=1, face="bold"),
+          legend.position = "none")+
+    ggtitle(paste0("Normalized clonotypes per program: ", x))+
+    xlab("")+
+    ylab("Number clonotypes / Number cells")
+}))
+ggsave(paste0(figure_dir, "NumberNormClonotypes_perProgram.png"), width=8, height=4)
+
+```
+
+## Plot largest clonotype (most expanded) per program
+```{r}
+## Get max clonotype, normalized by program size
+max_clonotype_size<- lapply(names(tenx_seurat_list), function(x){
+  max_clonotype<- my_getMaxClonotype(tenx_seurat_list[[x]])
+  
+  norm_clonotype<- norm_clonotypes_perProgram[[x]]
+  max_clonotype<- merge(max_clonotype, norm_clonotype,by="Program" )
+  max_clonotype$maxClonotypeSize_norm<- max_clonotype$maxClonotypeSize/max_clonotype$n_cells
+  return(max_clonotype)
+  })
+names(max_clonotype_size)<- names(tenx_seurat_list)
+
+## Plot raw largest clonotype per program
+cowplot::plot_grid(plotlist=lapply(names(max_clonotype_size), function(x){
+  df<- max_clonotype_size[[x]]
+  ggplot(df, aes(x=Program, y=maxClonotypeSize, fill=Program))+
+    geom_bar(stat="identity")+
+    scale_fill_manual(values=tcell_colors)+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle=45, hjust=1, face="bold"),
+          legend.position = "none")+
+    ggtitle(paste0("Largest clonotype per program: ", x))+
+    xlab("")
+}))
+ggsave(paste0(figure_dir, "RawLargestClonotype_perProgram.png"), width=8, height=4)
+
+
+## Plot normalized largest clonotype per program
+cowplot::plot_grid(plotlist=lapply(names(max_clonotype_size), function(x){
+  df<- max_clonotype_size[[x]]
+  ggplot(df, aes(x=Program, y=maxClonotypeSize_norm, fill=Program))+
+    geom_bar(stat="identity")+
+    scale_fill_manual(values=tcell_colors)+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle=45, hjust=1, face="bold"),
+          legend.position = "none")+
+    ggtitle(paste0("Largest clonotype\nper program, normalized: ", x))+
+    xlab("")+
+    ylab("largest clonotype / N cells")+
+    ylim(0,0.4)
+}))
+ggsave(paste0(figure_dir, "NormLargestClonotype_perProgram.png"), width=8, height=4)
+```
+
+
+
+

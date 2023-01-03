@@ -1,0 +1,308 @@
+---
+title: "ProjectBroadAnnots.Rmd"
+author: "Jenna LaBelle"
+date: "10/07/22"
+output: html_document
+---
+
+## Expression patterns of various genes of interest acros PD1 treated samples/untreated GBM
+
+```{r}
+library(Seurat) 
+library(ggplot2)
+library(ggpubr)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/PD1_Treat/03_comparisonToAdult/")
+
+analysis_dir<- paste0(working_dir, "/analysis/goi_expression/")
+figure_dir<- paste0(working_dir, "/figures/goi_expression/")
+data_dir<- paste0(working_dir, "analysis/Merge/")
+full_cohort_dir<- "../../ImmuneCellAnalysis/"
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+
+```
+
+
+## Load seurat objects: pd-1 (processed in 01b_Preprocess_QC_ToSeurat.Rmd) and full immune cohort (both myeloid and t cells)
+
+```{r}
+files<- list.files(data_dir)
+seurat_list<- lapply(files, function(f){
+   readRDS(paste0(data_dir, f))
+})
+names(seurat_list)<- gsub("_seurat.Rds", "", files)
+
+## Colors 
+tcell_colors<- readRDS(paste0(full_cohort_dir, "/plot_colors/Tcell.programs_rank8sharedByunion_reAnnot.Rds"))
+myeloid_colors<- readRDS(paste0(full_cohort_dir, "/plot_colors/Myeloid_program_colors.Rds"))
+myeloid_colors<- myeloid_colors$rank6
+immune_colors<- c(tcell_colors, myeloid_colors)
+colors_treatment<- c(PD1="orange", Untreated="purple")
+
+  
+## Nature 2020 genesets
+nature_2020_genes<- read.csv(paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/Marker_genes/Immune/Published/",
+                                    "Nature2020_genesets.csv"))
+colnames(nature_2020_genes)<- c("cytotoxic", "naive", "predysfunctional", "dysfunctional")
+nature_2020_genes<- as.list(nature_2020_genes)
+nature_2020_genes<- lapply(nature_2020_genes, function(x){x[x!=""]})
+
+```
+
+
+## Pseudobulked heatmap of expression of GOI (T cells)
+```{r}
+GOI<- c( "PDCD1", "TIGIT", "CTLA4", "ITGAE", "GZMK", "GNLY", "NKG7", "GZMB", "GZMA")
+
+## By sample
+all_plots<- lapply(c("cd4", "cd8"), function(x){
+  tmp<- seurat_list[[x]]
+  tmp$Treatment<- gsub("Treated", "PD1", tmp$Treatment)
+  
+  ## Create pseudobulking variable
+  tmp$pb<- paste0(tmp$Treatment, "_", tmp$Age_Group)
+  pb<- pseudobulk_byVariable(tmp, tmp@meta.data, "pb")
+  
+  pb_center<- NormCenter(pb)$center_data
+  
+  ## Plot
+  myHeatmap(pb_center, GOI=GOI, min.value = -3, max.value = 3, facetWrap = TRUE,
+            orderFactors = c("Ped", "Adult"), orderSubtypes = c("Untreated", "PD1")) +
+    scale_fill_gradient2(high="red", low="blue", mid="white", name="Centered log2(TPM)")+
+    ggtitle(x)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=2)
+ggsave(paste0(figure_dir, "Heatmap_GOI_Tcells.png"), width=13, height=6)
+
+```
+## Pseudobulked heatmap of expression of GOI (Myeloid)
+```{r}
+GOI<- c("PVR", "PVRL2","CD274", "CD80", "CD86", "IFNG")
+sample_center_method="bySample"
+
+## By sample
+all_plots<- lapply(c("myeloid"), function(x){
+  tmp<- seurat_list[[x]]
+  tmp$Treatment<- gsub("Treated", "PD1", tmp$Treatment)
+  
+  ## Create pseudobulking variable
+  tmp$pb<- paste0(tmp$Treatment, "_", tmp$Age_Group)
+  pb<- pseudobulk_byVariable(tmp, tmp@meta.data, "pb")
+  
+  ## center for each sample separately
+  if(sample_center_method=="bySample"){
+      center_bySample<- lapply(unique(tmp$Treatment), function(sample){
+    pb_tmp<- pb[,grepl(sample, colnames(pb))]
+    if(class(pb_tmp)=="numeric"){
+      pb_tmp<- as.data.frame(pb_tmp)
+      colnames(pb_tmp)<- colnames(pb)[grepl(sample, colnames(pb))]
+    }
+    pb_list_tmp<- NormCenter(pb_tmp)
+    pb_center_tmp<- pb_list_tmp$center_data
+    return(pb_center_tmp)
+  })
+  pb_center<- do.call("cbind", center_bySample)
+  } else if(sample_center_method=="byAll"){pb_center<- NormCenter(pb)$center_data}
+  
+  
+  ## Plot
+  myHeatmap(pb_center, GOI=GOI, min.value = -3, max.value = 3, facetWrap = TRUE,
+            orderFactors = c("Ped", "Adult"), orderSubtypes = c("Untreated", "PD1")) +
+    scale_fill_gradient2(high="red", low="blue", mid="white", name="Centered log2(TPM)")+
+    ggtitle(x)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=1)
+ggsave(paste0(figure_dir, "Heatmap_GOI_Myeloid.png"), width=7, height=5)
+
+```
+
+## Pseudobulked heatmap of expression of GOI, by programs 
+```{r}
+GOI<- c("KLRB1", "SELPLG", "PTGER2", "PDCD1", "TIGIT", "CTLA4", "ITGAE", "GZMK", "GNLY", "NKG7", "GZMB", "GZMA", "GADD45B")
+
+## T cells
+  ## By treatment
+  all_plots<- lapply(c("CD4", "CD8"), function(x){
+    tmp<- seurat_list[[x]]
+    
+    ## Create pseudobulking variable
+    tmp$pb<- paste0(tmp$Treatment, "_", gsub("\\.", "\n", gsub("_", "\n", tmp$MaxScoringProgram)))
+    pb<- pseudobulk_byVariable(tmp, tmp@meta.data, "pb")
+    
+    pb_center<- NormCenter(pb)$center_data
+    
+    ## Plot
+    myHeatmap(pb_center, GOI=GOI, min.value = -3, max.value = 3, facetWrap = TRUE, orderSubtypes = c("Untreated", "Treated")) +
+      scale_fill_gradient2(high="red", low="blue", mid="white", name="Centered log2(TPM)")+
+      ggtitle(x)
+  })
+  cowplot::plot_grid(plotlist=all_plots, ncol=2)
+  ggsave(paste0(figure_dir, "Heatmap_GOI_byProgram_Tcells.png"), width=28, height=7)
+  
+    ## By treatment + primary/recurrent
+    all_plots<- lapply(c("CD4", "CD8"), function(x){
+      tmp<- seurat_list[[x]]
+      
+      ## Create pseudobulking variable
+      tmp$pb<- paste0(tmp$condition, "_", gsub("\\.", "\n", gsub("_", "\n", tmp$MaxScoringProgram)))
+      pb<- pseudobulk_byVariable(tmp, tmp@meta.data, "pb")
+      
+      pb_center<- NormCenter(pb)$center_data
+      
+      ## Plot
+      myHeatmap(pb_center, GOI=GOI, min.value = -3, max.value = 3, facetWrap = TRUE, orderSubtypes = c("GBM.new", "GBM.rec", "GBM.PD1")) +
+        scale_fill_gradient2(high="red", low="blue", mid="white", name="Centered log2(TPM)")+
+        ggtitle(x)
+    })
+    cowplot::plot_grid(plotlist=all_plots, ncol=2)
+    ggsave(paste0(figure_dir, "Heatmap_GOI_byProgram_Primary.Recurrent_Tcells.png"), width=28, height=7)
+
+
+## Myeloid
+  GOI<- c("HAMP", "LYVE1", "NINJ1", "RHOB", "SLC2A5", "STAB1", "IL32")
+  
+  tmp<- seurat_list$Myeloid
+  
+  ## Create pseudobulking variable
+  tmp$pb<- paste0(tmp$Treatment, "_", gsub("\\.", "\n", gsub("_", "\n", tmp$MaxScoringProgram)))
+  pb<- pseudobulk_byVariable(tmp, tmp@meta.data, "pb")
+  
+  pb_center<- NormCenter(pb)$center_data
+  
+  ## Plot
+  myHeatmap(pb_center, GOI=GOI, min.value = -3, max.value = 3, facetWrap = TRUE, orderSubtypes = c("Untreated", "Treated")) +
+    scale_fill_gradient2(high="red", low="blue", mid="white", name="Centered log2(TPM)")+
+    ggtitle("Myeloid")
+  
+  ggsave(paste0(figure_dir, "Heatmap_GOI_byProgram_Myeloid.png"), width=14, height=5)
+```
+
+## Based on heatmap- boxplot of mean gene expression for GOI within program of interest
+```{r}
+tmp<- seurat_list$CD4
+
+
+## Boxplot
+goi_plot<- c("PDCD1", "GNLY", "TIGIT", "CTLA4", "GZMB", "SELPLG", "PTGER2", "KLRB1", "GADD45B")
+all_plots<-lapply(goi_plot, function(gene){
+  tmp$GOI<- as.data.frame(tmp@assays$RNA@data[gene,])
+  mean_goi<- tmp@meta.data %>% group_by(sample, MaxScoringProgram) %>% summarise(mean_expr=mean(GOI)) %>% as.data.frame()
+  mean_goi$Treatment<- plyr::mapvalues(mean_goi$sample, tmp$sample, tmp$Treatment, warn_missing = FALSE)
+  mean_goi$Treatment<- factor(mean_goi$Treatment, levels=c("Untreated", "Treated"))
+  
+  ggplot(mean_goi, aes(x=Treatment, y=mean_expr, fill=Treatment))+
+    geom_boxplot()+
+    geom_point()+
+    ylim(0,max(mean_goi$mean_expr))+
+    facet_grid(cols=vars(MaxScoringProgram))+
+    stat_compare_means(method="t.test")+
+    theme_bw()+
+    scale_fill_manual(values=c(Untreated="purple", Treated="orange"))+
+    theme(axis.text.x = element_text(angle=45, hjust=1),
+          axis.text = element_text(face="bold", color="black"),
+          axis.title = element_text(face="bold", color="black"),
+          strip.text = element_text(face="bold", color="black", size=10),
+          legend.position = "none")+
+    xlab("")+
+    ylab(paste0("Mean log2 TPM: ", gene))
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=1)
+ggsave(paste0(figure_dir, "Boxplot_AllGOI_MeanExprBySample_PD1vUntreated_CD4.png"), width=10, height=4*length(goi_plot))
+
+## VlnPlot
+VlnPlot(tmp, group.by = "MaxScoringProgram",stack=TRUE , flip = TRUE,
+        features=c("PDCD1", "TIGIT", "CTLA4", "ITGAE", "GZMK", "GNLY", "NKG7", "GZMA", "SELPLG", "PTGER2","KLRB1", "GADD45B"), 
+        combine=TRUE, fill.by="ident", split.by = "Treatment", split.plot = TRUE)+
+  scale_fill_manual(values= c(Untreated="purple", Treated="orange"))
+ggsave(paste0(figure_dir, "Vln_GOI_byTreatment_CD4.png"), width=7, height=8)
+```
+
+## Score for cytoxic/dysfunctional genesets, plot by treatment
+```{r}
+## Add nature 2020 scores (dysfunctional, cyto, dys, memory)
+all_seurat<- lapply(all_seurat, function(x){
+  x<-AddModuleScore(x, nature_2020_genes, name=paste0(names(nature_2020_genes), "_score"))
+  colnames(x@meta.data)<-ifelse(grepl(paste(paste0(names(nature_2020_genes), "_score"), collapse = "|"), colnames(x@meta.data)),
+                                gsub("[0-9]", "", colnames(x@meta.data)),
+                                colnames(x@meta.data))
+  return(x)
+})
+
+## Plot
+all_plots<- lapply(names(all_seurat), function(x){
+  seurat<- all_seurat[[x]]
+  seurat$sample<- factor(seurat$sample, sample_order[sample_order %in% unique(seurat$sample)])
+  DotPlot(seurat, group.by = "sample", features=paste0(names(nature_2020_genes), "_score"))+
+    scale_color_gradient2(low="blue", mid="grey", high="red")+
+    coord_flip()+
+    theme(axis.text.x = element_text(angle=45, hjust=1))+
+    ggtitle(x)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=1)
+ggsave(paste0(figure_dir, "DotPlot_TcellStateScores_CD4.CD8.png"), width=13, height=8)
+```
+
+## Heatmap of DEGs between treated/untreated in ped- same pattern in adult?
+```{r}
+pvalue_thresh<- 0.1
+shared_degs<- readRDS(paste0("../02_Merge_SS2.tenX/analysis/SharedDEGs/shared_degs_tenx.ss2_pvalueThresh", pvalue_thresh, ".Rds"))
+shared_degs<- lapply(shared_degs, function(x){x[x$sameLogFCDirection=="Same",]})
+
+sample_center_method="byAll"
+all_plots<- lapply(names(seurat_list), function(x){
+  tmp<- seurat_list[[x]]
+  markers_use<-shared_degs[[x]]
+  
+  ## subset to adult
+  tmp<- subset(tmp, Age_Group=="Adult")
+  
+  ## subset to programs with degs
+  tmp<- subset(tmp, Program_projected %in% unique(markers_use$program))
+  markers_use<- markers_use[markers_use$gene %in% rownames(tmp),]
+  markers_use<- markers_use[order(markers_use$program, markers_use$SS2_avg_log2FC),]
+
+  
+  ## Create pseudobulking variable
+  tmp$pb<- paste0(tmp$Treatment, "_", gsub("\\.", "\n", gsub("_", "\n", tmp$Program_projected)))
+  pb<- pseudobulk_byVariable(tmp, tmp@meta.data, "pb")
+  
+  
+   ## center for each sample separately
+  if(sample_center_method=="bySample"){
+      center_bySample<- lapply(unique(tmp$Treatment), function(sample){
+    pb_tmp<- pb[,grepl(sample, colnames(pb))]
+    if(class(pb_tmp)=="numeric"){
+      pb_tmp<- as.data.frame(pb_tmp)
+      colnames(pb_tmp)<- colnames(pb)[grepl(sample, colnames(pb))]
+    }
+    pb_list_tmp<- NormCenter(pb_tmp)
+    pb_center_tmp<- pb_list_tmp$center_data
+    return(pb_center_tmp)
+  })
+  pb_center<- do.call("cbind", center_bySample)
+  } else if(sample_center_method=="byAll"){pb_center<- NormCenter(pb)$center_data}
+  
+  
+  
+  ## Plot
+  myHeatmap(pb_center, GOI=unique(markers_use$gene), min.value = -3, max.value = 3, 
+                orderFactors =  gsub("\\.", "\n",gsub("_", "\n", unique(markers_use$program))),
+            orderSubtypes =c("Untreated", "Treated")) +
+    scale_fill_gradient2(high="red", low="blue", mid="white", name="Centered log2(TPM)")+
+    ggtitle(x)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "Heatmap_SharedDEGs_pvalueThresh",pvalue_thresh, ".png"), width=17, height=5)
+```

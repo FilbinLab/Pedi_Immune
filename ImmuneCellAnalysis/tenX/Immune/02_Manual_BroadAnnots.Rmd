@@ -1,0 +1,113 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+## broad annotation (myeloid, tcell) based on marker gene expression
+
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+
+base_dir = "/Users/jlabelle/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/tenX/Immune/")
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+library(Matrix)
+
+analysis_dir<- "analysis/manual_broad_annot/"
+figure_dir<- "figures/manual_broad_annot/"
+data_dir<- "analysis/preprocessing/"
+
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+
+marker_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/Marker_genes/")
+hkgenes <- read.table(paste0(marker_dir, "tirosh_house_keeping.txt"), skip = 2)
+hkgenes <- as.vector(hkgenes$V1)
+
+immune_colors<- readRDS("../../plot_colors/ImmuneCell.celltypes.Rds")
+sample_colors<- c(BT1857="grey30", BT2082="olivedrab", BT2083="violetred")
+```
+
+## seurat object with all filtered cells
+```{r}
+seurat_obj<- readRDS(paste0(data_dir, "seurat_obj_noTumor.Rds"))
+```
+
+
+## Plot tcell/myeloid markers, assign myeloid/tcell
+```{r}
+FeaturePlot(seurat_obj, features=c("CSF1R", "CD3G", "CD3E", "CD3D", "CD8A", "CD4"), cols=c("grey", "red"),ncol=3)
+ggsave(paste0(figure_dir, "UMAP_broad_markers.png"), width=9, height=5)
+
+## Reduce resolution for assignment
+seurat_obj<- FindClusters(seurat_obj, resolution = 0.1)
+DimPlot(seurat_obj, label=TRUE)
+
+## assign broad based on markers
+DimPlot(seurat_obj, label=TRUE)+ VlnPlot(seurat_obj, features=c("CSF1R", "CD3G"))
+ggsave(paste0(figure_dir, "BroadAnnot_clusterWiseAnnot.png"), width=8, height=4)
+
+seurat_obj$broad_annot<- ifelse(seurat_obj$seurat_clusters ==1, "Tcell", "Myeloid" )
+DimPlot(seurat_obj, group.by = "broad_annot",label=TRUE, label.size = 6)+NoLegend()+
+  scale_color_manual(values=immune_colors[names(immune_colors) %in% seurat_obj$broad_annot])
+ggsave(paste0(figure_dir, "UMAP_broad_annot.png"), width=6, height=6)
+
+saveRDS(seurat_obj, file=paste0(data_dir, "seurat_obj_noTumor.Rds"))
+```
+
+## Split by broad, rerun clustering
+```{r}
+seurat_obj<- readRDS(paste0(data_dir, "seurat_obj_noTumor.Rds"))
+
+## Myeloid
+myeloid_seurat<- subset(seurat_obj, broad_annot=="Myeloid")
+myeloid_meta<- myeloid_seurat@meta.data
+myeloid_seurat<- RunFullSeurat(myeloid_seurat@assays$RNA@counts, RunHarmony = TRUE, samples=myeloid_meta$sample)
+myeloid_seurat<- AddMetaData(myeloid_seurat, myeloid_meta[,!colnames(myeloid_meta) %in% colnames(myeloid_seurat@meta.data)])
+
+## Tcell
+tcell_seurat<- subset(seurat_obj, broad_annot=="Tcell")
+tcell_meta<- tcell_seurat@meta.data
+tcell_seurat<- RunFullSeurat(tcell_seurat@assays$RNA@counts, RunHarmony = TRUE, samples=tcell_meta$sample)
+tcell_seurat<- AddMetaData(tcell_seurat, tcell_meta[,!colnames(tcell_meta) %in% colnames(tcell_seurat@meta.data)])
+
+saveRDS(myeloid_seurat, file=paste0(analysis_dir, "myeloid_seurat.Rds"))
+saveRDS(tcell_seurat, file=paste0(analysis_dir, "tcell_seurat.Rds"))
+```
+
+## Check for any mis-annotated cells
+```{r}
+myeloid_seurat<- readRDS(paste0(analysis_dir, "myeloid_seurat.Rds"))
+tcell_seurat<- readRDS(paste0(analysis_dir, "tcell_seurat.Rds"))
+
+## Myeloid: has cluster of CD3+ cells, but also express CSF1R- likely CD3+ macrophages
+FeaturePlot(myeloid_seurat, features = c("CSF1R", "CD3G", "CD8A", "CD4"), cols=c("grey", "red"), ncol=2)
+ggsave(paste0(figure_dir, "Myeloid_UMAP_broad_markers.png"), width=6, height=5)
+
+## Tcell- no CSF1R+, all CD3+
+FeaturePlot(tcell_seurat, features = c("CSF1R", "CD3G", "CD8A", "CD4"), cols=c("grey", "red"), ncol=2)
+ggsave(paste0(figure_dir, "Tcell_UMAP_broad_markers.png"), width=6, height=5)
+```
+
+## Plots by sample- UMAP, cells per sample
+```{r}
+## UMAP by sample
+p1<-DimPlot(seurat_obj, group.by = "sample")+scale_color_manual(values=sample_colors)+ggtitle("Immune")
+p2<-DimPlot(myeloid_seurat, group.by = "sample")+scale_color_manual(values=sample_colors)+ggtitle("Myeloid")
+p3<-DimPlot(tcell_seurat, group.by = "sample")+scale_color_manual(values=sample_colors)+ggtitle("Tcell")
+p1+p2+p3
+ggsave(paste0(figure_dir, "UMAP_bySample.png"), width=18, height=5)
+
+## barchart by sample
+my_barchart_programProp(seurat_obj, coloring_variable = "broad_annot", 
+                            colors=immune_colors, number_or_proportion = "number")+ggtitle("Immune")
+ggsave(paste0(figure_dir, "Barchart_broad_annot_bySample.png"), width=4, height=3)
+```
+

@@ -1,0 +1,150 @@
+---
+title: "Visualize program proportion changes"
+output: html_document
+---
+
+After merging all gbm (ss2 and 10x), visualize change in program proportions. Note that these samples integrate poorly- program annotations are done separately for ss2/10x. The results are just visualized in 1 plot here for nicer plotting
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(harmony)
+
+base_dir = "/Users/jlabelle/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/PD1_Treat/02_Merge_SS2.tenX/")
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/Scripts/"
+
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+source(paste0(base_dir, script_dir, "seurat_transferAnchors_helper.R"))
+
+
+analysis_dir<- "analysis/PlotPrograms/"
+figure_dir<- "figures/PlotPrograms/"
+full_cohort_dir<- "../../ImmuneCellAnalysis/"
+data_dir<- "analysis/Merge/"
+
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+
+```
+
+
+## Load in seurat objects
+```{r}
+## Load in tenx/ss2 merged seurat objects
+files<- list.files(data_dir)
+seurat_list<- lapply(files, function(f){
+   readRDS(paste0(data_dir, f))
+})
+names(seurat_list)<- gsub("_seurat.Rds", "", files)
+
+
+## Colors 
+tcell_colors<- readRDS(paste0(full_cohort_dir, "/plot_colors/Tcell.programs_rank8sharedByunion_reAnnot.Rds"))
+myeloid_colors<- readRDS(paste0(full_cohort_dir, "/plot_colors/Myeloid_program_colors.Rds"))
+myeloid_colors<- myeloid_colors$rank6
+immune_colors<- c(tcell_colors, myeloid_colors)
+
+colors_treatment<- c(PD1="orange", Untreated="purple")
+colors_samples<-c( BT1857="skyblue", BT2062="gold", BT2080="salmon",
+                   BT1478="purple", BT1745="blue", BT1857="cyan",
+                    BT1910="orange", BT1935="khaki")
+colors_sequencing<- c(SS2="magenta", TenX="green")
+
+## Full cohort marker genes
+tcell_markers<- readRDS(paste0(full_cohort_dir, 
+                             "02a_Tcells/02_Ped.Adult/01_compare_NMF/analysis/newMarkers_deNovoPed.AdultTcell/", 
+                             "new_markers_NMFrank8_bySeurat_sharedByunion_reAnnot.Rds"))
+myeloid_markers<- read.csv(paste0(full_cohort_dir,
+                               "02b_Myeloid/01a_NMF/analysis/de.novoNMF/pedOnly_nomuv63/", 
+                               "top_DE_genes_10Xannotated_NMF_rank6.csv"))
+
+  ## Top markers per program
+  top_tcell_markers<- tcell_markers %>% group_by(cluster) %>% top_n(n=5, wt=avg_log2FC) %>% as.data.frame()
+  top_myeloid_markers<- myeloid_markers %>% group_by(cluster) %>% top_n(n=5, wt=avg_log2FC) %>% as.data.frame()
+```
+
+
+
+## UMAPs of projected programs
+```{r}
+all_plots<- lapply(names(seurat_list), function(x){
+  tmp<- seurat_list[[x]]
+  DimPlot(tmp, group.by="Program_projected", pt.size = 1, label=FALSE, label.size = 6)+ 
+    scale_color_manual(values=immune_colors[names(immune_colors) %in% tmp$Program_projected])+
+    ggtitle(x)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "UMAP_PredictedProgram.png"), width=18, height=5)
+
+```
+
+## Barchart of program proportions
+```{r}
+
+all_plots<- lapply(names(seurat_list), function(x){
+  tmp<- seurat_list[[x]]
+  my_barchart_programProp(tmp,grouping_variable = "sample", 
+                          coloring_variable = "Program_projected",
+                          wrapping_variable = "Treatment", colors=immune_colors)+ggtitle(x)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "tenx_Barchart_PredictedProgram.png"), width=18, height=5)
+
+```
+
+## Pseudobulked heatmap of expression of marker genes
+```{r}
+marker_list<- list(cd4=top_tcell_markers[!top_tcell_markers$cluster %in% c("Predysfunctional", "Cytotoxic.NKreceptor"),], 
+                   cd8=top_tcell_markers[!top_tcell_markers$cluster %in% c("Treg", "Inhibitory"),], 
+                   myeloid=top_myeloid_markers)
+
+
+## BT1857_TenX/BT1857_SS2: replace _ with . (messes up facet wrapping in heatmap)
+seurat_list<- lapply(seurat_list, function(x){
+  x$sample<- gsub("BT1857_", "BT1857.", x$sample)
+  return(x)
+})
+
+
+samples<-unique(seurat_list$myeloid$sample)
+all_plots<- lapply(names(seurat_list), function(x){
+  tmp<- seurat_list[[x]]
+  markers_use<-marker_list[[x]]
+  markers_use<- markers_use[markers_use$cluster %in% unique(tmp$Program_projected),]
+  markers_use<- markers_use[markers_use$gene %in% rownames(tmp),]
+  
+  samples_use<-samples[samples %in% unique(tmp$sample)]
+  
+  ## Create pseudobulking variable
+  tmp$pb<- paste0(tmp$sample, "_", gsub("\\.", "\n", gsub("_", "\n", tmp$Program_projected)))
+  pb<- pseudobulk_byVariable(tmp, tmp@meta.data, "pb")
+  
+  
+  ## center for each sample separately
+  center_bySample<- lapply(unique(tmp$sample), function(sample){
+    pb_tmp<- pb[,grepl(sample, colnames(pb))]
+    if(class(pb_tmp)=="numeric"){
+      pb_tmp<- as.data.frame(pb_tmp)
+      colnames(pb_tmp)<- colnames(pb)[grepl(sample, colnames(pb))]
+    }
+    pb_list_tmp<- NormCenter(pb_tmp)
+    pb_center_tmp<- pb_list_tmp$center_data
+    return(pb_center_tmp)
+  })
+  center_bySample<- do.call("cbind", center_bySample)
+  
+  
+  ## Plot
+  myHeatmap(center_bySample, GOI=markers_use$gene, min.value = -3, max.value = 3, 
+                orderFactors =  gsub("\\.", "\n",gsub("_", "\n", unique(markers_use$cluster))),
+            orderSubtypes =samples_use) +
+    scale_fill_gradient2(high="red", low="blue", mid="white", name="Centered log2(TPM)")+
+    ggtitle(x)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "Heatmap_ExpectedMarkerGenes_All.png"), width=35, height=9)
+```

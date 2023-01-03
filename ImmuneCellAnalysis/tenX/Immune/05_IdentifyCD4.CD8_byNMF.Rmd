@@ -1,0 +1,425 @@
+---
+title: "AnnotateByNMF"
+author: "Jenna LaBelle"
+date: "11/11/2021"
+output: html_document
+---
+
+## Purpose:
+Using shared/specific Tcell programs, annotate each program separately as CD4/CD8
+
+## Approach:
+Split seurat object by program, recluster. Annotate cluster-wise when possible, perform re-clustering and cell-wise annotation when needed. Also compare to "actual" annotations (by expression) to assess accuracy
+
+```{r}
+library(Seurat) 
+library(clusterProfiler)
+library(biomaRt)
+library(stringr)
+library(harmony)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/tenX/Immune/")
+
+analysis_dir_tmp<- paste0(working_dir, "/analysis/identifyCD4.CD8_byNMF/")
+figure_dir_tmp<- paste0(working_dir, "/figures/identifyCD4.CD8_byNMF/")
+
+if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp,recursive = TRUE)}
+if(!dir.exists(analysis_dir_tmp)){dir.create(analysis_dir_tmp, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+
+immune_colors<- readRDS("../../plot_colors/ImmuneCell.celltypes.Rds")
+```
+
+## Read in ped tcell seurat object. Contains NMF assignments (annots added in deNovoPedTcell.v.deNovoAdultTcell, based on correlation with adult T cell + correlation with ped cd4/cd8 programs)
+```{r}
+## ped/adult tcell seurat
+tcell_seurat<- readRDS("analysis/manual_broad_annot/tcell_seurat.Rds")
+
+## figure/analysis dir based on rank + how shared programs are merged
+rank_use<-9
+figure_dir<- paste0(figure_dir_tmp, "rank", rank_use, "/")
+analysis_dir<- paste0(analysis_dir_tmp, "rank", rank_use,  "/")
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir,recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+```
+
+
+## For initial estimate of CD4/CD8: classify each cell cell-wise, plot proportions by program
+```{r}
+variable_name<- paste0("NMF_rank", rank_use, "_annot")
+
+## Make df with CD4/CD8 expression
+cd4.cd8_expr<- as.data.frame(t(tcell_seurat@assays$RNA@data[c("CD8A", "CD8B", "CD4"),]))
+cd4.cd8_expr$CD8<- apply(cd4.cd8_expr, 1, function(x){max(x["CD8A"], x["CD8B"])})
+
+## Remove cells that are 0 for both
+cd4.cd8_expr<- cd4.cd8_expr[rowSums(cd4.cd8_expr)>0,] ## 2,154 (52%)
+
+## Assign each cell based on whether CD4 or CD8 expression is higher
+cd4.cd8_expr$annotate<- ifelse(cd4.cd8_expr$CD4>cd4.cd8_expr$CD8, "CD4",
+                               ifelse(cd4.cd8_expr$CD8 > cd4.cd8_expr$CD4, "CD8", "equal"))
+
+## Remove cells with equal cd4/cd8 expression (can't be annotated)
+cd4.cd8_expr<- cd4.cd8_expr[cd4.cd8_expr$annotate!="equal",] ## 64 cells removed
+
+## Add on program info
+cd4.cd8_expr$program<- plyr::mapvalues(rownames(cd4.cd8_expr), colnames(tcell_seurat),
+                                       tcell_seurat@meta.data[[variable_name]],
+                                       warn_missing = FALSE)
+
+## Get proportion of cell types by program
+df<- as.data.frame(table(cd4.cd8_expr$program, cd4.cd8_expr$annotate))
+colnames(df)<-c("Program", "CellType", "Ncells")
+df<-df %>% group_by(Program) %>% mutate(perCells=Ncells/sum(Ncells)) %>% as.data.frame()
+
+## Order
+df$CellType<- factor(df$CellType, levels=c("CD4", "CD8"))
+
+## Plot
+ggplot(df, aes(x=Program, y=perCells, fill=CellType))+
+  geom_bar(stat="identity", position="stack")+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle=45, hjust=1))+
+  xlab("") + ylab("Proportion of cells")+
+  geom_hline(yintercept = 0.5, linetype="dashed")
+ggsave(paste0(figure_dir, "CD4.CD8.predictions_byCellwiseExpression.png"), width=5, height=3)
+
+saveRDS(cd4.cd8_expr, file=paste0(analysis_dir, "cd4.cd8_expression_values.Rds"))
+```
+
+## Split by NMF, re-run clustering for each
+```{r}
+rank_use<-9
+figure_dir<- paste0(figure_dir_tmp, "rank", rank_use, "/")
+analysis_dir<- paste0(analysis_dir_tmp, "rank", rank_use,  "/")
+variable_name<- paste0("NMF_rank", rank_use, "_annot")
+
+tcell_seurat$tmp<- tcell_seurat@meta.data[[variable_name]]
+all_seurat<- lapply(unique(tcell_seurat$tmp), function(x){
+  print(x)
+  seurat_tmp<- subset(tcell_seurat, tmp==x)
+  meta_tmp<- seurat_tmp@meta.data
+  seurat_tmp<- RunFullSeurat(cm=seurat_tmp@assays$RNA@counts, RunHarmony = TRUE, samples=meta_tmp$sample)
+  seurat_tmp<- AddMetaData(seurat_tmp, meta_tmp[,!colnames(meta_tmp) %in% colnames(seurat_tmp@meta.data)])
+  return(seurat_tmp)
+})
+names(all_seurat)<- unique(tcell_seurat$tmp)
+
+
+
+## Plot CD4/CD8 expression for each
+all_plots<-lapply(names(all_seurat), function(x){
+  seurat_tmp<- all_seurat[[x]]
+  p1<-FeaturePlot(seurat_tmp, features=c("CD4", "CD8A"))
+  p2<- DimPlot(seurat_tmp, label=TRUE)+NoLegend()+ggtitle(x)
+  p3<- VlnPlot(seurat_tmp, features=c("CD4", "CD8A"))
+  cowplot::plot_grid(plotlist=list(p2, p1, p3), ncol=3)
+})
+names(all_plots)<-names(all_seurat)
+p<-cowplot::plot_grid(plotlist=all_plots, ncol=1) 
+
+ggsave(plot=p, paste0(figure_dir, "CD4.CD8_expr_byNMFProgram.png"), width=15, height=25)
+
+saveRDS(all_seurat, file=paste0(analysis_dir, "seurat_list_splitByNMF.Rds"))
+```
+
+
+
+## Annotate cells for each program cluster-wise
+Three main types of programs:
+1. For some programs (NK, Tregs), all cells are clearly either CD4/CD8
+2. For some programs, the clustering above clearly splits cells into CD4/CD8
+3. For some programs, while there is clearly CD4/CD8 patterning, need to set the resolution manually to split cluster-wise
+4. For some programs, need to do some sub-clustering
+
+## Read in seurat object list (above)- 1 seurat object for each program
+```{r}
+rank_use<- 9
+figure_dir<- paste0(figure_dir_tmp, "rank", rank_use, "/")
+analysis_dir<- paste0(analysis_dir_tmp, "rank", rank_use,  "/")
+
+
+seurat_list<- readRDS(paste0(analysis_dir, "seurat_list_splitByNMF.Rds"))
+
+```
+
+## Option 1: all cells either CD4/CD8
+```{r}
+programs<- c("Treg", "Cytotoxic.NKreceptor", "Cytotoxic.NKreceptor_Alt", "Predysfunctional")
+names(programs)<-c("CD4", "CD8", "CD8", "CD8")
+for(i in 1:length(programs)){
+  program<- programs[i]
+  print(program)
+  tmp<- seurat_list[[program]]
+  tmp$detailed_annot_byProgram<- names(program)
+  seurat_list[[program]]<- tmp
+}
+
+```
+
+## Option 2: program contains CD4/CD8, current resolution splits cleanly
+```{r}
+## Programs that can be annotated at current resolution- annotations based on figure "CD4.CD8_expr_byNMFProgram.png"
+programs<-list(Memory=list(CD4=c(0:2), CD8=c(3)), Cycling=list(CD4=c(0), CD8=c(1:2)))
+
+all_plots<-list()
+for(program in names(programs)){
+  print(program)
+  tmp<- seurat_list[[program]]
+  program_annot<- programs[[program]]
+  tmp$detailed_annot_byProgram<- ifelse(tmp$seurat_clusters %in% program_annot$CD4, "CD4", "CD8")
+  p<- DimPlot(tmp, group.by = "detailed_annot_byProgram") + VlnPlot(tmp,
+                                                                    group.by = "detailed_annot_byProgram", 
+                                                                    features=c("CD4", "CD8A") )
+  all_plots[[program]]<-p
+  seurat_list[[program]]<- tmp
+}
+cowplot::plot_grid(plotlist=all_plots)
+```
+
+## Option 3: program needs to be manually re-clustered
+```{r}
+## IFN Response
+seurat_tmp<- seurat_list[["IFN.Response"]]
+seurat_tmp<- FindClusters(seurat_tmp, resolution = 2)
+cd4_clusters<- c(0:2, 4:5, 7,9)
+cd8_clusters<-c(3, 6,8)
+seurat_tmp$detailed_annot_byProgram<- ifelse(seurat_tmp$seurat_clusters %in% cd4_clusters, "CD4",
+                                             ifelse(seurat_tmp$seurat_clusters %in% cd8_clusters, "CD8",
+                                                    "issue"))
+DimPlot(seurat_tmp, group.by = "detailed_annot_byProgram") + VlnPlot(seurat_tmp,
+                                                                  group.by = "detailed_annot_byProgram", 
+                                                                  features=c("CD4", "CD8A") )
+seurat_list$IFN.Response<- seurat_tmp
+
+## Stress
+seurat_tmp<- seurat_list$Stress
+
+  ## Remove hsp genes- masking cd4/cd8 differences
+  hsp_genes<- rownames(seurat_tmp)[grepl("^HSP", rownames(seurat_tmp))]
+  seurat_no_hsp<- RunFullSeurat(seurat_tmp@assays$RNA@counts[!rownames(seurat_tmp) %in% hsp_genes,],
+                             RunHarmony = TRUE, samples = seurat_tmp$sample)
+  seurat_no_hsp<- FindClusters(seurat_no_hsp, resolution =.7)
+  p1<- FeaturePlot(seurat_no_hsp, features=c("CD4", "CD8A")) 
+  p2<- VlnPlot(seurat_no_hsp, features=c("CD4", "CD8A"))
+  p3<- DimPlot(seurat_no_hsp, label=TRUE) +NoLegend()
+  cowplot::plot_grid(plotlist=list(p1, p2, p3), ncol=1)
+  ggsave(paste0(figure_dir, "Stress_NoHSPgenes_annotation.png"), width=6, height=9)
+  
+  cd4_clusters<-  c(2)
+  cd8_clusters<-c(0:1, 4:5)
+  unclear_clusters<- 3 
+  
+  seurat_no_hsp$detailed_annot_byProgram<- ifelse(seurat_no_hsp$seurat_clusters %in% cd4_clusters, "CD4",
+                                         ifelse(seurat_no_hsp$seurat_clusters %in% cd8_clusters, "CD8",
+                                                ifelse(seurat_no_hsp$seurat_clusters %in% unclear_clusters, "unclear",
+                                                       "issue")))
+  
+  
+  ## Add these annotations back to original seurat object (with hsp genes)
+  seurat_tmp$detailed_annot_byProgram<- plyr::mapvalues(colnames(seurat_tmp), colnames(seurat_no_hsp),
+                                                        seurat_no_hsp$detailed_annot_byProgram)  
+  DimPlot(seurat_tmp, group.by = "detailed_annot_byProgram") + VlnPlot(seurat_tmp,
+                                                                group.by = "detailed_annot_byProgram", 
+                                                                features=c("CD4", "CD8A") )
+
+  
+  seurat_list$Stress<- seurat_tmp
+```
+
+## Option 4: sub-clustering required
+```{r}
+## Activated EM
+seurat_tmp<- seurat_list$Activated_EM
+seurat_tmp<- FindClusters(seurat_tmp, resolution = 1.5)
+
+p1<- FeaturePlot(seurat_tmp, features=c("CD4", "CD8A")) 
+p2<- VlnPlot(seurat_tmp, features=c("CD4", "CD8A"))
+p3<- DimPlot(seurat_tmp, label=TRUE) +NoLegend()
+cowplot::plot_grid(plotlist=list(p1, p2, p3), ncol=1)
+
+cd4_clusters<- c(0:3,5:7,9)
+unclear_clusters<- c(4,8)
+
+seurat_tmp$detailed_annot_byProgram<- ifelse(seurat_tmp$seurat_clusters %in% unclear_clusters, "Subcluster",
+                                              ifelse(seurat_tmp$seurat_clusters %in% cd4_clusters, "CD4",
+                                              "issue"))
+
+  ## Subcluster 
+  subcluster_seurat<- subset(seurat_tmp, detailed_annot_byProgram == "Subcluster")
+  subcluster_seurat<- RunFullSeurat(subcluster_seurat@assays$RNA@counts, RunHarmony = TRUE, samples=subcluster_seurat$sample)
+  subcluster_seurat$detailed_annot_byProgram<- ifelse(subcluster_seurat$seurat_clusters==1, "CD8", "CD4")  
+  
+  ## Add onto rest of inhibitory CD8 annotations
+  seurat_tmp$detailed_annot_byProgram<- ifelse(colnames(seurat_tmp) %in% colnames(subcluster_seurat),
+                                                   plyr::mapvalues(colnames(seurat_tmp), 
+                                                                   colnames(subcluster_seurat),
+                                                                   subcluster_seurat$detailed_annot_byProgram),
+                                                   seurat_tmp$detailed_annot_byProgram)
+  
+ DimPlot(seurat_tmp, group.by = "detailed_annot_byProgram") + VlnPlot(seurat_tmp,
+                                                                group.by = "detailed_annot_byProgram", 
+                                                                features=c("CD4", "CD8A") )
+  
+seurat_list$Activated_EM<- seurat_tmp
+    
+
+```
+
+## Save list with updated annotations
+```{r}
+rank_use<- 9
+figure_dir<- paste0(figure_dir_tmp, "rank", rank_use, "/")
+analysis_dir<- paste0(analysis_dir_tmp, "rank", rank_use,  "/")
+
+saveRDS(seurat_list, file=paste0(analysis_dir, "seurat_list_splitByNMF.Rds"))
+```
+
+## Plot total cd4/cd8 annot by program- compare to estimation at beginning of code
+```{r}
+rank_use<-9
+figure_dir<- paste0(figure_dir_tmp, "rank", rank_use, "/")
+analysis_dir<- paste0(analysis_dir_tmp, "rank", rank_use,  "/")
+seurat_list<- readRDS(paste0(analysis_dir, "seurat_list_splitByNMF.Rds"))
+
+all_meta_list<- lapply(names(seurat_list), function(x){
+  seurat_tmp<- seurat_list[[x]]
+  tmp<-data.frame(annot=seurat_tmp$detailed_annot_byProgram, Program=x)
+  return(tmp)
+})
+all_meta_withUnclear<- do.call("rbind", all_meta_list)
+
+all_meta<- all_meta_withUnclear[all_meta_withUnclear$annot!="unclear",]
+
+## Breakdown of percent of cd4/cd8 cells per program
+df_bd<- as.data.frame(table(all_meta$annot, all_meta$Program))
+colnames(df_bd)<-c("CellType", "Program", "NCells")
+df_bd<- df_bd %>% group_by(Program) %>% mutate(PerCells=NCells/sum(NCells)) %>% as.data.frame()
+
+## Plot
+ggplot(df_bd, aes(x=Program, y=PerCells, fill=CellType))+
+  geom_bar(stat="identity", position="stack")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))+
+  xlab("") + ylab("Proportion of cells")+
+  geom_hline(yintercept = 0.5, linetype="dashed")
+ggsave(paste0(figure_dir, "CD4.CD8.annotationBy_NMF.png"), width=5, height=3)
+
+saveRDS(all_meta_withUnclear, file=paste0(analysis_dir, "all_annotations_byNMFProgram.Rds"))
+```
+
+
+## Add CD4/CD8 annotation onto full tcell seurat object
+```{r}
+rank_use<-9
+nmf_annotations<- readRDS(paste0(analysis_dir, "all_annotations_byNMFProgram.Rds"))
+variable_name<- paste0("detailed_annot_byNMFrank", rank_use)
+
+## Add to tcell seurat object
+tcell_seurat@meta.data[[variable_name]]<- plyr::mapvalues(colnames(tcell_seurat), rownames(nmf_annotations), nmf_annotations$annot)
+
+
+saveRDS(tcell_seurat, file="analysis/manual_broad_annot/tcell_seurat.Rds")
+```
+
+## Split into cd4/cd8, re-run clustering
+```{r}
+rank_use<-9
+variable_name<- paste0("detailed_annot_byNMFrank", rank_use)
+tcell_seurat$tmp<- tcell_seurat@meta.data[[variable_name]]
+
+## CD4
+  ## Subset to CD4
+  cd4_seurat<-subset(tcell_seurat, tmp=="CD4")
+  cd4_meta<- cd4_seurat@meta.data
+  
+  ## Rerun clustering
+  cd4_seurat<- RunFullSeurat(cd4_seurat@assays$RNA@counts, RunHarmony = TRUE, samples=cd4_meta$sample)
+  cd4_seurat<- AddMetaData(cd4_seurat, cd4_meta[,!colnames(cd4_meta) %in% colnames(cd4_seurat@meta.data)])
+  
+  ## Quick vis to check for any clear CD8- some in cluster 5. but also expresses CD4. kept
+  DimPlot(cd4_seurat, label=TRUE, group.by = "seurat_clusters")
+  VlnPlot(cd4_seurat, features=c("CD4", "CD8A"), ncol=1)
+  FeaturePlot(cd4_seurat, features=c("CD4", "CD8A"), ncol=1) + DimPlot(cd4_seurat, label=TRUE)
+  
+  
+## CD8
+  ## Subset to CD4
+  cd8_seurat<-subset(tcell_seurat, tmp=="CD8")
+  cd8_meta<- cd8_seurat@meta.data
+  
+  ## Rerun clustering
+  cd8_seurat<- RunFullSeurat(cd8_seurat@assays$RNA@counts, RunHarmony = TRUE, samples=cd8_meta$sample)
+  cd8_seurat<- AddMetaData(cd8_seurat, cd8_meta[,!colnames(cd8_meta) %in% colnames(cd8_seurat@meta.data)])
+  
+  ## Quick vis to check for any clear CD8- some in cluster 2. sub-clustering shows small cd8 cluster, mostly in stress, but don't cluster in stress seurat. kept.
+  DimPlot(cd8_seurat, label=TRUE, group.by = "seurat_clusters")
+  VlnPlot(cd8_seurat, features=c("CD4", "CD8A"), ncol=1)
+  FeaturePlot(cd8_seurat, features=c("CD4", "CD8A"), ncol=1) + DimPlot(cd8_seurat, label=TRUE) 
+
+
+saveRDS(cd4_seurat, file=paste0(analysis_dir, "cd4_seurat.Rds"))
+saveRDS(cd8_seurat, file=paste0(analysis_dir, "cd8_seurat.Rds"))
+```
+
+## Quick visualizations to confirm
+```{r}
+FeaturePlot(cd4_seurat, features=c("CD4", "CD8A", "GZMK", "TOP2A", "CCR7", "FOXP3"), ncol=3)
+ggsave(paste0(figure_dir, "CD4_MarkerGeneExpression.png"), width=9, height=6)
+
+FeaturePlot(cd8_seurat, features=c("CD4", "CD8A", "GZMK", "TOP2A", "CCR7", "FOXP3"), ncol=3)
+ggsave(paste0(figure_dir, "CD8_MarkerGeneExpression.png"), width=9, height=6)
+```
+
+
+## Add finalized annotations to full immune seurat object 
+```{r}
+immune_seurat<- readRDS("analysis/preprocessing/seurat_obj_noTumor.Rds")
+immune_seurat$detailed_annot<- ifelse(colnames(immune_seurat) %in% colnames(tcell_seurat),
+                                      as.character(plyr::mapvalues(colnames(immune_seurat),
+                                                                   colnames(tcell_seurat),
+                                                                   tcell_seurat$detailed_annot_byNMFrank9)),
+                                      "Myeloid")
+saveRDS(immune_seurat, file="analysis/preprocessing/seurat_obj_noTumor.Rds")
+```
+
+## re-score cells split into cd4/cd8 for programs
+```{r}
+## Read in cd4/cd8 seurat objects
+cd4_seurat<- readRDS(paste0(analysis_dir, "cd4_seurat.Rds"))
+cd8_seurat<- readRDS(paste0(analysis_dir, "cd8_seurat.Rds"))
+
+## Read in marker genes
+rank_use<-9
+program_markers<- read.csv(paste0("analysis/nmf/Tcell/top_DE_genes_NMF_rank", rank_use, "_annotated.csv"))
+program_markers<- split(program_markers, f=program_markers$cluster)
+program_markers<- lapply(program_markers, function(x){x$gene})
+
+## Subset marker genes to cd4/cd8 specific
+cd4_markers<- program_markers[!names(program_markers) %in% c("Cytotoxic.NKreceptor","Cytotoxic.NKreceptor_Alt",
+                                                             "Predysfunctional")]
+cd8_markers<- program_markers[!names(program_markers) %in% c("Treg")]
+
+## Score CD4
+cm_list<- NormCenter(cd4_seurat@assays$RNA@counts)
+cm_mean<- rowMeans(log2(cm_list$raw_data+1))
+scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, cd4_markers)))
+saveRDS(scores, file=paste0(analysis_dir, "cd4_program_scores.Rds"))
+
+## Score CD8
+cm_list<- NormCenter(cd8_seurat@assays$RNA@counts)
+cm_mean<- rowMeans(log2(cm_list$raw_data+1))
+scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, cd8_markers)))
+saveRDS(scores, file=paste0(analysis_dir, "cd8_program_scores.Rds"))
+
+
+```
+

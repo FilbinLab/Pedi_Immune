@@ -1,0 +1,128 @@
+---
+title: "Merge all SS2 GBM"
+output: html_document
+---
+
+## Merge all GBM SS2 seurat objects, both pd1 and untreated
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(harmony)
+
+base_dir = "/Users/jlabelle/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/PD1_Treat/01a_SS2/Immune/")
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/Scripts/"
+
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+source(paste0(base_dir, script_dir, "seurat_transferAnchors_helper.R"))
+
+
+analysis_dir<- "analysis/Merge/"
+figure_dir<- "figures/Merge/"
+full_dir<- "../../../ImmuneCellAnalysis/"
+
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+
+```
+
+
+## Load in seurat objects
+```{r}
+## ss2, untreated (need to run these lines from terminal?)
+setwd(full_cohort_dir)
+ut_myeloid<- readRDS(paste0(
+                               "01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/pedOnly_nomuv63/",
+                              "myeloid_seurat_noDC.B_harmony.Rds"))
+ut_cd8<- readRDS(paste0(
+                           "02a_Tcells/02_Ped.Adult/03_Visualize.Reannotate_programs/analysis/Reannotate_programs/rank8_sharedByunion/",
+                           "ped_seurat_cd8_harmony.Rds"))
+ut_cd4<- readRDS(paste0(
+                           "02a_Tcells/02_Ped.Adult/03_Visualize.Reannotate_programs/analysis/Reannotate_programs/rank8_sharedByunion/", 
+                           "ped_seurat_cd4_harmony.Rds"))
+setwd(working_dir)
+
+## ss2, treated
+pd1_myeloid<- readRDS("analysis/project_broad.detailed_annot/myeloid_noDC.B_seurat.Rds")
+pd1_cd8<- readRDS("analysis/project_broad.detailed_annot/cd8_seurat.Rds")
+pd1_cd4<- readRDS("analysis/project_broad.detailed_annot/cd4_seurat.Rds")
+
+## Set colors
+colors_treatment<- c(PD1="orange", Untreated="purple")
+colors_samples<-c(BT1478="purple", BT1745="blue", BT1857="cyan",E167CD35resub="skyblue",
+                  BT1910="orange", BT1935="khaki", GEX="gold")
+```
+
+## Subset full cohort to just gbm
+```{r}
+gbm_samples<- c("BT1857", "BT1478", "BT1745")
+ut_myeloid<- subset(ut_myeloid, sample %in% gbm_samples)
+ut_cd8<- subset(ut_cd8, sample %in% gbm_samples)
+ut_cd4<- subset(ut_cd4, sample %in% gbm_samples)
+```
+
+
+## Merge 
+```{r}
+## Add treatment info
+ut_myeloid$Treatment<- "Untreated"; ut_cd8$Treatment<- "Untreated"; ut_cd4$Treatment<- "Untreated"
+pd1_myeloid$Treatment<- "PD1"; pd1_cd8$Treatment<- "PD1"; pd1_cd4$Treatment<- "PD1"
+
+## Add annotation column (named same way for merging)
+pd1_myeloid$Final_Annot<- pd1_myeloid$Program_projected
+pd1_cd8$Final_Annot<- pd1_cd8$Program_projected
+pd1_cd4$Final_Annot<- pd1_cd4$Program_projected
+
+pd1_cd4$detailed_annot<- pd1_cd4$detailed_annot_projected
+pd1_cd8$detailed_annot<- pd1_cd8$detailed_annot_projected
+
+
+## Merge and rerun clustering- with harmony integration
+ss2_myeloid<-my_mergeRerunClustering(ut_myeloid, pd1_myeloid, Integration="Harmony")
+ss2_cd4<-my_mergeRerunClustering(ut_cd4, pd1_cd4, Integration="Harmony")
+ss2_cd8<-my_mergeRerunClustering(ut_cd8, pd1_cd8, Integration="Harmony")
+ss2_tcells<- my_mergeRerunClustering(ss2_cd4, ss2_cd8, Integration="Harmony")
+
+saveRDS(ss2_myeloid, file=paste0(analysis_dir, "ss2_myeloid_seurat.Rds"))
+saveRDS(ss2_cd4, file=paste0(analysis_dir, "ss2_cd4_seurat.Rds"))
+saveRDS(ss2_cd8, file=paste0(analysis_dir, "ss2_cd8_seurat.Rds"))
+saveRDS(ss2_tcells, file=paste0(analysis_dir, "ss2_tcell_seurat.Rds"))
+```
+
+
+
+## Plot ss2 by sample/treatment
+```{r}
+files<- list.files(analysis_dir)
+all_seurat<- lapply(files, function(f){
+   readRDS(paste0(analysis_dir, f))
+})
+names(all_seurat)<- gsub("_Harmony_seurat.Rds", "", files)
+
+
+## Plot by treatment
+all_plots<- lapply(names(all_seurat), function(x){
+  seurat_tmp<- all_seurat[[x]]
+  DimPlot(seurat_tmp, group.by = "Treatment")+scale_color_manual(values=colors_treatment)+ggtitle(x)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=2)
+ggsave(paste0(figure_dir, "UMAP_Harmony_Treatment_All.png"), width=10, height=8)
+
+## Plot by sample
+all_plots<- lapply(names(all_seurat), function(x){
+  seurat_tmp<- all_seurat[[x]]
+  DimPlot(seurat_tmp, group.by = "sample")+scale_color_manual(values=colors_samples[names(colors_samples) %in% unique(seurat_tmp$sample)])+
+    ggtitle(x)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=2)
+ggsave(paste0(figure_dir, "UMAP_Harmony_sample_All.png"), width=10, height=8)
+```
+
+
+
+

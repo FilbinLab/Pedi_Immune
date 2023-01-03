@@ -1,0 +1,36 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2639
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;}
+{\*\expandedcolortbl;;}
+\margl1440\margr1440\vieww11520\viewh8400\viewkind0
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+
+\f0\fs24 \cf0 Notes for processing immune PD1 treated data\
+\
+## For SS2 (SS2/Immune):\
+1. 01a_Preprocess_QC_ToSeurat: standard qc, seurat pipeline for BT1910, BT1935 (pd1 treated)\
+2. 01b_PostTracer_Processing: process results from tracer, basic clonality plots. add info to seurat.\
+3. 02_ProjectBroad.DetailedAnnots: project myeloid/tcell, bc/dc, cd4/cd8 from full immune to 2 pd1 treated patients\
+4. 03_MergeGBM.SS2: merge all ss2 gbm- treated and untreated- into single seurat object\
+5. 04_ProjectPrograms_allSS2GBM: project program annotations for myeloid/cd4/cd8 from full cohort to merged ss2 gbm (treated and untreated).\
+6. 05_PD1.v.Untreated_DE: run DE program-wise for pd1 vs untreated\
+\
+\
+Note that also did program projections for pd1 alone. As of 12/7/22, decided to use projections to ALL gbm rather than pd1 only- just to increase confidence in changes in proportion.\
+\
+## For 10x (/tenX/):\
+same idea as for SS2\
+qc, broad/detailed projection separate for treated and untreated\
+program projection together for treated and untreated\
+program de between treated/untreated\
+e\
+\
+\
+## THEN: merge ss2/10x into single seurat just for plotting changes in proportion, GOI expression, DE results, etc\
+/compare_SS2.TenX/\
+\
+## compare to adult\
+1. process adult data, annotate as needed\
+2. project ped programs to adult- need to consider the adult-specific programs found in myeloid data.. challenging. will need to re-project for ped to make comparable\
+\
+}
