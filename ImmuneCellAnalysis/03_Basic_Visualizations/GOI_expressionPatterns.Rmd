@@ -471,6 +471,12 @@ ggsave(paste0(figure_dir_use, "VlnPlot_SELPLG_CD4_bySample.png"), width = 7, hei
  my_dotPlotByAgeGroup(seurat = pedAdult_cd8_seurat, normalization = "center", cm_list=cm_list,
                      genes=c("SELPLG"))
     ggsave(paste0(figure_dir_use, "SELPLG_ByAgeGroup.clonality.png"), device="png", width=4, height=4)
+    
+## Requested by Rebecca 12/13/22- selplg in cd4 vs cd8
+    
+  VlnPlot(subset(tcell_seurat, Final_detailed_annot != "Unclear"), features="SELPLG", group.by = "Final_detailed_annot")+NoLegend()+
+    scale_fill_manual(values=immune_colors)
+  ggsave(paste0(figure_dir_use, "Vln_Tcells_byDetailedAnnot.png"), width=4, height=4)
 ```
 
 ## ANXA1
