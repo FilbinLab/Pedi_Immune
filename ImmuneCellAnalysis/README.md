@@ -13,9 +13,10 @@
 
 ***03_Basic_Visualizations/***: Nice plots of broad/detailed annotation, sample, subtype, etc. Plotting genes of interest.
 
-***04a_Integrate_Immune.Tumor/***: Two main approaches to "integrating" across immune tumor:
+***04a_Integrate_Immune.Tumor/***: approaches to "integrating" across immune tumor:
   - **Correlate_Immune.Tumor_CellType.NMF**: correlating program proportions and scores in sample-wise manner
   - **CellChat**: Identification of receptor/ligand pairs across tumor cell types, myeloid programs, T cell programs
+  -**SCENIC**: Transcription factor regulatory network analysis across myeloid/T cell programs
 
 ***04b_DeconvoluteBulk/***: Deconvolution of bulk RNAseq samples using single cell programs, probing for survival effect 
 
