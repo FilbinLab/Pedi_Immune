@@ -138,7 +138,7 @@ figure_dir_tmp<- paste0(figure_dir, "GBM_Neftel/")
 if(!dir.exists(figure_dir_tmp)){dir.create(figure_dir_tmp)}
 
 
-pub_dir<- "../../../../../../PublishedDatasets/FilbinPublishedDatasets/GBM2019_WithNormalCells/"
+pub_dir<- "../../../../../../Shared/PublishedDatasets/FilbinPublishedDatasets/GBM2019_WithNormalCells/"
 load(paste0(pub_dir, "IDHwtGBM_seurat.Robj"))
 adult_seurat<- seurat_obj_gbm2019; rm(seurat_obj_gbm2019)
 
@@ -299,6 +299,11 @@ gbm_idhmut_myeloid_seurat$TumorType<- plyr::mapvalues(colnames(gbm_idhmut_myeloi
 DimPlot(gbm_idhmut_myeloid_seurat, group.by="TumorType")
 ggsave(paste0(figure_dir, "GBMNeftel_IDHmut2018_merged.png"), width=6, height=5.5)
 
+## Add on numeric age
+ages<- read.csv("../../data/Adult_Myeloid/myeloid_adult_ages.csv")
+gbm_idhmut_myeloid_seurat$age_numeric<- as.numeric(as.character(plyr::mapvalues(gbm_idhmut_myeloid_seurat$sampleid,
+                                                                                ages$Sample, ages$Age, warn_missing = FALSE)))
+
 ## Plot cluster breakdown by tumor type
 df<- as.data.frame(table(gbm_idhmut_myeloid_seurat$TumorType, gbm_idhmut_myeloid_seurat$seurat_clusters))
 colnames(df)<- c("TumorType", "Seurat_cluster", "NCells")
@@ -318,5 +323,10 @@ colnames(df)<- c("TumorType", "Seurat_cluster", "NCells")
   ggsave(paste0(figure_dir, "GBMNeftel_IDHmut2018_merged_clusterOverlapSummary.png"), width=18, height=6)
   
 save(gbm_idhmut_myeloid_seurat, file=paste0(analysis_dir, "GBMNeftel_IDHmut2018_myeloid_merged_seurat.Robj"))
+
+## Remove samples that are actually pediatric...
+gbm_idhmut_myeloid_seurat<- subset(gbm_idhmut_myeloid_seurat, age_numeric>18)
+saveRDS(gbm_idhmut_myeloid_seurat, file= paste0(analysis_dir, "adult_pedRemoved/GBMNeftel_IDHmut2018_myeloid_merged_seurat.Rds"))  
+
 ```
 
