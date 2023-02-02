@@ -1,0 +1,227 @@
+---
+title: "Plot clonality"
+output: html_document
+---
+
+Plot T cells by clonality- clonal group expansion, by program, programs more likely to share a clonotype
+
+```{r}
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/02a_Tcells/01a_Ped/", 
+                     "02b_ClonalOverexpression/")
+
+library(Seurat)
+library(ggplot2)
+library(ggpubr)
+library(Rtreemix)
+
+figure_dir<- "figures/plot_clonal/"
+analysis_dir<- "analysis/"
+
+if(!dir.exists(figure_dirp)){dir.create(figure_dir,recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(nmf_helper)
+clonalOverexpression<- paste0(base_dir, script_dir, "CellChat_HelperFunctions.R")
+source(clonalOverexpression)
+```
+
+## Load seurat objects
+```{r}
+## Load seurat objects- immune, tcell, cd4, cd8
+tcell_data_dir<- "../..//02_Ped.Adult/03_Visualize.Reannotate_programs/analysis/Reannotate_programs/"
+tcell_data_dir<- paste0(tcell_data_dir, "rank8_sharedByunion/")
+tcell_seurat<- readRDS(paste0(tcell_data_dir, "ped_seurat_tcell_harmony.Rds"))
+cd4_seurat<- readRDS(paste0(tcell_data_dir, "ped_seurat_cd4_harmony.Rds"))
+cd8_seurat<- readRDS(paste0(tcell_data_dir, "ped_seurat_cd8_harmony.Rds"))
+
+## colors
+tcell_colors<- readRDS("../../../plot_colors/Tcell.programs_rank8sharedByunion.Rds")
+tcell_colors<- c(tcell_colors, Activated_EM="red", Cytotoxic.NKreceptor="greenyellow")
+subtype_colors<- readRDS("../../../plot_colors/Subtype.Rds")
+```
+
+## Replicate SS2 clonal expansion figures in mathewson paper
+```{r}
+## Figure S3A: number of T cells/tcr reconstruction for each sample
+df<- as.data.frame(table(tcell_seurat$sample, tcell_seurat$tcr_reconstructed))
+colnames(df)<- c("Sample", "TCR","NCells")
+df$Subtype<- as.character(plyr::mapvalues(df$Sample, tcell_seurat$sample, tcell_seurat$NiceSubtype, warn_missing = FALSE))
+df$Subtype<- gsub("-", "\n",gsub("Hemispheric\nBCOR", "BCOR", gsub("Hemispheric\nH3G34R/V", "H3G34R/V", gsub("Hemispheric\nHistoneWT", "GBM", df$Subtype))))
+df$Subtype<- factor(df$Subtype, levels=c("Ependymoma", "BCOR", "GBM", "H3G34R/V", "Midline\nHistoneWT", "Midline\nH3K27M"))
+
+  ## Total number of cells
+  ggplot(df, aes(x=Sample, y=NCells, fill=TCR))+
+    geom_bar(stat="identity", position="dodge")+
+    scale_fill_manual(values=c(No="grey", Yes="red"))+
+    theme(axis.text.x = element_text(angle=45, hjust=1))+
+    facet_grid(cols=vars(Subtype), scale="free", space="free")+
+    xlab("")+
+    ylab("Number of cells")
+  ggsave(paste0(figure_dir, "Tcells_numberTCR_bySample.pdf"), width=8, height=4, device="pdf")
+  
+  ## Proportion of cells
+  df<- df %>% group_by(Sample) %>% mutate(PerCells=NCells/sum(NCells)) %>% as.data.frame()
+  ggplot(df, aes(x=Sample, y=PerCells, fill=TCR))+
+    geom_bar(stat="identity", position="stack")+
+    scale_fill_manual(values=c(No="grey", Yes="red"))+
+    theme(axis.text.x = element_text(angle=45, hjust=1))+
+    facet_grid(cols=vars(Subtype), scale="free", space="free")+
+    xlab("")+
+    ylab("Proportion of cells")
+  ggsave(paste0(figure_dir, "Tcells_proportionTCR_bySample.pdf"), width=8, height=4, device="pdf")
+  
+## Figure S3B: clonotype size
+df<- tcell_seurat@meta.data[,c("sample", "group_size", "clonal_group")]  
+df<- df[!is.na(df$group_size) & df$group_size>1,]
+df$UniqueID<- paste0(df$sample, df$clonal_group)
+df<- df[!duplicated(df$UniqueID),]
+df$Subtype<- as.character(plyr::mapvalues(df$sample, tcell_seurat$sample, tcell_seurat$NiceSubtype, warn_missing = FALSE))
+df$Subtype<- gsub("Hemispheric\nBCOR", "BCOR", gsub("Hemispheric\nH3G34R/V", "H3G34R/V", gsub("Hemispheric\nHistoneWT", "GBM",gsub("-", "\n", df$Subtype))))
+df$Subtype<- factor(df$Subtype, levels=c("Ependymoma", "BCOR", "H3G34R/V", "Midline\nHistoneWT", "Midline\nH3K27M"))
+
+ggplot(df, aes(x=sample, y=group_size))+
+  geom_jitter(width=0.05, height=0.5, size=0.8)+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle=45, hjust=1))+
+  scale_y_continuous(breaks=seq(2,14,2), label=seq(2,14,2))+
+  ylab("Clonotype size")+
+  facet_grid(cols=vars(Subtype), scale="free", space="free")+
+  xlab("")
+ggsave(paste0(figure_dir, "Tcells_clonotypeSize_bySample.pdf"), width=6, height=3, device="pdf")
+
+## Figure S3C: Number of clonotypes vs % of "T cells with recurrent TCRs" (e.g., clonal)
+df<- tcell_seurat@meta.data[,c("sample", "clonal", "clonal_group")]
+
+  ## proportion of clonal t cells
+  prop_clonal<- as.data.frame(table(df$sample, df$clonal))
+  colnames(prop_clonal)<- c("sample", "Clonality", "NCells")
+  prop_clonal<- prop_clonal %>% group_by(sample) %>% mutate(PerCellsClonal=NCells/sum(NCells)*100) %>% as.data.frame()
+  prop_clonal<- prop_clonal[prop_clonal$Clonality=="clonal",]
+  
+  ## Number of clonotypes
+  df<- df[!is.na(df$clonal_group) ,]
+  df$UniqueID<- paste0(df$Final_Annot, df$clonal_group)
+  df<- df[!duplicated(df$UniqueID),]
+  n_clonotypes<- df %>% group_by(sample) %>% summarise(n_clonotypes=n()) %>% as.data.frame()
+  
+  ## combine
+  df<- merge(n_clonotypes, prop_clonal, by="sample")
+  
+  ## Add subtype
+  df$Subtype<- as.character(plyr::mapvalues(df$sample, tcell_seurat$sample, tcell_seurat$NiceSubtype, warn_missing = FALSE))
+  
+  ggplot(df, aes(x=n_clonotypes, y=PerCellsClonal, color=Subtype))+
+    geom_point()+
+    geom_label(aes(label=sample), vjust="inward", hjust="inward")+
+    xlab("Number of clonotypes") + ylab("T cells with recurrent TCRs (%)")+
+    scale_color_manual(values=subtype_colors)
+  ggsave(paste0(figure_dir, "Tcells_nClonotypes.v.perClonal.pdf"), width=7, height=5, device="pdf")
+  
+```
+
+## Clonal expansion by program
+```{r}
+## Fix annotations
+tcell_seurat$Final_Annot<- gsub("Inhibitory", "Activated_EM", tcell_seurat$Final_Annot)
+
+df<- tcell_seurat@meta.data[,c("Final_Annot", "clonal", "clonal_group")]
+
+  ## proportion of clonal t cells
+  prop_clonal<- as.data.frame(table(df$Final_Annot, df$clonal))
+  colnames(prop_clonal)<- c("Final_Annot", "Clonality", "NCells")
+  prop_clonal<- prop_clonal %>% group_by(Final_Annot) %>% mutate(PerCellsClonal=NCells/sum(NCells)*100) %>% as.data.frame()
+  prop_clonal<- prop_clonal[prop_clonal$Clonality=="clonal",]
+  
+  ## Number of clonotypes
+  df<- df[!is.na(df$clonal_group) ,]
+  df$UniqueID<- paste0(df$Final_Annot, df$clonal_group)
+  df<- df[!duplicated(df$UniqueID),]
+  n_clonotypes<- df %>% group_by(Final_Annot) %>% summarise(n_clonotypes=n()) %>% as.data.frame()
+  
+  ## combine
+  df<- merge(n_clonotypes, prop_clonal, by="Final_Annot")
+  
+  ggplot(df, aes(x=n_clonotypes, y=PerCellsClonal))+
+    geom_point(aes(color=Final_Annot, size=2))+
+    geom_label(aes(label=Final_Annot), vjust="inward", hjust="inward")+
+    xlab("Number of clonotypes") + ylab("T cells with recurrent TCRs (%)")+
+    scale_color_manual(values=tcell_colors)+
+    theme(legend.position = "none")
+  ggsave(paste0(figure_dir, "Tcells_nClonotypes.v.perClonal_byProgram.pdf"), width=5.5, height=5, device="pdf")
+  
+  
+
+```
+
+## Number of clonotypes shared across programs
+```{r}
+df<- tcell_seurat@meta.data[,c("sampleid", "Final_Annot", "clonal", "clonal_group")]
+df<- df[df$clonal=="clonal",]
+
+## Add unique ID- sample + clonal group
+df$UniqueID<- paste0(df$sampleid, "_", df$clonal_group)
+
+## Split into separate df for each clonotype/sample
+ct_list<- split(df, f=df$UniqueID)
+ct_list<- lapply(ct_list, function(x){x$Final_Annot})
+
+programs<-unique(df$Final_Annot)
+clonotypes_shared<- lapply(programs, function(program){
+  ## Subset to clonotypes with program of interest
+  program_in_ct<- ct_list[sapply(ct_list, function(clonotype){program %in% clonotype})]
+  program_in_ct<- lapply(program_in_ct, function(x){unique(x)})
+  
+  ## Get number of clonotypes where each program is shared with program of interest
+  tmp<- as.data.frame(table(unlist(program_in_ct)))
+  colnames(tmp)<- c("Program", paste0("NC_sharedWith", program))
+  
+  ## Add on any programs that aren't found shared across any clonotype
+  add_programs<-  unique(df$Final_Annot)[!programs %in%tmp$Program]
+  add_programs<- data.frame(Program = add_programs, tmp=rep(0, length(add_programs)))
+  colnames(add_programs)<-c("Program", paste0("NC_sharedWith", program))
+  tmp<- rbind(tmp, add_programs)
+  
+  ## order the same way
+  tmp$Program<- factor(tmp$Program, levels=programs)
+  tmp<- tmp[order(tmp$Program),]
+  return(tmp)
+})
+clonotypes_shared<- do.call("cbind", clonotypes_shared)
+rownames(clonotypes_shared)<- clonotypes_shared$Program
+clonotypes_shared<- clonotypes_shared[,!grepl("Program", colnames(clonotypes_shared))]
+
+## Reformat
+clonotypes_shared$Program<- rownames(clonotypes_shared)
+clonotypes_shared<- melt(clonotypes_shared)
+colnames(clonotypes_shared)<-c("Program1", "Program2", "NClonotypes_Shared")
+clonotypes_shared$Program2<- gsub("NC_sharedWith", "", clonotypes_shared$Program2)
+
+## Add max number of clonotypes possible for each program (number that it shares with itself)
+clonotypes_shared<- clonotypes_shared %>% 
+  group_by(Program1) %>% mutate(P1_MaxClonotypes=max(NClonotypes_Shared)) %>% 
+  group_by(Program2) %>% mutate(P2_MaxClonotypes=max(NClonotypes_Shared)) %>% 
+  as.data.frame()
+
+## Between the 2 programs in each pair, find the smallest maxiumum number of clonotypes (used to normalise)
+clonotypes_shared$Min_MaxClonotype<- as.numeric(apply(clonotypes_shared, 1, function(x){min(c(x["P1_MaxClonotypes"], x["P2_MaxClonotypes"]))}))
+
+## Normalize number of clonotypes shared by total possible clonotypes 
+## should normalize based on the program in the pair with the lowest possible number of clonotypes
+clonotypes_shared$NClonotypes_Shared_Norm<- ifelse(clonotypes_shared$NClonotypes_Shared==0, 0,
+                                                   clonotypes_shared$NClonotypes_Shared/clonotypes_shared$Min_MaxClonotype)
+
+ggplot(clonotypes_shared, aes(x=Program1, y=Program2, fill=NClonotypes_Shared_Norm))+
+  geom_tile()+
+  scale_fill_gradient2(low="purple", mid="white", high="yellow", midpoint = 0.25)+
+  theme(axis.text.x = element_text(angle = 45, hjust=1))+
+  xlab("")+ylab("")
+ggsave(paste0(figure_dir, "Tcells_clonotypesSharedAcrossPrograms_NormProp.pdf"), width=7, height=4, device="pdf")
+```
+
