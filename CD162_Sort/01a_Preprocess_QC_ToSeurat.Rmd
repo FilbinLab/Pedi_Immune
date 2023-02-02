@@ -179,6 +179,40 @@ seurat_obj$cycling_predicted<- ifelse(seurat_obj$cycling_score>=1, "cycling", "n
 # Save current progress.
 saveRDS(seurat_obj, file=paste0(analysis_dir, "seurat_obj.Rds"))
 ```
+## Add in non-sorted cells (BT2080)
+Note that these are not CD162negative- just not enriched for CD162
+```{r}
+seurat_obj<- readRDS(paste0(analysis_dir, "seurat_obj.Rds"))
+
+bt2080_seurat<- readRDS("../PD1_Treat/01a_SS2/Immune/analysis/project_broad.detailed_annot/tcell_seurat.Rds")
+bt2080_seurat<- subset(bt2080_seurat, sample=="BT2080")
+
+## Add sorting info
+bt2080_seurat$sort<- "CD3"
+
+## Merge
+seurat_obj<- merge(seurat_obj, bt2080_seurat)
+
+## Remove mitochondrial genes
+cm<- seurat_obj@assays$RNA@counts
+cm<- cm[!grepl("^MT", rownames(cm)),]
+
+## Rerun clustering
+meta<- seurat_obj@meta.data
+seurat_obj<- RunFullSeurat(cm, RunHarmony = FALSE, samples=meta$sample)
+seurat_obj<- AddMetaData(seurat_obj, meta[,!colnames(meta) %in% colnames(seurat_obj@meta.data)])
+
+seurat_obj$SELPLG_expr<- as.data.frame(seurat_obj@assays$RNA@counts["SELPLG",])
+seurat_obj$SELPLG_pos<- ifelse(seurat_obj$SELPLG_expr>0, "Positive", "Negative")
+
+## Find markers
+bt2080_seurat<- subset(seurat_obj, sample=="BT2080")
+bt2080_seurat<- SetIdent(bt2080_seurat, value=bt2080_seurat$sort)
+markers<- FindAllMarkers(bt2080_seurat, min.pct = 0.2)
+markers_filt<- markers[markers$p_val_adj<0.05 & markers$avg_log2FC>0,]
+
+top_markers<- markers_filt %>% group_by(cluster) %>% top_n(n=20, wt=abs(avg_log2FC)) %>% as.data.frame()
+```
 
 
 ## Re-run clustering/UMAP post filtration
@@ -213,8 +247,8 @@ saveRDS(seurat_obj, file=paste0(analysis_dir, "seurat_obj.Rds"))
 FeaturePlot(seurat_obj, features=c("SELPLG", "CD3G"),cols=c("grey", "red"))
 ggsave(paste0(figure_dir, "UMAP_SELPLG.png"), width=10, height=4.5)
 
-VlnPlot(seurat_obj, group.by = "sort", features="SELPLG")
-ggsave(paste0(figure_dir, "Vln_SELPLG_bySort.png"),width=4, height=4)
+VlnPlot(seurat_obj, group.by = "sort", features="SELPLG")+NoLegend()
+ggsave(paste0(figure_dir, "Vln_SELPLG_bySort.pdf"),width=4, height=4, device="pdf")
 ```
 
 
