@@ -1,0 +1,167 @@
+---
+title: "DE between PD1/Untreated programs"
+author: "Jenna LaBelle"
+date: "10/07/22"
+output: html_document
+---
+
+DE analysis comparing each program in PD1 vs Untreated
+
+```{r}
+library(Seurat) 
+library(ggalluvial)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/PD1_Treat/03_comparisonToAdult/")
+
+analysis_dir<- paste0(working_dir, "/analysis/program_de/")
+figure_dir<- paste0(working_dir, "/figures/program_de/")
+data_dir<- paste0(working_dir, "analysis/preprocess_adult/")
+full_cohort_dir<- "../../ImmuneCellAnalysis/"
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+source(paste0(base_dir, script_dir, "seurat_transferAnchors_helper.R"))
+
+```
+
+
+## Load seurat objects
+
+```{r}
+adult_files<- list.files(data_dir, pattern="seurat")
+adult_files<- adult_files[!grepl("tcell", adult_files)]
+seurat_list<- lapply(adult_files, function(x){readRDS(paste0(data_dir, x))})
+names(seurat_list)<- gsub("_seurat.Rds", "", adult_files)
+seurat_list<-lapply(seurat_list, function(x){x$Age_Group<-"Adult"; return(x)})
+seurat_list<- lapply(seurat_list, function(x){x$Treatment<- gsub("Treated", "PD1", x$Treatment); return(x)})
+```
+
+
+
+## DE between programs by treatment
+```{r}
+de_list<-lapply(seurat_list, function(seurat){
+  ## Identify programs to test- >3 cells in program in both treated/untreated
+  programs_in_both<- table(seurat$Treatment, seurat$Program_projected)>3
+  programs_in_both<- colnames(programs_in_both)[colSums(programs_in_both)==2]
+  message(paste0("Programs testing: ", paste(programs_in_both, collapse = ", ")))
+  
+  ## Cycle through each program shared by treated/untreated (>3 cells in program)
+  programs_de<- lapply(programs_in_both, function(program){
+    print(program)
+    seurat_subset<- subset(seurat, Program_projected==program)
+    seurat_subset<- SetIdent(seurat_subset, value=seurat_subset$Treatment)
+    markers<- FindMarkers(seurat_subset, ident.1 = "Untreated", ident.2="PD1")
+    markers$program<- program
+    markers$gene<- rownames(markers)
+    return(markers)
+  })
+  programs_de<- do.call("rbind", programs_de)
+  
+  return(programs_de)
+})
+
+## Remove any cell types with no degs
+de_list<- de_list[lapply(de_list, class)=="data.frame"]
+
+
+saveRDS(de_list, file=paste0(analysis_dir, "DE_Untreated.v.PD1_byProgram.Rds"))
+
+## save sig as csv
+de_list<- lapply(de_list, function(x){x[x$p_val_adj<0.05 & abs(x$avg_log2FC) >0.5,]})
+de_list<- lapply(names(de_list), function(celltype){tmp<- de_list[[celltype]]; tmp$celltype<- celltype; return(tmp)})
+de_df<- do.call("rbind", de_list)
+write.csv(de_df, file=paste0(analysis_dir, "DE_Untreated.v.PD1_byProgram_sig.csv"))
+```
+
+
+## Filter to sig and plot top
+```{r}
+de_list<- readRDS(paste0(analysis_dir, "DE_Untreated.v.PD1_byProgram.Rds"))
+
+de_list<- lapply(de_list, function(x){x[x$p_val_adj<0.05 & abs(x$avg_log2FC) >0.5,]})
+
+top_degs<- lapply(de_list, function(x){
+  x %>% group_by(program) %>% top_n(n=10, wt=avg_log2FC) %>% as.data.frame()
+})
+
+## pseudobulk by program
+pb_list<- lapply(seurat_list, function(x){
+  print(unique(x$broad_annot))
+  x$pb_variable<- paste0(x$Treatment,"_", x$Program_projected)
+  pseudobulk_byVariable(x@assays$RNA@counts, x@meta.data, "pb_variable")
+})
+
+all_plots<- lapply(names(pb_list), function(celltype){
+  print(celltype)
+  pb<- pb_list[[celltype]]
+  pb_list<- NormCenter(pb)
+  myHeatmap(pb_list$center_data, GOI=unique(top_degs[[celltype]]$gene)) + ggtitle(celltype)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "AdultOnly_TopDEGs_heatmap_pd1.vs.untreated_byprogram.pdf"),device="pdf", width=30, height=8)
+```
+
+```{r}
+de_list<- readRDS(paste0(analysis_dir, "DE_Untreated.v.PD1_byProgram.Rds"))
+
+OrgDb = "org.Hs.eg.db"
+dataset = "hsapiens_gene_ensembl"
+
+## Convert using biomart
+ensembl = useMart("ensembl",dataset="hsapiens_gene_ensembl")
+allOE_genes<-getBM(attributes='ensembl_gene_id', 
+                   filters = 'hgnc_symbol', 
+                   values = rownames(seurat_list$cd4@assays$RNA@counts), 
+                  mart = ensembl)
+
+## Convert degs to ensembl ids
+de_list<- lapply(de_list, function(x){x[x$p_val_adj<0.05 & x$avg_log2FC < -0.5,]})
+
+top_degs<- lapply(de_list, function(x){
+  x %>% group_by(program) %>% top_n(n=50, wt=avg_log2FC) %>% as.data.frame()
+})
+
+top_degs_ens<- lapply(top_degs, function(x){
+   gene_ens<-getBM(attributes=c('ensembl_gene_id', "hgnc_symbol"), 
+                        filters = 'hgnc_symbol', 
+                        values = x$gene,
+                        mart = ensembl)
+   x<- x[x$gene %in% gene_ens$hgnc_symbol,]
+   x$gene_ens<- as.character(plyr::mapvalues(x$gene, gene_ens$hgnc_symbol, gene_ens$ensembl_gene_id, warn_missing = FALSE))
+   return(x)
+})
+
+## Run GO: Convert marker genes to ensembl IDs too, then run OR analysis (GO)
+all_go<- lapply(top_degs_ens, function(degs){
+  go_result = list()
+  for (i in unique(degs$program)){
+    print(i)
+    genes<- degs[degs$program==i, "gene_ens"]
+    if(length(genes)!=1){
+      go_result[[i]] = go_analysis(genes, allOE_genes)
+      }
+  }
+  return(go_result)
+})
+names(all_go)<- names(top_degs_ens)
+
+## Plot and save
+for(celltype in names(all_go)){
+  go<- all_go[[celltype]]
+  go_plots<- plotGO(go_result = go, n_terms = 15)
+  cowplot::plot_grid(plotlist=go_plots, ncol=2)
+  ggsave(paste0(figure_dir , "GO_",celltype, "_UpInPD1.png"), width=18, height=10*(length(go_plots)/2))
+}
+
+
+```
