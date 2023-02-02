@@ -64,7 +64,7 @@ nature_2020_genes<- lapply(nature_2020_genes, function(x){x[x!=""]})
 
 ## Pseudobulked heatmap of expression of GOI (T cells)
 ```{r}
-GOI<- c( "PDCD1", "TIGIT", "CTLA4", "ITGAE", "GZMK", "GNLY", "NKG7", "GZMB", "GZMA")
+GOI<- c( "PDCD1", "TIGIT", "CTLA4", "ITGAE", "GZMK", "GNLY","PRF1", "NKG7", "GZMB", "GZMA")
 
 ## By sample
 all_plots<- lapply(c("cd4", "cd8"), function(x){
@@ -84,9 +84,129 @@ all_plots<- lapply(c("cd4", "cd8"), function(x){
     ggtitle(x)
 })
 cowplot::plot_grid(plotlist=all_plots, ncol=2)
-ggsave(paste0(figure_dir, "Heatmap_GOI_Tcells.png"), width=13, height=6)
+ggsave(paste0(figure_dir, "Heatmap_GOI_Tcells.pdf"),device="pdf", width=13, height=6)
 
+
+## Log FC comparing change in expression in treated/untreated
+all_plots<- lapply(c("cd4", "cd8"), function(x){
+  tmp<- seurat_list[[x]]
+  tmp$Treatment<- gsub("Treated", "PD1", tmp$Treatment)
+  
+  ## Create pseudobulking variable
+  tmp$pb<- paste0(tmp$Treatment, "_", tmp$Age_Group)
+  pb<- pseudobulk_byVariable(tmp, tmp@meta.data, "pb")
+  
+  ## Calculate FC
+   fc<- data.frame(Adult=log( (pb$PD1_Adult-pb$Untreated_Adult)/(pb$Untreated_Adult+0.01) + 1 ), 
+                  Ped=log( (pb$PD1_Ped-pb$Untreated_Ped)/(pb$Untreated_Ped+0.01) + 1 ),
+                  row.names = rownames(pb))
+
+  
+  ## Plot
+  myHeatmap(fc, GOI=GOI, min.value = -3, max.value = 3, facetWrap = FALSE,
+            orderFactors = c("Ped", "Adult")) +
+     scale_fill_gradientn(colors=c( "khaki3", "lemonchiffon1","white","palevioletred1", "palevioletred2", "violetred4"))+
+    ggtitle(x)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=2)
+ggsave(paste0(figure_dir, "Heatmap_foldChange_GOI_Tcells.pdf"),device="pdf", width=8, height=4)
+
+## Log FC comparing change in expression in treated/untreated- by program
+seurat_use<- seurat_list$cd8
+
+seurat_use$Treatment<- gsub("Treated", "PD1", seurat_use$Treatment)
+
+## Pseudobulk by program/age/treatment, then calculate log FC comparing treated/untreated
+programs_use<-unique(seurat_use$Program_projected)
+programs_use<- programs_use[programs_use!="Effector.Memory"]
+all_fc<- lapply(programs_use, function(program){ ## don't use em- very few cells (only 5 ped UT)
+  ## subset to program
+  tmp<- subset(seurat_use, Program_projected==program)
+  
+  ## Pseuodobulk  
+  tmp$pb<- paste0(tmp$Treatment, "_", tmp$Age_Group)
+  pb<- pseudobulk_byVariable(tmp, tmp@meta.data, "pb")
+  fc<- data.frame(Adult=log( (pb$PD1_Adult-pb$Untreated_Adult)/(pb$Untreated_Adult+0.01) + 1 ), 
+                  Ped=log( (pb$PD1_Ped-pb$Untreated_Ped)/(pb$Untreated_Ped+0.01) + 1 ),
+                  row.names = rownames(pb))
+  colnames(fc)<- paste0(colnames(fc), "_",program )
+  return(fc)
+})
+fc<- do.call("cbind", all_fc)
+
+## Stats- log TPM pseudobulked by sample + program, t.test
+  ## Pseudobulk by sample + program
+  seurat_use$sample<- ifelse(seurat_use$Age_Group=="Ped", seurat_use$sample, seurat_use$old.ident)
+  seurat_use$pb<- paste0(seurat_use$sample, "__", seurat_use$Program_projected)
+  pb<- pseudobulk_byVariable(seurat_use, seurat_use@meta.data, "pb")
+
+  ## reformat- transpose + add program column
+  pb_t<- as.data.frame(t(pb[GOI,]))
+  pb_t$Program<- sapply(strsplit(rownames(pb_t), split="__"), function(x){x[2]})
+  
+  ## Add on treatment + age
+  pb_t$Sample<- sapply(strsplit(rownames(pb_t), split="__"), function(x){x[1]})
+  pb_t$Treatment<- as.character(plyr::mapvalues(pb_t$Sample, seurat_use$sample, seurat_use$Treatment, warn_missing = FALSE))
+  pb_t$Age<- as.character(plyr::mapvalues(pb_t$Sample, seurat_use$sample, seurat_use$Age_Group, warn_missing = FALSE))
+  
+  ## Calculate mean TPM by age for untreated only
+  mean_tpm_untreated<- pb_t %>% filter(Treatment=="Untreated") %>%group_by(Age, Program) %>% summarise(across(GOI, mean)) %>% as.data.frame()
+  colnames(mean_tpm_untreated)<-c("Age", "Program", paste0("Untreated_", colnames(mean_tpm_untreated[3:ncol(mean_tpm_untreated)])))
+  
+  ## Merge untreated (mean by age/program) with treated (separate by sample)
+  pb_pd1<- pb_t[pb_t$Treatment=="PD1",]
+  pb_pd1$UniqueID<- paste0(pb_pd1$Age, "_", pb_pd1$Program)
+  mean_tpm_untreated$UniqueID<- paste0(mean_tpm_untreated$Age, "_", mean_tpm_untreated$Program)
+  pb_merge<- merge(pb_pd1[,!colnames(pb_pd1) %in% c("Age", "Program", "Treatment")],
+                   mean_tpm_untreated[!colnames(mean_tpm_untreated) %in% c("Age", "Program", "Treatment")],
+                   by="UniqueID")
+  
+  ## Calculate fold change- TPM treated - mean for untreated from that age.program / mean for untreated from that age.program
+  fc_bySample<- sapply(GOI, function(x){
+    tmp<- pb_merge[,c(x, paste0("Untreated_", x))]
+    fc<-log((tmp[[x]] - tmp[[paste0("Untreated_", x)]]) / (tmp[[paste0("Untreated_", x)]]+0.01) + 1 )
+    return(fc)
+  })
+  fc_bySample<- as.data.frame(fc_bySample)
+  fc_bySample$UniqueID<- pb_merge$UniqueID
+  fc_bySample$Age<-  sapply(strsplit(fc_bySample$UniqueID, split="_"), function(x){x[1]})
+  fc_bySample$Program<-  sapply(strsplit(fc_bySample$UniqueID, split="_"), function(x){x[2]})
+  
+  ## ttest comparing fold changes
+  pvalues_all<- lapply(unique(fc_bySample$Program), function(program){
+    tmp<- fc_bySample[fc_bySample$Program==program,]
+    pvalues<-sapply(GOI, function(gene){
+      t.test(tmp[tmp$Age=="Ped", gene], tmp[tmp$Age=="Adult", gene])$p.value
+    })
+    pvalues<- as.data.frame(pvalues)
+    colnames(pvalues)<- program
+    return(pvalues)
+  })
+  pvalues_all<- do.call("cbind", unname(pvalues_all))
+  padjust_all<- as.data.frame(apply(pvalues_all, 1, function(x){p.adjust(x)}))
+  
+  ## reformat for adding to plot
+  padjust_all$Program<- rownames(padjust_all)
+  padjust_plot<- melt(padjust_all)
+  colnames(padjust_plot)<- c("Program", "Gene", "padj")
+  
+  ## For each group (program, gene, ped/adult- will always be both), set whether p is <0.05
+  padjust_plot<- rbind(padjust_plot, padjust_plot)
+  padjust_plot$XAxis<- c(rep("Adult", nrow(padjust_plot)/2), rep("Ped", nrow(padjust_plot)/2))
+  padjust_plot$Box<- ifelse(padjust_plot$padj<0.1, TRUE, FALSE)
+  padjust_plot$FacetWrap<- padjust_plot$Program
+  
+  write.csv(padjust_all, file=paste0())
+
+## Plot
+colnames(fc)<- gsub("\\.", "\n", colnames(fc))
+myHeatmap(fc, GOI=GOI, min.value = -2, max.value = 2, facetWrap = TRUE, addBoxes = padjust_plot) +
+  scale_fill_gradientn(colors=c( "khaki3", "lemonchiffon1","white","palevioletred1", "palevioletred2", "violetred4"))
+ggsave(paste0(figure_dir, "Heatmap_foldChange_GOI_CD8_byProgram.pdf"),device="pdf", width=12, height=4)
 ```
+
+
+
 ## Pseudobulked heatmap of expression of GOI (Myeloid)
 ```{r}
 GOI<- c("PVR", "PVRL2","CD274", "CD80", "CD86", "IFNG")
@@ -128,13 +248,67 @@ ggsave(paste0(figure_dir, "Heatmap_GOI_Myeloid.png"), width=7, height=5)
 
 ```
 
+# Heatmap of DEGs between treated/untreated in ped- same pattern in adult?
+```{r}
+pvalue_thresh<- 0.1
+shared_degs<- readRDS(paste0("../02_Merge_SS2.tenX/analysis/SharedDEGs/shared_degs_tenx.ss2_pvalueThresh", pvalue_thresh, ".Rds"))
+shared_degs<- lapply(shared_degs, function(x){x[x$sameLogFCDirection=="Same",]})
+
+sample_center_method="byAll"
+all_plots<- lapply(names(seurat_list), function(x){
+  tmp<- seurat_list[[x]]
+  markers_use<-shared_degs[[x]]
+  
+  ## subset to adult
+  tmp<- subset(tmp, Age_Group=="Adult")
+  
+  ## subset to programs with degs
+  tmp<- subset(tmp, Program_projected %in% unique(markers_use$program))
+  markers_use<- markers_use[markers_use$gene %in% rownames(tmp),]
+  markers_use<- markers_use[order(markers_use$program, markers_use$SS2_avg_log2FC),]
+
+  
+  ## Create pseudobulking variable
+  tmp$pb<- paste0(tmp$Treatment, "_", gsub("\\.", "\n", gsub("_", "\n", tmp$Program_projected)))
+  pb<- pseudobulk_byVariable(tmp, tmp@meta.data, "pb")
+  
+  
+   ## center for each sample separately
+  if(sample_center_method=="bySample"){
+      center_bySample<- lapply(unique(tmp$Treatment), function(sample){
+    pb_tmp<- pb[,grepl(sample, colnames(pb))]
+    if(class(pb_tmp)=="numeric"){
+      pb_tmp<- as.data.frame(pb_tmp)
+      colnames(pb_tmp)<- colnames(pb)[grepl(sample, colnames(pb))]
+    }
+    pb_list_tmp<- NormCenter(pb_tmp)
+    pb_center_tmp<- pb_list_tmp$center_data
+    return(pb_center_tmp)
+  })
+  pb_center<- do.call("cbind", center_bySample)
+  } else if(sample_center_method=="byAll"){pb_center<- NormCenter(pb)$center_data}
+  
+  
+  
+  ## Plot
+  myHeatmap(pb_center, GOI=unique(markers_use$gene), min.value = -3, max.value = 3, 
+                orderFactors =  gsub("\\.", "\n",gsub("_", "\n", unique(markers_use$program))),
+            orderSubtypes =c("Untreated", "PD1")) +
+    scale_fill_gradient2(high="red", low="blue", mid="white", name="Centered log2(TPM)")+
+    ggtitle(x)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "Heatmap_SharedDEGs_pvalueThresh",pvalue_thresh, ".pdf"), width=17, height=5)
+```
+
+
 ## Pseudobulked heatmap of expression of GOI, by programs 
 ```{r}
 GOI<- c("KLRB1", "SELPLG", "PTGER2", "PDCD1", "TIGIT", "CTLA4", "ITGAE", "GZMK", "GNLY", "NKG7", "GZMB", "GZMA", "GADD45B")
 
 ## T cells
   ## By treatment
-  all_plots<- lapply(c("CD4", "CD8"), function(x){
+  all_plots<- lapply(c("cd4", "cd8"), function(x){
     tmp<- seurat_list[[x]]
     
     ## Create pseudobulking variable
@@ -152,7 +326,7 @@ GOI<- c("KLRB1", "SELPLG", "PTGER2", "PDCD1", "TIGIT", "CTLA4", "ITGAE", "GZMK",
   ggsave(paste0(figure_dir, "Heatmap_GOI_byProgram_Tcells.png"), width=28, height=7)
   
     ## By treatment + primary/recurrent
-    all_plots<- lapply(c("CD4", "CD8"), function(x){
+    all_plots<- lapply(c("cd4", "cd8"), function(x){
       tmp<- seurat_list[[x]]
       
       ## Create pseudobulking variable
@@ -189,6 +363,7 @@ GOI<- c("KLRB1", "SELPLG", "PTGER2", "PDCD1", "TIGIT", "CTLA4", "ITGAE", "GZMK",
   ggsave(paste0(figure_dir, "Heatmap_GOI_byProgram_Myeloid.png"), width=14, height=5)
 ```
 
+## NOT IN USE
 ## Based on heatmap- boxplot of mean gene expression for GOI within program of interest
 ```{r}
 tmp<- seurat_list$CD4
@@ -254,55 +429,4 @@ cowplot::plot_grid(plotlist=all_plots, ncol=1)
 ggsave(paste0(figure_dir, "DotPlot_TcellStateScores_CD4.CD8.png"), width=13, height=8)
 ```
 
-## Heatmap of DEGs between treated/untreated in ped- same pattern in adult?
-```{r}
-pvalue_thresh<- 0.1
-shared_degs<- readRDS(paste0("../02_Merge_SS2.tenX/analysis/SharedDEGs/shared_degs_tenx.ss2_pvalueThresh", pvalue_thresh, ".Rds"))
-shared_degs<- lapply(shared_degs, function(x){x[x$sameLogFCDirection=="Same",]})
-
-sample_center_method="byAll"
-all_plots<- lapply(names(seurat_list), function(x){
-  tmp<- seurat_list[[x]]
-  markers_use<-shared_degs[[x]]
-  
-  ## subset to adult
-  tmp<- subset(tmp, Age_Group=="Adult")
-  
-  ## subset to programs with degs
-  tmp<- subset(tmp, Program_projected %in% unique(markers_use$program))
-  markers_use<- markers_use[markers_use$gene %in% rownames(tmp),]
-  markers_use<- markers_use[order(markers_use$program, markers_use$SS2_avg_log2FC),]
-
-  
-  ## Create pseudobulking variable
-  tmp$pb<- paste0(tmp$Treatment, "_", gsub("\\.", "\n", gsub("_", "\n", tmp$Program_projected)))
-  pb<- pseudobulk_byVariable(tmp, tmp@meta.data, "pb")
-  
-  
-   ## center for each sample separately
-  if(sample_center_method=="bySample"){
-      center_bySample<- lapply(unique(tmp$Treatment), function(sample){
-    pb_tmp<- pb[,grepl(sample, colnames(pb))]
-    if(class(pb_tmp)=="numeric"){
-      pb_tmp<- as.data.frame(pb_tmp)
-      colnames(pb_tmp)<- colnames(pb)[grepl(sample, colnames(pb))]
-    }
-    pb_list_tmp<- NormCenter(pb_tmp)
-    pb_center_tmp<- pb_list_tmp$center_data
-    return(pb_center_tmp)
-  })
-  pb_center<- do.call("cbind", center_bySample)
-  } else if(sample_center_method=="byAll"){pb_center<- NormCenter(pb)$center_data}
-  
-  
-  
-  ## Plot
-  myHeatmap(pb_center, GOI=unique(markers_use$gene), min.value = -3, max.value = 3, 
-                orderFactors =  gsub("\\.", "\n",gsub("_", "\n", unique(markers_use$program))),
-            orderSubtypes =c("Untreated", "Treated")) +
-    scale_fill_gradient2(high="red", low="blue", mid="white", name="Centered log2(TPM)")+
-    ggtitle(x)
-})
-cowplot::plot_grid(plotlist=all_plots, ncol=3)
-ggsave(paste0(figure_dir, "Heatmap_SharedDEGs_pvalueThresh",pvalue_thresh, ".png"), width=17, height=5)
-```
+#
