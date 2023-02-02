@@ -1,0 +1,212 @@
+---
+title: "Preprocess anti PD1 treated melanoma"
+author: "Jenna LaBelle"
+output: html_document
+---
+
+## Preprocess published  PD1 treated melanoma data
+GSE120575
+
+```{r}
+library(Seurat) 
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/PD1_Treat/03_comparisonToMelanoma/")
+
+analysis_dir<- paste0(working_dir, "/analysis/preprocess/")
+figure_dir<- paste0(working_dir, "/figures/preprocess/")
+data_dir<- paste0(working_dir, "data/")
+full_cohort_dir<- "../../ImmuneCellAnalysis/"
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+source(paste0(base_dir, script_dir, "seurat_transferAnchors_helper.R"))
+
+immune_colors<- readRDS(paste0(full_cohort_dir, "/plot_colors/ImmuneCell.celltypes.Rds"))
+
+```
+
+## Load in raw data and process to seurat object
+```{r}
+## Load count matrix
+cm<- read.delim(paste0(data_dir, "GSE120575_Sade_Feldman_melanoma_single_cells_TPM_GEO.txt"))
+
+## Create simple metadata
+meta<- data.frame(treatment=as.character(cm[1,1:ncol(cm)-1]),
+                  cell=colnames(cm)[2:ncol(cm)])
+
+## Fix cell names
+meta$cell<- gsub("-", "_", gsub("\\.", "_",meta$cell))
+cm<- cm[2:nrow(cm),]
+cm<- cm[,1:ncol(cm)-1]
+colnames(cm)<- meta$cell
+
+## Load metadata
+full_meta<- read.csv("GSE120575_patient_ID_single_cells_edit.csv")
+
+## Fix metadata cell name
+full_meta$title<-  gsub("-", "_", gsub("\\.", "_",full_meta$title))
+
+## Subset to cells with metadata
+cm<- cm[,colnames(cm) %in% full_meta$title]
+
+## Subset to samples treated with only anti-PD1
+pd1_meta<- full_meta[full_meta$characteristics..therapy=="anti-PD1",]
+pd1_cm<- cm[,colnames(cm) %in% pd1_meta$title]
+rownames(pd1_meta)<- pd1_meta$title
+pd1_seurat<- RunFullSeurat(pd1_cm, RunHarmony=FALSE, samples=pd1_meta$characteristics..patinet.ID..Pre.baseline..Post..on.treatment.)
+```
+
+## Subset to t cells
+```{r}
+seurat_obj<- readRDS(paste0(analysis_dir, "melanoma_pd1_treat_seurat.Rds"))
+
+FeaturePlot(seurat_obj, features=c("CD3G", "CSF1R", "CD8A", "CD4"))
+ggsave(paste0(figure_dir, "broad_markers.png"), width=10, height=10)
+
+DimPlot(seurat_obj, label = TRUE)+NoLegend()
+ggsave(paste0(figure_dir, "seurat_clusters.png"), width=7, height=7)
+
+tcell_clusters<- c(4,0,8,3,2,1,5,9)
+myeloid_clusters<- c(6,10)
+other_clusters<- c(11,7)
+
+seurat_obj$broad_annot<- ifelse(seurat_obj$seurat_clusters %in% tcell_clusters, "Tcell",
+                                ifelse(seurat_obj$seurat_clusters %in% myeloid_clusters, "Myeloid", "Other"))
+DimPlot(seurat_obj, group.by = "broad_annot", label=TRUE) + NoLegend()
+ggsave(paste0(figure_dir, "broad_annot.png"), width=7, height = 7)
+
+tcell_seurat<- subset(seurat_obj, broad_annot =="Tcell")
+tcell_meta<- tcell_seurat@meta.data
+tcell_seurat<- RunFullSeurat(tcell_seurat@assays$RNA@counts, RunHarmony = FALSE, samples=tcell_meta$sample)
+tcell_seurat<- AddMetaData(tcell_seurat, tcell_meta[,!colnames(tcell_meta) %in% colnames(tcell_seurat@meta.data)])
+saveRDS(tcell_seurat, file=paste0(analysis_dir, "tcell_seurat.Rds"))
+```
+
+## Subset to cd4/cd8
+```{r}
+tcell_seurat<- readRDS(paste0(analysis_dir, "tcell_seurat.Rds"))
+tcell_seurat$treatment<- ifelse(grepl("Pre", tcell_seurat$sample), "Pre", "Post")
+tcell_seurat$patient<- gsub("Post_", "", gsub("Pre_", "", gsub("_2", "", tcell_seurat$sample)))
+
+VlnPlot(tcell_seurat, features=c("CD4", "CD8A"))+DimPlot(tcell_seurat, label=TRUE)+NoLegend()
+ggsave(paste0(figure_dir, "Tcell_cd4.cd8_annotation.png"), width=10, height=10)
+
+## assign cd4/cd8/cycling clusters
+cd4_clusters<- c(0,4,8)
+cd8_clusters<- c(1,2,3,5,6)
+cycling<- c(7)
+tcell_seurat$detailed_annot<- ifelse(tcell_seurat$seurat_clusters %in% cd4_clusters, "CD4",
+                                     ifelse(tcell_seurat$seurat_clusters %in% cd8_clusters, "CD8",
+                                            ifelse(tcell_seurat$seurat_clusters %in% cycling, "Cycling", "issue")))
+DimPlot(tcell_seurat, group.by = "detailed_annot", label=TRUE)+NoLegend()+
+  scale_color_manual(values=immune_colors[names(immune_colors) %in% tcell_seurat$detailed_annot])
+ggsave(paste0(figure_dir, "Tcell_detailed_annot.png"), width=6, height=6)
+
+## Subset to cd4/cd8 and check annotations
+cd4_seurat<- subset(tcell_seurat, detailed_annot=="CD4")
+cd4_meta<- cd4_seurat@meta.data
+cd4_seurat<- RunFullSeurat(cd4_seurat@assays$RNA@counts, RunHarmony = TRUE, samples=cd4_seurat$patient)
+cd4_seurat<- AddMetaData(cd4_seurat, cd4_meta[,!colnames(cd4_meta) %in% colnames(cd4_seurat@meta.data)])
+
+cd8_seurat<- subset(tcell_seurat, detailed_annot=="CD8")
+cd8_meta<- cd8_seurat@meta.data
+cd8_seurat<- RunFullSeurat(cd8_seurat@assays$RNA@counts, RunHarmony = TRUE, samples=cd8_seurat$patient)
+cd8_seurat<- AddMetaData(cd8_seurat, cd8_meta[,!colnames(cd8_meta) %in% colnames(cd8_seurat@meta.data)])
+
+
+cowplot::plot_grid(plotlist=list(FeaturePlot(cd4_seurat, features=c("CD4", "CD8A"), cols=c("grey", "red")),
+                                 FeaturePlot(cd8_seurat, features=c("CD4", "CD8A"), cols=c("grey", "red")) ),
+                   ncol=1)
+ggsave(paste0(figure_dir, "Tcells_detailed_annot_expected_markers.png"), width=12, height=10)
+
+saveRDS(cd4_seurat, file=paste0(analysis_dir, "cd4_seurat.Rds"))
+saveRDS(cd8_seurat, file=paste0(analysis_dir, "cd8_seurat.Rds"))
+```
+
+## Add cell state annotation- nature 2020 for cd8, Treg vs not-tregs for cd4
+```{r}
+nature_2020_genes<- as.list(read.csv("../../../../../Shared/Marker_genes/Immune/Published/Nature2020_genesets.csv"))
+nature_2020_genes<- lapply(nature_2020_genes, function(x){x[x!=""]})
+names(nature_2020_genes)<- gsub("naïve", "naive", names(nature_2020_genes))
+
+cd8_seurat<- readRDS(paste0(analysis_dir, "cd8_seurat.Rds"))
+cd4_seurat<- readRDS(paste0(analysis_dir, "cd4_seurat.Rds"))
+
+## Add on nature 2020 module scores
+cd8_seurat<- AddModuleScore(cd8_seurat, nature_2020_genes, name = names(nature_2020_genes))
+cd8_seurat@meta.data<- cd8_seurat@meta.data %>% dplyr::rename(cytotoxic=cytotoxic1, naive=naive2, 
+                                                              predysfunctional=predysfunctional3, dysfunctional=dysfunctional4) %>%
+  as.data.frame()
+
+## Max program
+cd8_seurat$nature_2020_max<- apply(cd8_seurat@meta.data[,names(nature_2020_genes)], 
+                                   1, function(x){names(x)[which.max(x)]} )
+
+## For CD4: identify tregs
+cd4_seurat<-AddMetaData(cd4_seurat, as.data.frame(t(cd4_seurat@assays$RNA@data[c("FOXP3", "CTLA4"),])))
+cd4_seurat$Treg<- ifelse(cd4_seurat$FOXP3 >0 & cd4_seurat$CTLA4 >0, "Treg", "Other")
+
+
+saveRDS(cd4_seurat, file=paste0(analysis_dir, "cd4_seurat.Rds"))
+saveRDS(cd8_seurat, file=paste0(analysis_dir, "cd8_seurat.Rds"))
+```
+
+## Expression of dysfunctional markers  by treatment/response
+```{r}
+cd8_seurat<- readRDS(paste0(analysis_dir, "cd8_seurat.Rds"))
+GOI<- c("PDCD1", "TIGIT", "CTLA4", "GZMB", "SELPLG", "PTGER2", "KLRB1", "GNLY")
+
+## All cells
+  ## Create pseudobulking variable
+  cd8_seurat$pb<- paste0(cd8_seurat$treatment, "_", cd8_seurat$response)
+  pb<- pseudobulk_byVariable(cd8_seurat, cd8_seurat@meta.data, "pb")
+  
+  pb_center<- NormCenter(pb)$center_data
+  
+  ## Plot
+  myHeatmap(pb_center, GOI=GOI, min.value = -3, max.value = 3, facetWrap = TRUE, orderSubtypes = c("Pre", "Post")) +
+    scale_fill_gradient2(high="red", low="blue", mid="white", name="Centered log2(TPM)")
+  ggsave(paste0(figure_dir, "CD8_dysfunctionalGenes_byTreatment.Response.png"), width=6, height=5)
+  
+## Predysfunctional only
+  ## subset to predys
+  predys<- subset(cd8_seurat, nature_2020_max=="predysfunctional")
+  
+  ## Create pseudobulking variable
+  predys$pb<- paste0(predys$treatment, "_", predys$response)
+  pb<- pseudobulk_byVariable(predys, predys@meta.data, "pb")
+  
+  pb_center<- NormCenter(pb)$center_data
+  
+  ## Plot
+  myHeatmap(pb_center, GOI=GOI, min.value = -3, max.value = 3, facetWrap = TRUE, orderSubtypes = c("Pre", "Post")) +
+    scale_fill_gradient2(high="red", low="blue", mid="white", name="Centered log2(TPM)")
+  ggsave(paste0(figure_dir, "CD8Predysfunctional_dysfunctionalGenes_byTreatment.Response.png"), width=6, height=5)
+```
+
+## Proportion of tregs by treatment/response
+```{r}
+cd4_seurat<- readRDS(paste0(analysis_dir, "cd4_seurat.Rds"))
+
+my_barchart_programProp(cd4_seurat, grouping_variable ="treatment" , coloring_variable = "Treg",
+                        colors = c(Treg="yellow", Other="grey"))
+ggsave(paste0(figure_dir, "CD4_Treg_proportion.png"), width=4, height=3)
+cd4_seurat$tmp<- paste0(cd4_seurat$treatment, "_", cd4_seurat$response)
+
+my_barchart_programProp(cd4_seurat, grouping_variable ="tmp" , coloring_variable = "Treg", 
+                        colors = c(Treg="yellow", Other="grey"), 
+                        grouping_variable_order = c("Pre_Responder", "Post_Responder",
+                                                    "Pre_Non-responder", "Post_Non-responder"))+
+  xlab("")
+ggsave(paste0(figure_dir, "CD4_Treg_proportion_byResponse.png"), width=4, height=3)
+```
+
