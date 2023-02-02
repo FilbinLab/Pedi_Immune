@@ -3,6 +3,10 @@ title: "Add in clonotype info"
 output: html_document
 ---
 
+
+## NOTE: As of 1/04/23, this script no longer necessary- all clonotype information now added during preprocessing, in 01_Preprocessing/01_Tracer_Preprocess/PostTracer_Preprocessing.Rmd
+## this script still kept for completeness, but no longer actually run
+
 For both CD8/CD4 T cells, "clonal" (clonal/nonclonal) + clonal group (arbitrary number) currently in seurat objects
 Also interested in the size of the clonal group- number of cells. Could re-calculate this, but it's already calculated by Tracer- this accounts for any cell that were maybe removed as low quality, myeloid cells, etc. Likely slightly more accurate. Read in this information and add to seurat objects for use downstream. Additionally, need to add whether a cell actually had a TCR reconstructed- calculations for clonal expansion should really be made on this- nonclonal includes cells with TCR  but in clonotype of n=1 and also cells without TCR
 
