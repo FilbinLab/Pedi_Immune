@@ -159,6 +159,26 @@ seurat_obj$clonotype_size_max20<- ifelse(seurat_obj$clonotype_size>20 & seurat_o
 saveRDS(seurat_obj, file="analysis/preprocessing/seurat_obj_noTumor.Rds")
 ```
 
+
+## Add clonal information to tcell seurat objects
+```{r}
+## Load objects
+seurat_obj<- readRDS("analysis/preprocessing/seurat_obj_noTumor.Rds")
+tcell_seurat<- readRDS("analysis/manual_broad_annot/tcell_seurat.Rds")
+cd4_seurat<- readRDS("analysis/identifyCD4.CD8_byNMF/rank9/cd4_seurat.Rds")
+cd8_seurat<- readRDS("analysis/identifyCD4.CD8_byNMF/rank9/cd8_seurat.Rds")
+
+## Add on clonal metadata
+tcell_seurat<- AddMetaData(tcell_seurat, seurat_obj@meta.data[,c("tcr_reconstructed", "raw_clonotype_id", "clonotype_size", "clonal", "v_gene", "j_gene")])
+cd8_seurat<- AddMetaData(cd8_seurat, seurat_obj@meta.data[,c("tcr_reconstructed", "raw_clonotype_id", "clonotype_size", "clonal", "v_gene", "j_gene")])
+cd4_seurat<- AddMetaData(cd4_seurat, seurat_obj@meta.data[,c("tcr_reconstructed", "raw_clonotype_id", "clonotype_size", "clonal", "v_gene", "j_gene")])
+
+## save
+saveRDS(tcell_seurat, file="analysis/manual_broad_annot/tcell_seurat.Rds")
+saveRDS(cd4_seurat, file="analysis/identifyCD4.CD8_byNMF/rank9/cd4_seurat.Rds")
+saveRDS(cd8_seurat, file="analysis/identifyCD4.CD8_byNMF/rank9/cd8_seurat.Rds")
+```
+
 ## Plot V/J gene usage
 ```{r}
 seurat_obj<- readRDS("analysis/preprocessing/seurat_obj_noTumor.Rds")
