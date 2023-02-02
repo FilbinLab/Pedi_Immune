@@ -62,8 +62,13 @@ Convert( paste0(analysis_dir, "cd8_subset_Predys.h5Seurat"), dest = "h5ad")
 ```{r}
 nsclc_cd8<- readRDS("../04b_ComparisonToOtherTumor/analysis/NSCLC/cd8_seurat_nsclc.Rds")
 melanoma_cd8<- readRDS("../04b_ComparisonToOtherTumor/analysis/Melanoma/cd8_seurat_melanoma.Rds")
+cd8_seurat<- readRDS("../04b_ComparisonToOtherTumor/analysis/NSCLC.melanoma/cd8_seurat_nsclc.glioma.melanoma.Rds")
 
-
+## Add on cd8 cell state from merged analysis
+nsclc_cd8$maxGeneset<- as.character(plyr::mapvalues(colnames(nsclc_cd8), colnames(cd8_seurat), cd8_seurat$maxGeneset, warn_missing = FALSE))
+melanoma_cd8$maxGeneset<- as.character(plyr::mapvalues(colnames(melanoma_cd8), colnames(cd8_seurat), cd8_seurat$maxGeneset, warn_missing = FALSE))
+nsclc_cd8$maxGeneset<- gsub("[0-9]", "", nsclc_cd8$maxGeneset)
+melanoma_cd8$maxGeneset<- gsub("[0-9]", "", melanoma_cd8$maxGeneset)
 
 nsclc_cd8<- DietSeurat(nsclc_cd8, scale.data = FALSE)
 melanoma_cd8<- DietSeurat(melanoma_cd8, scale.data = FALSE)
@@ -82,6 +87,7 @@ Convert( paste0(analysis_dir, "cd8_nsclc_cyto.h5Seurat"), dest = "h5ad")
 ```
 
 
+## glioma + melanoma
 ```{r}
 cd8_seurat<- readRDS("../04b_ComparisonToOtherTumor/analysis/NSCLC.melanoma/cd8_seurat_nsclc.glioma.melanoma.Rds")
 
@@ -96,16 +102,15 @@ cd8_list<- SplitObject(cd8_seurat, split.by="TumorType")
 
 
 ## Merge melanoma/cytotoxic together
-gm_cd8s<- merge(cd8_list$Glioma, cd8_list$Melanoma)
-gm_cd8_meta<- cd8@meta.data
+gm_cd8<- merge(cd8_list$Glioma, cd8_list$Melanoma)
+gm_cd8_meta<- gm_cd8@meta.data
 gm_cd8<- RunFullSeurat(gm_cd8@assays$RNA@counts, RunHarmony = FALSE, samples=gm_cd8$sample)
 gm_cd8<- AddMetaData(gm_cd8, gm_cd8_meta[,!colnames(gm_cd8_meta)  %in% colnames(gm_cd8@meta.data)])
 
 ## Remove norm/scaled data- want X to be raw data
 gm_cd8<- DietSeurat(gm_cd8, scale.data=FALSE)
-nsclc_cd8<- DietSeurat(cd8_list$NSCLC, scale.data=FALSE)
 
-SaveH5Seurat(cd8_seurat, filename = paste0(analysis_dir, "cd8_glioma.melanoma.h5Seurat"))
+SaveH5Seurat(gm_cd8, filename = paste0(analysis_dir, "cd8_glioma.melanoma.h5Seurat"))
 Convert( paste0(analysis_dir, "cd8_glioma.melanoma.h5Seurat"), dest = "h5ad")
 ```
 
@@ -134,6 +139,11 @@ cd8_seurat<- readRDS("../04b_ComparisonToOtherTumor/analysis/NSCLC.melanoma/cd8_
 ## edit metadata
 cd8_seurat$Tumor_Age<- ifelse(cd8_seurat$TumorType=="Glioma", 
                               ifelse(as.numeric(cd8_seurat$age_numeric)<=25, "Glioma_Ped", "Glioma_Adult"), cd8_seurat$TumorType)
+cd8_seurat@meta.data<- cd8_seurat@meta.data %>% dplyr::rename(cytotoxic=cytotoxic1,
+                                                              naive=naive2,
+                                                              predysfunctional=predysfunctional3,
+                                                              dysfunctional=dysfunctional4) %>% as.data.frame()
+cd8_seurat$maxGeneset<- gsub("[1-4]", "", cd8_seurat$maxGeneset)
 
 
 cd8_seurat<- DietSeurat(cd8_seurat, scale.data = FALSE)
