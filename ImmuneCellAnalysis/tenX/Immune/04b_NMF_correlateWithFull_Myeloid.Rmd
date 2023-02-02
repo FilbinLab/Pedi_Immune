@@ -66,6 +66,16 @@ my_correlationHeatmap<- function(scores,r, figure_dir=figure_dir_use){
   
   return(list(p=p, factor_cor=scores_factor_hc))
 }
+
+## Save pheatmap as pdf- doesn't save correctly with standard method after you add on other layers for coloring axes
+save_pheatmap_pdf <- function(x, filename, width=7, height=7) {
+   stopifnot(!missing(x))
+   stopifnot(!missing(filename))
+   pdf(filename, width=width, height=height)
+   grid::grid.newpage()
+   grid::grid.draw(x$gtable)
+   dev.off()
+}
 ```
 
 ## Load in tenx seurat object and full cohort programs
@@ -233,10 +243,40 @@ for(r in ranks){
   scores<- cbind(denovo_scores, full_scores)
   
   p<-my_correlationHeatmap(scores, r)
+  cp<- p$p
   
-  png(filename=paste0(figure_dir_use, "Cor_DenovoRank", r, "_fullCohort.png"), width = 700, height = 400)
-  p$p
+  save_pheatmap_pdf(cp, paste0(figure_dir_use, "Cor_DenovoRank", r, "_fullCohort.pdf"), width=10, height=6)
+  
+  #pdf(paste0(figure_dir_use, "Cor_DenovoRank", r, "_fullCohort.pdf"), width = 700, height = 400)
+  #grid::grid.newpage()
+  #grid::grid.draw(cp$gtable)
+  #dev.off()
+  
+  ## Dendrogram of hierarchical clustering 
+  jpeg(filename=paste0(figure_dir_use, "HC_DenovoRank", r, "_fullCohort.png"), width = 400, height = 600)
+  plot(p$factor_cor$hc_obj)
   dev.off()
+  
+}
+
+## Same, but remove AC program (FOR RANK 13)
+
+## For each rank- Merge full scores + de novo scores, correlate
+for(r in ranks){
+  print(r)
+  denovo_scores<- denovo_scores_list[[paste0("Denovo_NMF", r)]]
+  denovo_scores<- denovo_scores[,colnames(denovo_scores) != "Denovo_NMF10"]
+  scores<- cbind(denovo_scores, full_scores)
+  
+  p<-my_correlationHeatmap(scores, r)
+  cp<- p$p
+  
+  save_pheatmap_pdf(cp, paste0(figure_dir_use, "Cor_DenovoRank", r, "_fullCohort_noAC.pdf"), width=10, height=6)
+  
+  #pdf(paste0(figure_dir_use, "Cor_DenovoRank", r, "_fullCohort.pdf"), width = 700, height = 400)
+  #grid::grid.newpage()
+  #grid::grid.draw(cp$gtable)
+  #dev.off()
   
   ## Dendrogram of hierarchical clustering 
   jpeg(filename=paste0(figure_dir_use, "HC_DenovoRank", r, "_fullCohort.png"), width = 400, height = 600)
@@ -337,9 +377,11 @@ for(r in ranks){
 ```
 
 
+
+
 ## For ranks selected for follow up: annotate based on correlation with full cohort
 ```{r}
-ranks_use<-9
+ranks_use<-c(9,13)
 ranks_all<-c(6,7,9)
 
 ## Assign annotations
@@ -394,9 +436,20 @@ for(r in ranks_use){
   names(denovo_scores_list)<- paste0("Denovo_NMF", ranks_use)
   saveRDS(denovo_scores_list, file=paste0(analysis_dir, "SS2_scores_denovoPrograms_rank",paste(ranks_use, collapse = "."), "_annot.Rds"))
 
+## Add annotation column with same programs (e.g., inflammatory 1 and 2) merged
+for(r in ranks_use){
+  m<-paste0("NMF_rank", r, "_annot") 
+  m_simple<- paste0("NMF_rank", r, "_annot_simplified")
+  myeloid_seurat@meta.data[[m_simple]]<-ifelse(myeloid_seurat@meta.data[[m]] != "SEPP1_Mo_TAM", 
+                                               gsub("[1-2]", "", myeloid_seurat@meta.data[[m]]),
+                                               myeloid_seurat@meta.data[[m]])
+}  
+  
 saveRDS(myeloid_seurat, file="analysis/manual_broad_annot/myeloid_seurat.Rds")
 
 ```
+
+
 
 ## Using NMF rank 13, identified small AC subset. Remove these and rerun clustering
 ```{r}
@@ -414,3 +467,30 @@ saveRDS(myeloid_seurat, file="analysis/manual_broad_annot/myeloid_seurat_removeA
 ```
 
 
+## RANK 13 ONLY
+## Supplemental plots to support annotation of Mo TAM (NMF3) 
+```{r}
+myeloid_seurat<- readRDS("analysis/manual_broad_annot/myeloid_seurat.Rds")
+ranks<- c(10,12,13)
+denovo_scores_list<- readRDS(paste0(analysis_dir, "SS2_scores_denovoPrograms_rank",paste(ranks, collapse = "."), ".Rds"))
+tenxAdultGBM_scores<- readRDS(paste0(analysis_dir, "SS2_scores_adult10XGBM.Rds"))
+
+## Mo TAM correlation
+denovo_scores<- denovo_scores_list$Denovo_NMF13
+
+  ## Correlate nmf 3 scores with all tenx adult gbm scores
+  cors<- as.data.frame(apply(tenxAdultGBM_scores, 2, function(x){cor(x, denovo_scores$Denovo_NMF3)}))
+  colnames(cors)<- "CorrelationWithMoTAM"
+  cors$DenovoProgram<- rownames(cors)
+  cors$Y<-"Y"
+  
+  ## plot
+  ggplot(cors, aes(y=DenovoProgram, x="Y", color=CorrelationWithMoTAM, size=CorrelationWithMoTAM))+
+    geom_point()+
+    scale_colour_gradientn(colors=rev(rainbow(4)))+
+    theme_classic()+
+    xlab("") +ylab("")+
+    theme(axis.text = element_text(face="bold", color="black"))
+  ggsave(paste0(figure_dir, "NMFrank13_corr10XAdult.NMF3_toShowMoTAM.pdf"), device="pdf", width=4, height=5)
+  
+```

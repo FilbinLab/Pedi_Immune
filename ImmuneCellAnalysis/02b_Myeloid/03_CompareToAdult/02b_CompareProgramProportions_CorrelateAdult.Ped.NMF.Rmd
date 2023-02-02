@@ -80,6 +80,9 @@ if(!dir.exists(figure_dir)){dir.create(figure_dir)};if(!dir.exists(analysis_dir)
   ## Adult 10x markers
   adult_10Xmarkers_top100<- readRDS(paste0("../../01_Preprocessing/03_PreprocessAdultDatasets/analysis/Preprocess_AdultMyeloid/", 
                                         "GBM.10X_recurrent_myeloid_markers_top100.Rds"))
+
+program_colors<- readRDS("../../plot_colors/Myeloid_program_colors.Rds")
+program_colors<- program_colors$rank6
 ```
 
 # Need to re-annotate BT1478 to non-BCOR; hemispheric, maybe GBM? Set to GBM for now, may update
@@ -224,16 +227,17 @@ ggsave(paste0(figure_dir, "Overlap_sharedPedAdult_pedRank", ped_rank, "_adultRan
   tcell_myeloid_overlaps$order<- 1:nrow(tcell_myeloid_overlaps)
   
   ## Plot
+  hm_colors =  c("#003366","cyan4","#FFFFCC", "#FFCC66")
   ggplot( tcell_myeloid_overlaps, aes(y=reorder(program, order), x=dummy, color=PearsonCorrelation, size=nOverlap))+
     geom_point()+
-    scale_color_viridis_c()+
+    scale_color_gradientn(colours =  hm_colors)+
     theme_classic()+
     theme(axis.text.y = element_text(face="bold"),
           axis.text.x = element_blank())+
     ylab("")+
     xlab("")+
     geom_hline(yintercept = 4.5, linetype="dashed")
-  ggsave(paste0(figure_dir, "Overlap_sharedPedAdult_Tcell.Myeloid.pdf"), device="pdf", width=5, height=3)
+  ggsave(paste0(figure_dir, "Overlap_sharedPedAdult_Tcell.Myeloid_updatedColor.pdf"), device="pdf", width=5, height=3)
 ```
 
 ## Merge genesets from ped/adult that are similar
@@ -288,7 +292,7 @@ scores_factor_cor$color<-ifelse(grepl("PedSpecific", rownames(scores_factor_cor)
 ## Heatmap of correlations
 hm_colors = rev((brewer.pal(n=9, name="RdBu")))
 hm_colors = colorRampPalette(colors = hm_colors)
-pheatmap(scores_factor_cor[,colnames(scores_factor_cor) != "color"], color = hm_colors(100),
+p<-pheatmap(scores_factor_cor[,colnames(scores_factor_cor) != "color"], color = hm_colors(100),
          cluster_rows = F, cluster_cols = F,
          annotation_names_row = F, annotation_names_col =T,
          show_rownames = T, show_colnames = F,
@@ -304,7 +308,7 @@ dev.off()
 
 
 ## Dendrogram of hierarchical clustering 
-jpeg(filename=paste0(figure_dir, "HC_Ped.rank", ped_rank,"_Adult.rank", adult_rank,  "_Adult10X.png"), width = 400, height = 600)
+pdf(paste0(figure_dir, "HC_Ped.rank", ped_rank,"_Adult.rank", adult_rank,  "_Adult10X.pdf"), width = 6, height = 8)
 plot(scores_factor_hc$hc_obj)
 dev.off()
 
@@ -312,6 +316,27 @@ dev.off()
 names(PA_gene_list)<- gsub("AdultSpecific.4", "AdultSpecific_Transitory_TAM",
                            gsub("AdultSpecific.2", "AdultSpecific_IFN_Mo_TAM", gsub("StressResponse", "Microglia", names(PA_gene_list))))
 saveRDS(PA_gene_list, file=paste0(analysis_dir, "pedAdultmerged_pedAdultspecific_geneList_pedRank", ped_rank, "_adultRank", adult_rank, ".Rds"))
+
+## Simpler plot- show correlation for adult-specific programs (this heatmap used to help annotate these programs)
+  ## Correlate nmf 3 scores with all tenx adult gbm scores
+  cors<- data.frame(AdultSpecific_IFN_Mo_TAM= apply(scores[,grepl("Adult10X", colnames(scores))], 2, function(x){cor(x, scores$AdultSpecific_IFN_Mo_TAM,
+                                                                                                                     method="spearman")}),
+                    AdultSpecific_Transitory_TAM= apply(scores[,grepl("Adult10X", colnames(scores))], 2, function(x){cor(x, scores$AdultSpecific_Transitory_TAM,
+                                                                                                                         method="spearman")}))
+  cors$Adult10XRefPrograms<- rownames(cors)
+  cors<- melt(cors, id="Adult10XRefPrograms")
+  colnames(cors)<- c("Adult10XRefPrograms", "AdultSpecificProgram", "SpearmanCorrelation")
+  
+  
+  ## plot
+  ggplot(cors, aes(y=Adult10XRefPrograms, x=AdultSpecificProgram, size=SpearmanCorrelation))+
+    theme_classic()+
+    geom_point(aes(color=SpearmanCorrelation))+
+    scale_colour_gradientn(colors=rev(rainbow(4)))+
+    xlab("") +ylab("")+
+    theme(axis.text = element_text(face="bold", color="black"),
+          axis.text.x = element_text(angle=45, hjust=1))
+  ggsave(paste0(figure_dir, "SpearmanCor_Adult10X_AdultSpecificRank6.pdf"), device="pdf", width=6, height=6)
 
 saveRDS(scores, file=paste0(analysis_dir, "scores_Adult10X_pedRank_", ped_rank, "_adultRank", adult_rank, ".Rds"))
 ```
@@ -611,6 +636,45 @@ FeaturePlot(merged_seurat, features="MM_score")+
 ggsave(paste0(figure_dir, "UMAP_harmony_byMacrophage.MicrogliaScore.pdf"), device="pdf", width=7, height=7.3)
 
 
+```
+
+## Proportion of programs by age (integer, actual value)
+```{r}
+program_name<-paste0("MaxProgram_PA_mergedGenesets")
+merged_seurat$tmp<- merged_seurat@meta.data[[program_name]]
+
+## Proportion of program by sample
+df<- merged_seurat@meta.data %>% group_by(tmp,sampleid) %>% summarise(nCells=n()) %>% 
+  group_by(sampleid) %>% mutate(perCells=nCells/sum(nCells)) %>% as.data.frame()
+
+## Add on age
+df$age<- as.numeric(as.character(plyr::mapvalues(df$sampleid, merged_seurat$sampleid, merged_seurat$age_numeric,
+                                                 warn_missing = FALSE)))
+
+## Plot
+all_plots<-lapply(unique(merged_seurat$tmp), function(x){
+  df_tmp<- df[df$tmp==x,]
+  
+  ## model
+  model<- summary(lm(age~perCells, df_tmp))
+  r2<- round(model$r.squared,2)
+  pvalue=round(model$coefficients["perCells","Pr(>|t|)" ],4)
+  
+  ## Plot    
+  ggplot(df_tmp, aes(x=age, y=perCells, color=tmp))+
+    geom_point()+
+    scale_color_manual(values=program_colors)+
+    theme_bw()+
+    theme(legend.position = "none",
+          axis.text = element_text(face="bold", color="black"),
+          axis.title = element_text(face="bold", color="black"),
+          title = element_text(face="bold", size=12))+
+    ggtitle(x, subtitle =  paste0("R2: ", r2, ", pvalue: ", pvalue))+
+    xlab("Age") + ylab(paste0("Proportion\n", x, " cells"))+
+    geom_smooth(se=FALSE, method="lm", color="black", linetype="dashed")
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "Myeloid_NumericAge.vs.ProgramProportion.png"), width=10, height=10)
 ```
 
 ## Export for sccoda

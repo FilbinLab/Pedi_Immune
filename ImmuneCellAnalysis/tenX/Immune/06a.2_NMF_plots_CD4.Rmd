@@ -142,13 +142,13 @@ cd4_seurat@meta.data[[program_name]]<- factor(cd4_seurat@meta.data[[program_name
                                                         "Memory",
                                                        "IFN.Response", "Stress"))
 DotPlot(cd4_seurat, group.by =program_name,
-        features=c("FOXP3", "CTLA4", "CD40LG", "TIMP1", "KLRB1","TOP2A", "UBE2C",
-                   "LMNA", "CCR7", "SELL", "IFIT3","IFIT1",
+        features=c("FOXP3", "CTLA4","LMNA", "CD40LG", "TIMP1",  "TOP2A", "UBE2C",
+                   "CCR7", "SELL", "IFIT3","IFIT1",
                      "HSPA6", "HSPA1A"))+
   coord_flip()+
   theme(axis.text.x = element_text(angle=45, hjust=1))+
   scale_color_gradient2(low="blue", mid="white", high="red")
-ggsave(paste0(figure_dir, "DotPlot_MarkersOfInterest_byProgram.png"), width=6, height=8)
+ggsave(paste0(figure_dir, "DotPlot_MarkersOfInterest_byProgram.pdf"), device="pdf", width=6, height=8)
 ```
 
 ## UMAP with annotations
@@ -181,7 +181,7 @@ program_name<-paste0("NMF_rank", rank_use, "_annot")
 cd4_seurat$tmp<- cd4_seurat@meta.data[[program_name]]
 
 my_barchart_programProp(cd4_seurat, coloring_variable = "tmp", colors=program_colors)
-ggsave(paste0(figure_dir, "Barchart_programProportion_bySample.png"), width=5, height=4)
+ggsave(paste0(figure_dir, "Barchart_programProportion_bySample.pdf"), width=5, height=4, device = "pdf")
 ```
 
 

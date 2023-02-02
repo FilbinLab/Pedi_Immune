@@ -11,6 +11,7 @@ library(Seurat)
 library(clusterProfiler)
 library(biomaRt)
 library(stringr)
+library(grid)
 
 base_dir = "/Users/jlabelle/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/Scripts/"
@@ -18,7 +19,7 @@ working_dir<- paste0(base_dir,
                      "Dropbox (Partners HealthCare)/FilbinLab/",
                      "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/tenX/Immune/")
 
-analysis_dir<- paste0(working_dir, "/analysis/correlate_deNovo10X_fullCohort/Tcelsl/")
+analysis_dir<- paste0(working_dir, "/analysis/correlate_deNovo10X_fullCohort/Tcells/")
 figure_dir<- paste0(working_dir, "/figures/correlate_deNovo10X_fullCohort/Tcells/")
 data_dir <- paste0(working_dir, "analysis/nmf/")
 
@@ -31,6 +32,18 @@ source(preprocessing)
 source(nmf_helper)
 
 
+```
+
+```{r}
+## Save pheatmap as pdf- doesn't save correctly with standard method after you add on other layers for coloring axes
+save_pheatmap_pdf <- function(x, filename, width=7, height=7) {
+   stopifnot(!missing(x))
+   stopifnot(!missing(filename))
+   pdf(filename, width=width, height=height)
+   grid::grid.newpage()
+   grid::grid.draw(x$gtable)
+   dev.off()
+}
 ```
 
 ## Load in tenx seurat object and full cohort programs
@@ -75,7 +88,7 @@ Note that I've definitely done this previously.. but easier to just redo and kno
 ## Tcell
   ## norm/center 10x
   cm_list_ss2<- NormCenter(full_tcell_seurat@assays$RNA@counts)
-  mean_ss2<- row_means (log2(cm_list_ss2$raw_data + 1))
+  mean_ss2<- rowMeans(log2(cm_list_ss2$raw_data + 1))
   
   ## split full markers to list
   full_marker_list<- split(full_markers, f=full_markers$cluster)
@@ -89,8 +102,8 @@ saveRDS(full_scores, file=paste0(analysis_dir, "SS2_scores_fullPrograms.Rds"))
 
 ## for each rank, load marker genes, score TENX for de novo 10x nmf, then correlate with full cohort
 ```{r}
-analysis_dir_use<- paste0(analysis_dir, "Tcells/scoreTenX/")
-figure_dir_use<- paste0(figure_dir, "Tcells/scoreTenX/")
+analysis_dir_use<- paste0(analysis_dir, "scoreTenX/")
+figure_dir_use<- paste0(figure_dir, "scoreTenX/")
 for(i in c(analysis_dir_use, figure_dir_use)){if(!dir.exists(i)){dir.create(i)}}
 
 ## Load scores for 10x for full program
@@ -156,16 +169,16 @@ for(r in ranks){
 
 ## for each rank, load marker genes, score SS2 for de novo 10x nmf, then correlate with full cohort
 ```{r}
-analysis_dir_use<- paste0(analysis_dir, "Tcells/scoreSS2/")
-figure_dir_use<- paste0(figure_dir, "Tcells/scoreSS2/")
+analysis_dir_use<- paste0(analysis_dir, "scoreSS2/")
+figure_dir_use<- paste0(figure_dir, "scoreSS2/")
 for(i in c(analysis_dir_use, figure_dir_use)){if(!dir.exists(i)){dir.create(i)}}
 
 ## Load scores for 10x for full program
-full_scores<- readRDS(paste0(analysis_dir, "ss2_scores_fullPrograms.Rds"))
+full_scores<- readRDS(paste0(analysis_dir_use, "ss2_scores_fullPrograms.Rds"))
 
 ## For each rank- load in de novo 10x markers, score ss2 tcells
 ranks<- 6:10
-denovo_scores<- lapply(ranks, function(r){
+denovo_scores_list<- lapply(ranks, function(r){
   ## Load markers
   markers<- read.csv(paste0(data_dir, "Tcell/top_DE_genes_NMF_rank", r, ".csv"))
   
@@ -178,12 +191,12 @@ denovo_scores<- lapply(ranks, function(r){
   scores<- as.data.frame(t(scoreNmfGenes(cm_list_ss2$center_data, mean_ss2, markers)))
   return(scores)
   })
-names(denovo_scores)<- paste0("Denovo_NMF", ranks)
+names(denovo_scores_list)<- paste0("Denovo_NMF", ranks)
 
 ## For each rank- Merge full scores + de novo scores, correlate
 for(r in ranks){
   print(r)
-  denovo_scores<- denovo_scores[[paste0("Denovo_NMF", r)]]
+  denovo_scores<- denovo_scores_list[[paste0("Denovo_NMF", r)]]
   scores<- cbind(denovo_scores, full_scores)
   
   ## NMF factor correlation based on cell score 
@@ -209,9 +222,11 @@ for(r in ranks){
   cols=scores_factor_cor[order(match(rownames(scores_factor_cor), p$gtable$grobs[[2]]$label)), ]$color
   p$gtable$grobs[[2]]$gp=gpar(col=cols)
   
-  png(filename=paste0(figure_dir_use, "Cor_DenovoRank", r, "_fullCohort.png"), width = 700, height = 400)
-  p
-  dev.off()
+  save_pheatmap_pdf(p, paste0(figure_dir_use, "Cor_DenovoRank", r, "_fullCohort.pdf"), width=10, height=6)
+  
+  #png(filename=paste0(figure_dir_use, "Cor_DenovoRank", r, "_fullCohort.png"), width = 700, height = 400)
+  #p
+  #dev.off()
   
   ## Dendrogram of hierarchical clustering 
   jpeg(filename=paste0(figure_dir_use, "HC_DenovoRank", r, "_fullCohort.png"), width = 400, height = 600)

@@ -267,8 +267,9 @@ DotPlot(merge_cd8, group.by = "TumorType",
           features=c("PDCD1", "HAVCR2", "TIGIT", "CTLA4", "GZMK", "ITGAE", "PRF1", "GNLY", "KLRB1"), cols=c("grey","red"))+
     theme(axis.text.x = element_text(angle=45, hjust=1))+
   ylab("")+xlab("")+
+  scale_color_gradient2(low="blue", mid="white", high="red")+
   coord_flip()
-ggsave(paste0(figure_dir_use, "CD8_Dotplot_InhibitoryGOI_byTumorType.pdf"),device="pdf", width=4, height=5)
+ggsave(paste0(figure_dir_use, "CD8_Dotplot_InhibitoryGOI_byTumorType_colorCentered.pdf"),device="pdf", width=4, height=5)
 
 ## Dotplot of  GOI by tumor type
 DotPlot(merge_cd8, group.by = "TumorType", 

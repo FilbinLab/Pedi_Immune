@@ -92,7 +92,7 @@ rank<- "9"
 add_lines<- TRUE
 program_name<-paste0("NMF_rank", rank_use, "_annot")
 
-top_markers<-all_markers[all_markers$cluster!="Treg",]
+top_markers<-all_markers[! all_markers$cluster %in% c("Treg", "Activated_EM"),]
 
 ## Pseudobulk
 cd8_seurat$PB_variable<- paste0(cd8_seurat$sample, "_", 
@@ -126,7 +126,7 @@ if(add_lines){
 }else{p}
 
   
-ggsave(paste0(figure_dir, "CD8_Heatmap_TopNMFgenes_annot_rank", rank_use,".png"), width=17, height=11)
+ggsave(paste0(figure_dir, "CD8_Heatmap_TopNMFgenes_annot_rank", rank_use,".pdf"), device="pdf",width=17, height=11)
 
 
 ```
@@ -143,13 +143,14 @@ cd8_seurat@meta.data[[program_name]]<- factor(cd8_seurat@meta.data[[program_name
                                                        "Activated_EM", "Memory",
                                                        "IFN.Response", "Stress"))
 DotPlot(cd8_seurat, group.by =program_name,
-        features=c("TOP2A", "UBE2C","PDCD1", "TIGIT", "ITGAE", "GNLY","GZMB","GZMA", "PRF1", "NKG7","GZMK", "HLA-DRA",
-                   "LMNA", "CCR7", "SELL", "IFIT3","IFIT1",
+        features=c( "GZMB","GZMA", "PRF1", "NKG7","GNLY","GZMK", "PDCD1", "TIGIT", "ITGAE","HLA-DRA",
+                    "TOP2A", "UBE2C",
+                    "CCR7", "SELL", "IFIT3","IFIT1",
                      "HSPA6", "HSPA1A"))+
   coord_flip()+
   theme(axis.text.x = element_text(angle=45, hjust=1))+
   scale_color_gradient2(low="blue", mid="white", high="red")
-ggsave(paste0(figure_dir, "DotPlot_MarkersOfInterest_byProgram.png"), width=6, height=8)
+ggsave(paste0(figure_dir, "DotPlot_MarkersOfInterest_byProgram.pdf"),device="pdf", width=6, height=8)
 ```
 
 ## UMAP with annotations
@@ -182,10 +183,23 @@ program_name<-paste0("NMF_rank", rank_use, "_annot")
 cd8_seurat$tmp<- cd8_seurat@meta.data[[program_name]]
 
 my_barchart_programProp(cd8_seurat, coloring_variable = "tmp", colors=program_colors)
-ggsave(paste0(figure_dir, "Barchart_programProportion_bySample.png"), width=5, height=4)
+ggsave(paste0(figure_dir, "Barchart_programProportion_bySample.pdf"), width=5, height=4, device="pdf")
 ```
 
 
 
 
+## Expression of GOI
+```{r}
+VlnPlot(cd8_seurat, group.by = "NMF_rank9_annot", features="SELPLG", sort=TRUE)+
+  NoLegend()+
+  scale_fill_manual(values=program_colors)
+ggsave(paste0(figure_dir, "Vln_SELPLG_byProgram.png"), width=5, height=4.5)
+
+DotPlot(cd8_seurat, group.by = "NMF_rank9_annot", features="SELPLG")+
+  scale_color_gradient2(low="blue", mid="white", high="red")+
+  theme(axis.text = element_text(face="bold", color="black"))+
+  xlab("")+ylab("")
+ggsave(paste0(figure_dir, "DotPlot_SELPLG_byProgram.pdf"), device="pdf", width=5, height=4.5)
+```
 

@@ -357,7 +357,7 @@ all_plots<-lapply(unique(cd4_seurat$tmp), function(x){
     geom_smooth(se=FALSE, method="lm", color="black", linetype="dashed")
 })
 cowplot::plot_grid(plotlist=all_plots, ncol=3)
-ggsave(paste0(figure_dir, "CD4_NumericAge.vs.ProgramProportion.png"), width=10, height=10)
+ggsave(paste0(figure_dir, "CD4_NumericAge.vs.ProgramProportion.pdf"),device="pdf", width=10, height=10)
 ```
 
 

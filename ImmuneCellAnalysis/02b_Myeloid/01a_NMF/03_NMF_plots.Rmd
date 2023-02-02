@@ -235,7 +235,7 @@ ggsave(paste0(figure_dir_tmp, "UMAP_indv_byAdult10XAnnot_rank", rank_use, ".png"
 
 ## GO terms for NMF programs
 ```{r}
-rank<- 7
+rank<- 6
 
 ## read in markers
 marker_genes<- read.csv(paste0(analysis_dir,  "top_DE_genes_10Xannotated_NMF_rank", rank, ".csv"))
@@ -245,7 +245,7 @@ OrgDb = "org.Hs.eg.db"
 dataset = "hsapiens_gene_ensembl"
 
 ## Read in df for converting symbol --> ensembl
-all_genes_Ens.Sym<- readRDS(paste0("/Users/jlabelle/Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Marker_genes/", 
+all_genes_Ens.Sym<- readRDS(paste0("/Users/jlabelle/Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/Marker_genes/", 
                                    "allGenes_Ensembl.Symbol.Rds"))
 
 ## Convert input genes to ensembl. Not all genes found in all_genes_Ens.Sym bc not all Symbols match Ensembl
@@ -268,9 +268,10 @@ for (i in unique(marker_genes$cluster)){
 } 
 
 ## Plot and save
-go_plots<- plotGO(go_result = go_result, n_terms = 15)
-cowplot::plot_grid(plotlist=go_plots, ncol=3)
-ggsave(paste0(figure_dir, "GO_NMFrank", rank, "_10xAnnotated.png"), width=24, height=18)
+n_terms<- 10
+go_plots<- plotGO(go_result = go_result, n_terms = n_terms)
+cowplot::plot_grid(plotlist=go_plots, ncol=2)
+ggsave(paste0(figure_dir, "GO_NMFrank", rank, "_10xAnnotated_nTerms",n_terms, ".pdf"),device="pdf", width=16, height=18)
 ```
 
 ## Density plots

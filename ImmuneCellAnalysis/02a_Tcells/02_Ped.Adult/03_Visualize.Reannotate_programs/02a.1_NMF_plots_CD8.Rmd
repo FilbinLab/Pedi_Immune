@@ -19,7 +19,6 @@ library(stringr)
 library(harmony)
 library(ggpubr)
 
-gc()
 
 base_dir = "/Users/jlabelle/"
 script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
@@ -361,7 +360,7 @@ all_plots<-lapply(unique(cd8_seurat$tmp), function(x){
     geom_smooth(se=FALSE, method="lm", color="black", linetype="dashed")
 })
 cowplot::plot_grid(plotlist=all_plots, ncol=3)
-ggsave(paste0(figure_dir, "CD8_NumericAge.vs.ProgramProportion.png"), width=10, height=10)
+ggsave(paste0(figure_dir, "CD8_NumericAge.vs.ProgramProportion.pdf"),device="pdf", width=10, height=10)
 ```
 
 
@@ -383,6 +382,16 @@ DotPlot(cd8_seurat, features=c("naive", "dysfunctional",  "predysfunctional","cy
   ylab("") + xlab("")+
   coord_flip()
 ggsave(paste0(figure_dir, "CD8_DotPlot_Nature2020.GOI_byProgram.png"), width=6, height=6)
+
+## Just nature2020 scores
+DotPlot(cd8_seurat, features=c("naive", "dysfunctional",  "predysfunctional","cytotoxic"),
+        group.by = "tmp")+
+  theme(axis.text.x = element_text(angle=45, hjust=1),
+        axis.text = element_text(face="bold", color="black"))+
+  ylab("") + xlab("")+
+  coord_flip()+
+  scale_color_gradient2(low="green", mid="white", high="magenta")
+ggsave(paste0(figure_dir, "CD8_DotPlot_Nature2020_byProgram.pdf"), device="pdf",width=7, height=5)
 
 ## Inhibitory GOI
 DotPlot(cd8_seurat, features=c( "ITGAE", "TNFRSF9",  "PDCD1", "CTLA4", "LAG3", "TIGIT", "KLRB1", "HLA-DRA"),
