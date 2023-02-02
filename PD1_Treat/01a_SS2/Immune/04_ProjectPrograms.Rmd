@@ -45,6 +45,7 @@ ss2_files<- ss2_files[!grepl("tcell", ss2_files)]
 ss2_seurat<- lapply(ss2_files, function(x){readRDS(paste0(data_dir, x))})
 names(ss2_seurat)<-  gsub("_seurat.Rds", "", ss2_files)
 ss2_seurat<- lapply(ss2_seurat, function(x){x$Sequencing<- "SS2"; return(x)})
+ss2_seurat$myeloid$Final_Annot<- ss2_seurat$myeloid$NMF_rank6_annotByAdult10X
 
 
 
@@ -91,7 +92,7 @@ Results: assignment accuracy worse than projection with full cohort (obviously) 
 ```{r}
 ## Remove gbm samples from full cohort seurat objects to be used as reference
 all_samples<- unique(c(full_myeloid_seurat$sample, full_cd4_seurat$sample, full_cd8_seurat$sample))
-gbm_samples<- unique(c(ss2_seurat$ss2_cd4$sample))
+gbm_samples<- unique(c(ss2_seurat$cd4$sample))
 non_gbm_samples<- all_samples[!all_samples %in% gbm_samples]
 
 myeloid_ref<- subset(full_myeloid_seurat, sample %in% non_gbm_samples)
@@ -99,12 +100,13 @@ cd4_ref<- subset(full_cd4_seurat, sample %in% non_gbm_samples)
 cd8_ref<- subset(full_cd8_seurat, sample %in% non_gbm_samples)
 
 ## Project
-ss2_seurat$ss2_cd4<- my_project_seurat(cd4_ref,ss2_seurat$ss2_cd4, reference_annotation = "NMF_rank8_annot_mergedByunion_reAnnot")
-ss2_seurat$ss2_cd8<- my_project_seurat(cd8_ref,ss2_seurat$ss2_cd8, reference_annotation = "NMF_rank8_annot_mergedByunion_reAnnot")
-ss2_seurat$ss2_myeloid<- my_project_seurat(myeloid_ref,ss2_seurat$ss2_myeloid, reference_annotation = "NMF_rank6_annotByAdult10X")
+ss2_seurat$cd4<- my_project_seurat(cd4_ref,ss2_seurat$cd4, reference_annotation = "NMF_rank8_annot_mergedByunion_reAnnot")
+ss2_seurat$cd8<- my_project_seurat(cd8_ref,ss2_seurat$cd8, reference_annotation = "NMF_rank8_annot_mergedByunion_reAnnot")
+ss2_seurat$myeloid<- my_project_seurat(myeloid_ref,ss2_seurat$myeloid, reference_annotation = "NMF_rank6_annotByAdult10X")
 
 ## Compare program assignment to actual program assignment
 all_plots<- lapply(names(ss2_seurat), function(x){
+  print(x)
   tmp<- ss2_seurat[[x]]@meta.data
   bd<- as.data.frame(table(tmp$Final_Annot, tmp$Program_projected))
   colnames(bd)<-c("OriginalAnnotation", "ProjectedAnnotation", "NumberOfCells")
@@ -118,9 +120,9 @@ ggsave(paste0(figure_dir, "SS2_Sankey_ChangeInAnnotation_Original.v.Projected_no
 ## Project programs from full cohort to gbm (ss2 and 10x, with treated/untreated together)
 ```{r}
 ## SS2
-ss2_seurat$ss2_cd4<- my_project_seurat(full_cd4_seurat,ss2_seurat$ss2_cd4, reference_annotation = "NMF_rank8_annot_mergedByunion_reAnnot")
-ss2_seurat$ss2_cd8<- my_project_seurat(full_cd8_seurat,ss2_seurat$ss2_cd8, reference_annotation = "NMF_rank8_annot_mergedByunion_reAnnot")
-ss2_seurat$ss2_myeloid<- my_project_seurat(full_myeloid_seurat,ss2_seurat$ss2_myeloid, reference_annotation = "NMF_rank6_annotByAdult10X")
+ss2_seurat$cd4<- my_project_seurat(full_cd4_seurat,ss2_seurat$cd4, reference_annotation = "NMF_rank8_annot_mergedByunion_reAnnot")
+ss2_seurat$cd8<- my_project_seurat(full_cd8_seurat,ss2_seurat$cd8, reference_annotation = "NMF_rank8_annot_mergedByunion_reAnnot")
+ss2_seurat$myeloid<- my_project_seurat(full_myeloid_seurat,ss2_seurat$myeloid, reference_annotation = "NMF_rank6_annotByAdult10X")
 
 
 for(i in names(ss2_seurat)){
@@ -169,6 +171,8 @@ ggsave(paste0(figure_dir, "SS2_Barchart_PredictedProgram.png"), width=18, height
 
 ```
 
+
+## NOT RUN
 ## Pseudobulked heatmap of expression of marker genes
 ```{r}
 marker_list<- list(cd4=top_tcell_markers[!top_tcell_markers$cluster %in% c("Predysfunctional", "Cytotoxic.NKreceptor"),], 
@@ -176,8 +180,8 @@ marker_list<- list(cd4=top_tcell_markers[!top_tcell_markers$cluster %in% c("Pred
                    myeloid=top_myeloid_markers)
 
 ## Merge (no clustering needed) across sequencing types
-all_plots<- lapply(gsub("tenx_", "", names(tenx_seurat)), function(x){
-  tmp<- merge(tenx_seurat[[paste0("tenx_", x)]], ss2_seurat[[paste0("ss2", x)]])
+all_plots<- lapply(gsub("tenx_", "", names(ss2_seurat)), function(x){
+  tmp<- merge(ss2_seurat[[paste0("tenx_", x)]], ss2_seurat[[paste0("ss2", x)]])
   markers_use<-marker_list[[x]]
   markers_use<- markers_use[markers_use$cluster %in% unique(tmp$Program_projected),]
   
@@ -248,7 +252,7 @@ ss2_de<-lapply(ss2_seurat, function(seurat){
   
   
 ## tenx
-tenx_de<-lapply(tenx_seurat, function(seurat){
+tenx_de<-lapply(ss2_seurat, function(seurat){
   ## Identify programs to test- >3 cells in program in both treated/untreated
   programs_in_both<- table(seurat$Treatment, seurat$Program_projected)>3
   programs_in_both<- colnames(programs_in_both)[colSums(programs_in_both)==2]
@@ -330,7 +334,7 @@ GOI<- c("GADD45B", "IL6ST", "TOB1", "HAMP", "LYVE1", "NINJ1", "RHOB", "SLC2A5", 
 names(GOI)<- plyr::mapvalues(GOI, degs_shared$gene, degs_shared$program, warn_missing = FALSE)
 
 ## Plot expression for ss2/tenx for all goi
-all_plots<- lapply(gsub("tenx_", "", names(tenx_seurat)), function(x){
+all_plots<- lapply(gsub("tenx_", "", names(ss2_seurat)), function(x){
   tmp<- all_seurat[[x]]
   goi_use<- GOI[names(GOI) %in% tmp$Program_projected]
   
@@ -367,10 +371,10 @@ full_cd8_seurat<- readRDS(paste0(full_cohort_dir,
 
 ## Named list of objects to help with iterating over
 ref_list<- list(cd4=full_cd4_seurat, cd8=full_cd8_seurat, myeloid=full_myeloid_seurat)
-ss2pd1_list<- list(cd4=subset(ss2_seurat$ss2_cd4, Treatment=="PD1"),
-                    cd8=subset(ss2_seurat$ss2_cd8, Treatment=="PD1"),
-                    myeloid=subset(ss2_seurat$ss2_myeloid, Treatment=="PD1"))
-tenx_list<- tenx_seurat; names(tenx_list)<-gsub("tenx_", "", names(tenx_list))
+ss2pd1_list<- list(cd4=subset(ss2_seurat$cd4, Treatment=="PD1"),
+                    cd8=subset(ss2_seurat$cd8, Treatment=="PD1"),
+                    myeloid=subset(ss2_seurat$myeloid, Treatment=="PD1"))
+tenx_list<- ss2_seurat; names(tenx_list)<-gsub("tenx_", "", names(tenx_list))
 color_list<- list(cd4=tcell_colors, cd8=tcell_colors, myeloid=myeloid_colors)
 
 ## SS2 PD1
@@ -410,7 +414,7 @@ tenx_list<- lapply(names(tenx_list), function(x){
   print(x)
   my_mapSeurat(ref_list[[x]], tenx_list[[x]], metadata_column_to_project = "Final_Annot" )
 })  
-names(tenx_list)<- gsub("tenx_", "", names(tenx_seurat))
+names(tenx_list)<- gsub("tenx_", "", names(ss2_seurat))
     
 
   ## Plot by program (reference + query)

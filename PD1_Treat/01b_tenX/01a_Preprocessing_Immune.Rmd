@@ -156,7 +156,7 @@ saveRDS(seurat_raw, file=paste0(analysis_dir, "raw_seurat.Rds"))
 seurat_raw<- readRDS(paste0(analysis_dir, "raw_seurat.Rds"))
 
 feature_thresh<- 500
-hk_thresh<- 40
+hk_thresh<- 50
 
 df<- seurat_raw@meta.data
 p1<- ggplot(df, aes(x=nFeature_RNA, fill=sample))+geom_histogram()+ggtitle("nFeatures")+geom_vline(xintercept = feature_thresh)
@@ -191,6 +191,8 @@ ggsave(paste0(figure_dir, "PF_BySample_nFeature.nHK.png"), width=3, height=3)
 
 ## recluster without low quality cells
 seurat_obj_filt_meta<- seurat_obj_filt@meta.data
+seurat_obj_filt_meta$batch<- seurat_obj_filt_meta$sample
+seurat_obj_filt_meta$sample<- gsub("_new", "", seurat_obj_filt_meta$sample)
 seurat_obj_filt<- RunFullSeurat(seurat_obj_filt@assays$RNA@counts, RunHarmony = TRUE, samples=seurat_obj_filt_meta$sample)
 seurat_obj_filt<-AddMetaData(seurat_obj_filt, seurat_obj_filt_meta[,!colnames(seurat_obj_filt_meta) %in% colnames(seurat_obj_filt@meta.data)])
 
@@ -206,10 +208,9 @@ saveRDS(seurat_raw, file=paste0(analysis_dir, "raw_seurat.Rds"))
 ```{r}
 seurat_obj<- readRDS(paste0(analysis_dir, "seurat_obj.Rds"))
 
-## Reduce resolution (+ merge) to identify markers for major clusters
-seurat_obj<-FindClusters(seurat_obj, resolution = 0.3)
+## Reduce resolution to identify markers for major clusters
+seurat_obj<-FindClusters(seurat_obj, resolution = 0.1)
 DimPlot(seurat_obj, label=TRUE)
-seurat_obj$seurat_clusters<- gsub(1,0,  seurat_obj$seurat_clusters)
 seurat_obj<- SetIdent(seurat_obj, value=seurat_obj$seurat_clusters)
 DimPlot(seurat_obj, group.by = "seurat_clusters", label=TRUE)+NoLegend()+
   FeaturePlot(seurat_obj, features=c("CD3G", "CSF1R", "CD8A", "FOXP3", "SPARCL1", "SOX3"))
@@ -222,13 +223,13 @@ top_markers<- all_markers_filtered %>% group_by(cluster) %>% top_n(n=10, wt=avg_
 write.csv(all_markers_filtered, file=paste0(analysis_dir, "major_clusters_markers_filtered.csv"))
 
 
-## Assign cluster AC/tumor clusters
-seurat_obj$immune.other_annot<- ifelse(seurat_obj$seurat_clusters==8, "AC", ifelse(seurat_obj$seurat_clusters==5, "Tumor", "Immune"))
-FeaturePlot(seurat_obj, features=c("CD3G", "CSF1R", "SPARCL1", "SOX3")) + DimPlot(seurat_obj, group.by = "immune.other_annot")
+## Assign cluster DC/tumor clusters
+seurat_obj$immune.other_annot<- ifelse(seurat_obj$seurat_clusters==6, "DC", ifelse(seurat_obj$seurat_clusters==4, "Tumor", "Immune"))
+FeaturePlot(seurat_obj, features=c("CD3G", "CSF1R", "SPARCL1", "SOX3", "FCN1")) + DimPlot(seurat_obj, group.by = "immune.other_annot")
 ggsave(paste0(figure_dir, "UMAP_removeAC.Tumor.png"), width=7, height=6)
 
 
-## Remove AC/Unknown
+## Remove DC/Tumor
 seurat_obj<- subset(seurat_obj, immune.other_annot=="Immune")
 meta<- seurat_obj@meta.data
 seurat_obj<- RunFullSeurat(seurat_obj@assays$RNA@counts, RunHarmony = FALSE, samples=meta$sample)
@@ -245,7 +246,7 @@ seurat_meta<- seurat_obj@meta.data
 
 ## Convert to CPM
 cm<- seurat_obj@assays$RNA@counts
-cm1<- apply(cm1, 2, function(x){x/sum(x) * 1e06})
+cm1<- apply(cm, 2, function(x){x/sum(x) * 1e06}) ## run on O2
 
 ## Rerun clustering (just so processing is completely identical to ss2)
 seurat_obj<- RunFullSeurat(cm, RunHarmony = TRUE, samples=seurat_obj$sample)

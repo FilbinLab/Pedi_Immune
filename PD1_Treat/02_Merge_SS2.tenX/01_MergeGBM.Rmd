@@ -51,9 +51,9 @@ names(tenx_seurat_list)<- gsub("_seurat.Rds", "", tenx_files)
 
 ## Set colors
 colors_treatment<- c(PD1="orange", Untreated="purple")
-colors_samples<-c( BT1857="skyblue", BT2062="gold", BT2080="salmon",
-                   BT1478="purple", BT1745="blue", BT1857="cyan",
-                    BT1910="orange", BT1935="khaki")
+colors_samples<-c( BT1857_SS2="skyblue", BT2062="gold", BT2080_SS2="salmon",
+                   BT1478="purple", BT1745="blue", BT1857_TenX="cyan",
+                    BT1910="orange", BT1935="khaki", BT2080_TenX="salmon3")
 colors_sequencing<- c(SS2="magenta", TenX="green")
 ```
 
@@ -65,14 +65,14 @@ colors_sequencing<- c(SS2="magenta", TenX="green")
 tenx_seurat_list<- lapply(tenx_seurat_list, function(x){x$Sequencing<-"TenX"; return(x)})
 ss2_seurat_list<- lapply(ss2_seurat_list, function(x){x$Sequencing<- "SS2"; return(x)})
 
-## BT1857 is in ss2 and tenx cohort- add to sample id to distinguish these samples
+## BT1857 and BT2080 are in ss2 and tenx cohort- add to sample id to distinguish these samples
 tenx_seurat_list<- lapply(tenx_seurat_list, function(x){
-  x$sample<- ifelse(x$sample=="BT1857", paste0("BT1857_TenX"), x$sample)
+  x$sample<- ifelse(x$sample %in% c("BT2080", "BT1857"), paste0(x$sample, "_TenX"), x$sample)
   return(x)
   })
 
 ss2_seurat_list<- lapply(ss2_seurat_list, function(x){
-  x$sample<- ifelse(x$sample=="BT1857", paste0("BT1857_SS2"), x$sample)
+  x$sample<- ifelse(x$sample %in% c("BT2080", "BT1857"), paste0(x$sample, "_SS2"), x$sample)
   return(x)
   })
 
@@ -89,6 +89,13 @@ seurat_list<- lapply(names(tenx_seurat_list), function(x){
   return(seurat)
 })
 names(seurat_list)<-names(tenx_seurat_list)
+
+## Fix clonal metadata column names to match
+#seurat_list<- lapply(seurat_list, function(x){
+#  x$clonotype_id<- ifelse(x$Sequencing=="TenX", x$raw_clonotype_id, x$clonal_group)
+#  x$clonotype_size<- ifelse(x$Sequencing=="TenX", x$clonotype_size, x$group_size)
+#  return(x)
+#})
 
 for(i in names(seurat_list)){
   print(i)

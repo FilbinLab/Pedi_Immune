@@ -65,9 +65,9 @@ nature_2020_genes<- lapply(nature_2020_genes, function(x){x[x!=""]})
 ## Settings:
 ## set GOI to plot, sample order (based on treatment, sequencing), whether to plot programs assigned by score or projection
 ```{r}
-GOI<- c("KLRB1", "SELPLG", "PTGER2", "PDCD1", "TIGIT", "CTLA4", "ITGAE", "GZMK", "GNLY", "NKG7", "GZMB", "GZMA", "GADD45B")
+GOI<- c("KLRB1", "SELPLG", "PTGER2", "PDCD1", "TIGIT", "CTLA4", "ITGAE", "GZMK", "GNLY", "NKG7", "GZMB", "GZMA")
 
-sample_order<-c("BT1478","BT1745", "BT1857.SS2","BT1857.TenX", "BT1910", "BT1935", "BT2062", "BT2080")
+sample_order<-c("BT1478","BT1745", "BT1857.SS2","BT1857.TenX", "BT1910", "BT1935", "BT2062", "BT2080.SS2", "BT2080.TenX")
 
 ```
 
@@ -109,8 +109,9 @@ all_plots<- lapply(names(seurat_list), function(x){
     ggtitle(x)
 })
 cowplot::plot_grid(plotlist=all_plots, ncol=3)
-ggsave(paste0(figure_dir, "Heatmap_GOI.png"), width=25, height=7)
+ggsave(paste0(figure_dir, "Heatmap_GOI_centerBySample.pdf"),device="pdf", width=20, height=5)
 ```
+
 ## Pseudobulked heatmap of expression of GOI- for myeloid
 ```{r}
 sample_center_method="byAll"
@@ -147,6 +148,7 @@ all_plots<- lapply("myeloid", function(x){
     scale_fill_gradient2(high="red", low="blue", mid="white", name="Centered log2(TPM)")+
     ggtitle(x)
 })
+
 cowplot::plot_grid(plotlist=all_plots, ncol=1)
 ggsave(paste0(figure_dir, "Heatmap_GOI_myeloidLigands.png"), width=8, height=5)
 ```
@@ -229,7 +231,7 @@ ggsave(paste0(figure_dir, "Heatmap_GOI_byProgram_Myeloid.png"), width=12, height
 
 ## Based on heatmap- boxplot of mean gene expression for GOI within program of interest
 ```{r}
-tmp<- seurat_list$cd4
+tmp<- seurat_list$cd8
 tmp$Program_projected<- gsub("\\.", "\n",tmp$Program_projected)
 
 ## Remove effector memory- no untreated GBM effector memory (+ stress for cd4)
@@ -261,14 +263,14 @@ all_plots<-lapply(goi_plot, function(gene){
     ylab(paste0("Mean log2 TPM: ", gene))
 })
 cowplot::plot_grid(plotlist=all_plots, ncol=1)
-ggsave(paste0(figure_dir, "Boxplot_AllGOI_MeanExprBySample_PD1vUntreated_CD4.png"), width=10, height=4*length(goi_plot))
+ggsave(paste0(figure_dir, "Boxplot_AllGOI_MeanExprBySample_PD1vUntreated_CD8.pdf"),device="pdf", width=8, height=4*length(goi_plot))
 
 ## VlnPlot
 VlnPlot(tmp, group.by = "Program_projected",stack=TRUE , flip = TRUE,
         features=c("PDCD1", "TIGIT", "CTLA4", "ITGAE", "GZMK", "GNLY", "NKG7", "GZMA", "SELPLG", "PTGER2","KLRB1", "GADD45B"), 
         combine=TRUE, fill.by="ident", split.by = "Treatment", split.plot = TRUE)+
   scale_fill_manual(values= c(Untreated="purple", PD1="orange"))
-ggsave(paste0(figure_dir, "Vln_GOI_byTreatment_CD4.png"), width=7, height=8)
+ggsave(paste0(figure_dir, "Vln_GOI_byTreatment_CD8.png"), width=7, height=8)
 ```
 
 ## Score for cytoxic/dysfunctional genesets, plot by treatment

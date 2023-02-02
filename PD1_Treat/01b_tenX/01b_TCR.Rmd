@@ -99,14 +99,16 @@ NOTE: vdj to be run on BT2080, will incorporate when finished (+ hopefully after
 seurat_obj<- readRDS("analysis/preprocessing/immune_seurat.Rds")
 
 ## TCR
-samples<- c("BT2062") ## NOTE-if/when bt2080 is added here, need to add sample id to clonotype to distinguish b/w samples
+samples<- c("BT2062", "BT2080_new") 
 tcr_list<- lapply(samples, function(x){
   tcr<-read.csv(paste0("data/",x,"/multi/per_sample_outs/", x, "/vdj_t/filtered_contig_annotations.csv"))
   tcr$sample<- x
   tcr$barcode<- paste0(x, "_", gsub("-","_",  tcr$barcode))
+  tcr$raw_clonotype_id<- paste0(tcr$sample, "_", tcr$raw_clonotype_id)
   return(tcr)
 })
 tcr<- do.call("rbind", tcr_list)
+tcr$sample<- gsub("_new", "", tcr$sample)
 
 
 ## Colors 

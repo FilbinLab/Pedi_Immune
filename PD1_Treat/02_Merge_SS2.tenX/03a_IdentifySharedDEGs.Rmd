@@ -54,8 +54,8 @@ myeloid_colors<- myeloid_colors$rank6
 immune_colors<- c(tcell_colors, myeloid_colors)
 
 colors_treatment<- c(PD1="orange", Untreated="purple")
-colors_samples<-c( BT1857="skyblue", BT2062="gold", BT2080="salmon",
-                   BT1478="purple", BT1745="blue", BT1857="cyan",
+colors_samples<-c( BT1857_TenX="skyblue", BT2062="gold", BT2080="salmon",
+                   BT1478="purple", BT1745="blue", BT1857_SS2="cyan",
                     BT1910="orange", BT1935="khaki")
 colors_sequencing<- c(SS2="magenta", TenX="green")
 
@@ -66,7 +66,7 @@ colors_sequencing<- c(SS2="magenta", TenX="green")
 ## Venn diagram of overlaps
 Note here that it doesn't take into account logFC direction
 ```{r}
-pvalue_thresh<- .9
+pvalue_thresh<- .1
 
 ss2_de_filtered<- lapply(ss2_de, function(x){x[x$p_val_adj <=pvalue_thresh,]})
 tenx_de_filtered<- lapply(tenx_de, function(x){x[x$p_val_adj <=pvalue_thresh,]})
@@ -92,7 +92,7 @@ ggsave(paste0(figure_dir, "Venn_DEGoverlap_padjThresh", pvalue_thresh, ".png"), 
 
 ## Get shared DEGs
 ```{r}
-pvalue_thresh<- .9
+pvalue_thresh<- .1
 
 ss2_de_filtered<- lapply(ss2_de, function(x){x[x$p_val_adj <=pvalue_thresh,]})
 tenx_de_filtered<- lapply(tenx_de, function(x){x[x$p_val_adj <=pvalue_thresh,]})
@@ -124,7 +124,7 @@ saveRDS(shared_degs, file=paste0(analysis_dir, "shared_degs_tenx.ss2_pvalueThres
 
 ## Plot logFC in ss2 vs tenx for each shared gene
 ```{r}
-pvalue_thresh<- 0.9
+pvalue_thresh<- 0.1
 shared_degs<- readRDS(paste0(analysis_dir, "shared_degs_tenx.ss2_pvalueThresh", pvalue_thresh, ".Rds"))
 
 all_plots<-lapply(names(shared_degs), function(celltype){
@@ -162,7 +162,7 @@ pvalue_thresh<- 0.1
 shared_degs<- readRDS(paste0(analysis_dir, "shared_degs_tenx.ss2_pvalueThresh", pvalue_thresh, ".Rds"))
 shared_degs<- lapply(shared_degs, function(x){x[x$sameLogFCDirection=="Same",]})
 
-samples<- c("BT1478" , "BT1745","BT1857.SS2","BT1857.TenX","BT1910" ,"BT1935", "BT2062","BT2080")
+samples<- c("BT1478" , "BT1745","BT1857.SS2","BT1857.TenX","BT1910" ,"BT1935", "BT2062","BT2080.SS2", "BT2080.TenX")
 
 all_plots<- lapply(names(seurat_list), function(x){
   tmp<- seurat_list[[x]]
@@ -198,7 +198,6 @@ all_plots<- lapply(names(seurat_list), function(x){
   cm_list<- NormCenter(pb)
   center_bySample<- cm_list$center_data
   
-  
   ## Plot
   myHeatmap(center_bySample, GOI=unique(markers_use$gene), min.value = -3, max.value = 3, 
                 orderFactors =  gsub("\\.", "\n",gsub("_", "\n", unique(markers_use$program))),
@@ -207,6 +206,6 @@ all_plots<- lapply(names(seurat_list), function(x){
     ggtitle(x)
 })
 cowplot::plot_grid(plotlist=all_plots, ncol=3)
-ggsave(paste0(figure_dir, "Heatmap_SharedDEGs_pvalueThresh",pvalue_thresh, ".png"), width=25, height=5)
+ggsave(paste0(figure_dir, "Heatmap_SharedDEGs_pvalueThresh",pvalue_thresh, ".pdf"),device="pdf", width=25, height=5)
 ```
 

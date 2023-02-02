@@ -31,27 +31,44 @@ source(nmf_helper)
 ## Read in data:
 ```{r}
 ## Newest sample (BT1910new) has different number of genes- different reference? others aligned by Olivia/Orr, newest by me
-cm_new<- read.csv("data/BT1910new_cm_tpm.csv", row.names = "gene_id")
-cm_old<- read.csv("data/BT1910_cm_tpm.csv", row.names="gene_id")
-cm_new<- cm_new[rownames(cm_new) %in% rownames(cm_old),]
-new_addGenes<- rownames(cm_old)[!rownames(cm_old) %in% rownames(cm_new)]
-cm_new_addGenes<- as.data.frame(matrix(0, nrow=length(new_addGenes), ncol(cm_new)))
-colnames(cm_new_addGenes)<- colnames(cm_new); rownames(cm_new_addGenes)<- new_addGenes
-cm_new<- rbind(cm_new, cm_new_addGenes)
-cm_new<- cm_new[rownames(cm_old),]
-cm_new<- as.data.frame(apply(cm_new, 2, function(x){x/sum(x) * 1e06}))
-colnames(cm_new)<- gsub("BT1910", "BT1910new", colnames(cm_new))
+new_samples<- c("BT1910new", "BT2080")
+new_cm<- lapply(new_samples, function(x){
+  cm_tmp<-read.csv(paste0("data/", x, "_cm_tpm.csv"))
+  rownames(cm_tmp)<- cm_tmp[,1]
+  cm_tmp<-cm_tmp[,2:ncol(cm_tmp)]
+  return(cm_tmp)
+  })
+
+  ## Load in older cm
+  cm_old<- read.csv("data/BT1910_cm_tpm.csv", row.names="gene_id")
+  
+  ## Get genes not found in new
+  new_addGenes<- rownames(cm_old)[!rownames(cm_old) %in% rownames(new_cm[[1]])]
+  
+  ## Subset to genes found in new and recalculate tpm
+  new_cm<- lapply(new_cm, function(x){
+    cm_tmp<-x[rownames(x) %in% rownames(cm_old),]
+    cm_new_addGenes<- as.data.frame(matrix(0, nrow=length(new_addGenes), ncol(cm_tmp)))
+    colnames(cm_new_addGenes)<- colnames(cm_tmp); rownames(cm_new_addGenes)<- new_addGenes
+    cm_tmp<- rbind(cm_tmp, cm_new_addGenes)
+    cm_tmp<- cm_tmp[rownames(cm_old),]
+    cm_tmp<- as.data.frame(apply(cm_tmp, 2, function(x){x/sum(x) * 1e06}))
+    return(cm_tmp)
+    })
+  new_cm<- do.call(cbind, new_cm)
 
 ## read in count matrices
 cm_files<- list.files("data/", pattern="tpm.csv")
-cm_files<- cm_files[!grepl("new", cm_files)]
-cm<-cm_new
+cm_files<- cm_files[!grepl(paste(new_samples, collapse = "|"), cm_files)]
+cm<-new_cm
 for(i in cm_files[1:length(cm_files)]){
   print(i)
-  cm_tmp<- read.csv(paste0("data/", i), row.names = "gene_id")
+  cm_tmp<- read.csv(paste0("data/", i))
+  rownames(cm_tmp)<- cm_tmp[,1]
+  cm_tmp<-cm_tmp[,2:ncol(cm_tmp)]
   cm<- cbind(cm, cm_tmp)
 }
-colnames(cm)<- gsub("\\.", "_", colnames(cm))
+colnames(cm)<- gsub("\\.", "_", gsub("BT2080Tcell", "BT2080", colnames(cm)))
 
 
 ## Cycling/HK markers
@@ -59,6 +76,8 @@ marker_dir<- paste0(base_dir,script_dir, "../", "Marker_genes/")
 cycling_genes<- read.table(paste0(marker_dir,"regev_lab_cell_cycle_genes.txt"))
 hkgenes <- read.table(paste0(marker_dir, "tirosh_house_keeping.txt"), skip = 2)
 hkgenes <- as.vector(hkgenes$V1)
+
+saveRDS(cm, file=paste0(analysis_dir, "cm.Rds"))
 ```
 
 ## Create simple metadata
@@ -66,12 +85,16 @@ hkgenes <- as.vector(hkgenes$V1)
 ## Here, distinguish "sample" (2 BT1910 samples) from "patient" (1 BT1910 patient). Will remove this distinction after QC
 metadata<- data.frame(cells=colnames(cm))
 metadata$sample<- sapply(metadata$cells, function(x){gsub("CD3", "", gsub("CD45", "", unlist(strsplit(x, split = "_"))))[1]})
-metadata$patient<- ifelse(grepl("BT1910", metadata$sample), "BT1910", "BT1935")
+
+saveRDS(metadata, file=paste0(analysis_dir, "meta.Rds"))
 ```
 
 
 ## Create seurat object for initial QC
 ```{r}
+cm<- readRDS(paste0(analysis_dir, "cm.Rds"))
+metadata<- readRDS(paste0(analysis_dir, "meta.Rds"))
+
 seurat_obj<- RunFullSeurat(cm=cm,RunHarmony = FALSE, samples=metadata$sample)
 
 saveRDS(seurat_obj, file=paste0(analysis_dir, "seurat_obj_raw.Rds"))
@@ -107,7 +130,7 @@ for (i in sample) {
   # Mitochondrial genes can be identified in USCS Table Browser using chrM search.
   seurat_obj_split[[i]][["percent_mito"]] <- PercentageFeatureSet(seurat_obj_split[[i]], pattern = "^MT-")
   
-  print (paste0(sum(seurat_obj_split[[i]][["percent_mito"]] > .1), " of ", ncol(seurat_obj_split[[i]]),
+  print (paste0(sum(seurat_obj_split[[i]][["percent_mito"]] > 10), " of ", ncol(seurat_obj_split[[i]]),
                 " cells have greater than 10% mitochondrial gene expression"))
 }
 
@@ -202,10 +225,6 @@ seurat_obj<- RenameCells(seurat_obj,
                                                  gsub("CD3", "CD3_P1", 
                                                       gsub("CD45", "CD45_P1", colnames(seurat_obj)))),
                                             colnames(seurat_obj)))
-
-## Change sample id to patient id- merging BT1910 old/new
-## Only kept separate to 1) visualize QC stats 2) rename cells to make sure tracer info matches up
-seurat_obj$sample<- ifelse(grepl("BT1910", seurat_obj$sample), "BT1910", seurat_obj$sample)
 
 ## Rerun clustering- post filtering, with harmony (with BT1910 combined across runs)
 seurat_meta<- seurat_obj@meta.data

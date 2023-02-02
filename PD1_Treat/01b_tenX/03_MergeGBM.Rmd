@@ -34,18 +34,19 @@ if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
 
 ## Load in seurat objects
 ```{r}
-## untreated (need to run these lines from terminal?)
-## note- going to rerun bt1857 processing with other 2 (non-gbm) 10x untreated samples. so this will change slightly and will need to be rerun
-ut_myeloid<- readRDS(paste0(full_dir, "tenX/Immune/BT1857/analysis/project_broad.detailed_annot/myeloid_tenx_noDC.B_seurat.Rds"))
-ut_cd4<- readRDS(paste0(full_dir, "tenX/Immune/BT1857/analysis/project_broad.detailed_annot/cd4_tenx_seurat.Rds"))
-ut_cd8<- readRDS(paste0(full_dir, "tenX/Immune/BT1857/analysis/project_broad.detailed_annot/cd8_tenx_seurat.Rds"))
+## untreated 
+ut_myeloid<- readRDS(paste0(full_dir, "tenX/Immune/analysis/manual_broad_annot/myeloid_seurat_removeAC.byNMF.Rds"))
+ut_cd4<- readRDS(paste0(full_dir, "tenX/Immune/analysis/identifyCD4.CD8_byNMF/rank9/cd4_seurat.Rds"))
+ut_cd8<- readRDS(paste0(full_dir, "tenX/Immune/analysis/identifyCD4.CD8_byNMF/rank9/cd8_seurat.Rds"))
 
-  ## fix ut seurat objects- should be able to delete once untreated 10x analysis is rerun
-  ut_myeloid$sample<- "BT1857"; ut_cd4$sample<- "BT1857"; ut_cd8$sample<- "BT1857"
+## subset untreated to just BT1857 (GBM)
+ut_myeloid<- subset(ut_myeloid, sample=="BT1857")
+ut_cd4<- subset(ut_cd4, sample=="BT1857")
+ut_cd8<- subset(ut_cd8, sample=="BT1857")
 
 
 ##  treated
-pd1_myeloid<- readRDS("analysis/project_broad.detailed_annot/myeloid_noDC.B_seurat.Rds")
+pd1_myeloid<- readRDS("analysis/project_broad.detailed_annot/myeloid_seurat.Rds") ## no bcells/dc
 pd1_cd8<- readRDS("analysis/project_broad.detailed_annot/cd8_seurat.Rds")
 pd1_cd4<- readRDS("analysis/project_broad.detailed_annot/cd4_seurat.Rds")
 
@@ -65,8 +66,7 @@ pd1_myeloid$Treatment<- "PD1"; pd1_cd8$Treatment<- "PD1"; pd1_cd4$Treatment<- "P
 ## Add annotation column (named same way for merging)
 pd1_cd4$detailed_annot<- pd1_cd4$detailed_annot_projected_manual
 pd1_cd8$detailed_annot<- pd1_cd8$detailed_annot_projected_manual
-pd1_myeloid$detailed_annot<- pd1_myeloid$detailed_annot_projected_manual
-
+pd1_myeloid$detailed_annot<- "Myeloid" ## no dc/bcells identified
 
 
 ## Merge and rerun clustering- with harmony integration
@@ -96,7 +96,7 @@ all_plots<- lapply(names(all_seurat), function(x){
   DimPlot(seurat_tmp, group.by = "Treatment")+scale_color_manual(values=colors_treatment)+ggtitle(x)
 })
 cowplot::plot_grid(plotlist=all_plots, ncol=3)
-ggsave(paste0(figure_dir, "UMAP_Harmony_Treatment.png"), width=18, height=6)
+ggsave(paste0(figure_dir, "UMAP_Harmony_Treatment.png"), width=20, height=6)
 
 ## bar plot by treatment
 all_plots<- lapply(names(all_seurat), function(x){
@@ -106,6 +106,7 @@ all_plots<- lapply(names(all_seurat), function(x){
 })
 cowplot::plot_grid(plotlist=all_plots, ncol=3)
 ggsave(paste0(figure_dir, "NumberCells_perTreatment.png"), width=7, height=3)
+
 
 ## Plot by sample
 all_plots<- lapply(names(all_seurat), function(x){

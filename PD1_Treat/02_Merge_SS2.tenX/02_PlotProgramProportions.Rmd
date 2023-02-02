@@ -49,9 +49,9 @@ myeloid_colors<- myeloid_colors$rank6
 immune_colors<- c(tcell_colors, myeloid_colors)
 
 colors_treatment<- c(PD1="orange", Untreated="purple")
-colors_samples<-c( BT1857="skyblue", BT2062="gold", BT2080="salmon",
-                   BT1478="purple", BT1745="blue", BT1857="cyan",
-                    BT1910="orange", BT1935="khaki")
+colors_samples<-c( BT1857_SS2="skyblue", BT2062="gold", BT2080_SS2="salmon",
+                   BT1478="purple", BT1745="blue", BT1857_TenX="cyan",
+                    BT1910="orange", BT1935="khaki", BT2080_TenX="salmon3")
 colors_sequencing<- c(SS2="magenta", TenX="green")
 
 ## Full cohort marker genes
@@ -92,7 +92,7 @@ all_plots<- lapply(names(seurat_list), function(x){
                           wrapping_variable = "Treatment", colors=immune_colors)+ggtitle(x)
 })
 cowplot::plot_grid(plotlist=all_plots, ncol=3)
-ggsave(paste0(figure_dir, "tenx_Barchart_PredictedProgram.png"), width=18, height=5)
+ggsave(paste0(figure_dir, "tenx_Barchart_PredictedProgram.pdf"), device="pdf", width=18, height=4)
 
 ```
 
@@ -105,7 +105,7 @@ marker_list<- list(cd4=top_tcell_markers[!top_tcell_markers$cluster %in% c("Pred
 
 ## BT1857_TenX/BT1857_SS2: replace _ with . (messes up facet wrapping in heatmap)
 seurat_list<- lapply(seurat_list, function(x){
-  x$sample<- gsub("BT1857_", "BT1857.", x$sample)
+  x$sample<- gsub("BT1857_", "BT1857.", gsub("BT2080_", "BT2080.", x$sample))
   return(x)
 })
 
@@ -146,5 +146,69 @@ all_plots<- lapply(names(seurat_list), function(x){
     ggtitle(x)
 })
 cowplot::plot_grid(plotlist=all_plots, ncol=3)
-ggsave(paste0(figure_dir, "Heatmap_ExpectedMarkerGenes_All.png"), width=35, height=9)
+ggsave(paste0(figure_dir, "Heatmap_ExpectedMarkerGenes_All.png"), width=40, height=9)
+```
+
+## Breakdowns for scCoda-
+```{r}
+cohort<- "pedOnly_nomuv63"
+sccoda_dir<- paste0("../../ImmuneCellAnalysis/scCoda/data/",cohort, "/")
+
+
+## CD8
+meta<- seurat_list$cd8@meta.data
+
+  ## Program by Age
+  bd<- as.data.frame.matrix(table(meta$sample, meta$Program_projected))
+  
+  ## In a sample, can't have more than 50% of cell types be 0
+  #nPrograms<- ncol(bd)
+  #bd$nPrograms<- apply(bd, 1, function(x){sum(x>1)})
+  #bd$PF<- bd$nPrograms>(nPrograms/2)
+  #bd<- bd[bd$PF,]; bd$PF<-NULL; bd$nPrograms<-NULL
+  
+  ## Add on age group to compare proportions
+  bd$Subtype<- plyr::mapvalues(rownames(bd), meta$sample, meta$Treatment, warn_missing = FALSE)
+  bd$Sample<- rownames(bd)
+  
+  write.csv(bd, paste0(sccoda_dir,"PD1.Untreated_CD8_Programs.csv"), row.names = FALSE)
+  
+## CD4
+meta<- seurat_list$cd4@meta.data
+
+  ## Program by Age
+  bd<- as.data.frame.matrix(table(meta$sample, meta$Program_projected))
+  
+  ## In a sample, can't have more than 50% of cell types be 0
+  #nPrograms<- ncol(bd)
+  #bd$nPrograms<- apply(bd, 1, function(x){sum(x>1)})
+  #bd$PF<- bd$nPrograms>(nPrograms/2)
+  #bd<- bd[bd$PF,]; bd$PF<-NULL; bd$nPrograms<-NULL
+  
+  ## Add on age group to compare proportions
+  bd$Subtype<- plyr::mapvalues(rownames(bd), meta$sample, meta$Treatment, warn_missing = FALSE)
+  bd$Sample<- rownames(bd)
+  bd$Subtype<- gsub("-", "_", bd$Subtype)
+  
+  write.csv(bd, paste0(sccoda_dir,"PD1.Untreated_CD4_Programs.csv"), row.names = FALSE)
+  
+## Myeloid
+meta<- seurat_list$myeloid@meta.data
+
+  ## Program by Age
+  bd<- as.data.frame.matrix(table(meta$sample, meta$Program_projected))
+  
+  ## In a sample, can't have more than 50% of cell types be 0
+  nPrograms<- ncol(bd)
+  bd$nPrograms<- apply(bd, 1, function(x){sum(x>1)})
+  bd$PF<- bd$nPrograms>(nPrograms/2)
+  bd<- bd[bd$PF,]; bd$PF<-NULL; bd$nPrograms<-NULL
+  
+  ## Add on age group to compare proportions
+  bd$Subtype<- plyr::mapvalues(rownames(bd), meta$sample, meta$Treatment, warn_missing = FALSE)
+  bd$Sample<- rownames(bd)
+  bd$Subtype<- gsub("-", "_", bd$Subtype)
+  
+  write.csv(bd, paste0(sccoda_dir,"PD1.Untreated_Myeloid_Programs.csv"), row.names = FALSE)
+
 ```

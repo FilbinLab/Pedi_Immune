@@ -55,7 +55,7 @@ pd1_cd4<- readRDS("analysis/project_broad.detailed_annot/cd4_seurat.Rds")
 ## Set colors
 colors_treatment<- c(PD1="orange", Untreated="purple")
 colors_samples<-c(BT1478="purple", BT1745="blue", BT1857="cyan",E167CD35resub="skyblue",
-                  BT1910="orange", BT1935="khaki", GEX="gold")
+                  BT1910="orange", BT1935="khaki", GEX="gold", BT2080="salmon")
 ```
 
 ## Subset full cohort to just gbm
@@ -74,12 +74,12 @@ ut_myeloid$Treatment<- "Untreated"; ut_cd8$Treatment<- "Untreated"; ut_cd4$Treat
 pd1_myeloid$Treatment<- "PD1"; pd1_cd8$Treatment<- "PD1"; pd1_cd4$Treatment<- "PD1"
 
 ## Add annotation column (named same way for merging)
-pd1_myeloid$Final_Annot<- pd1_myeloid$Program_projected
-pd1_cd8$Final_Annot<- pd1_cd8$Program_projected
-pd1_cd4$Final_Annot<- pd1_cd4$Program_projected
+#pd1_myeloid$Final_Annot<- pd1_myeloid$Program_projected
+#pd1_cd8$Final_Annot<- pd1_cd8$Program_projected
+#pd1_cd4$Final_Annot<- pd1_cd4$Program_projected
 
-pd1_cd4$detailed_annot<- pd1_cd4$detailed_annot_projected
-pd1_cd8$detailed_annot<- pd1_cd8$detailed_annot_projected
+pd1_cd4$detailed_annot<- pd1_cd4$detailed_annot_projected_manual
+pd1_cd8$detailed_annot<- pd1_cd8$detailed_annot_projected_manual
 
 
 ## Merge and rerun clustering- with harmony integration
@@ -102,7 +102,7 @@ files<- list.files(analysis_dir)
 all_seurat<- lapply(files, function(f){
    readRDS(paste0(analysis_dir, f))
 })
-names(all_seurat)<- gsub("_Harmony_seurat.Rds", "", files)
+names(all_seurat)<- gsub("_seurat.Rds", "",gsub("ss2_", "", files))
 
 
 ## Plot by treatment

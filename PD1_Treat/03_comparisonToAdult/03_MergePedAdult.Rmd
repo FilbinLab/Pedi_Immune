@@ -249,6 +249,6 @@ all_plots<- lapply(names(foldchange_program_treated), function(celltype){
     stat_compare_means(method="t.test", comparisons = list(c("Adult", "Ped")))
 })
 cowplot::plot_grid(plotlist = all_plots, ncol=3)
-ggsave(paste0(figure_dir, "LogFoldChange_Treated.vs.Untreated_bySample_Boxplot.png"), width=20, height=4)
+ggsave(paste0(figure_dir, "LogFoldChange_Treated.vs.Untreated_bySample_Boxplot.pdf"),device="pdf", width=20, height=4)
 ```
 

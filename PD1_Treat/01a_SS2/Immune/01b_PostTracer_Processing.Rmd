@@ -176,7 +176,7 @@ for (exp in as.character(experiment)) {
 ## Plot clonotype/cell reconstruction results
 ```{r}
 # Set order of experiments when plotting
-df.plot$exp <- factor(df.plot$exp, levels = sampleid)
+df.plot$exp <- factor(df.plot$exp, levels = experiment)
 
 # Gather df.plot dataframe into stat : count mapping key-value pairs for making bar plots. 
 labels.plot <- c("number of cells", "productive A or B chain", "productive A and B chain", "T cells with recurrent TCRs", "clonotypes")

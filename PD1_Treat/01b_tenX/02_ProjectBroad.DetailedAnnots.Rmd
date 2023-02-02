@@ -94,8 +94,39 @@ myeloid_pd1<- AddMetaData(myeloid_pd1, myeloid_pd1_meta[,!colnames(myeloid_pd1_m
 ## Tcell
 tcell_pd1<- subset(pd1_seurat, broad_annot_projected=="Tcell")
 tcell_pd1_meta<- tcell_pd1@meta.data
-tcell_pd1<- RunFullSeurat(tcell_pd1@assays$RNA@counts, samples= tcell_pd1$sample, RunHarmony = FALSE)
+tcell_pd1<- RunFullSeurat(tcell_pd1@assays$RNA@counts, samples= tcell_pd1$sample, RunHarmony = TRUE)
 tcell_pd1<- AddMetaData(tcell_pd1, tcell_pd1_meta[,!colnames(tcell_pd1_meta) %in% colnames(tcell_pd1@meta.data)])
+
+## Check for expression of expected markers
+  ## Myeloid: CD3+ macrophages present
+  FeaturePlot(myeloid_pd1, features=c("CSF1R", "CD3G")) 
+  ggsave(paste0(figure_dir, "Myeloid_broad_markers_preReannotation.png"), width=10, height=5)
+  
+  ## Tcell: CD3+ macrophages also present- remove and add into myeloid
+  FeaturePlot(tcell_pd1, features=c("CSF1R", "CD3G")) 
+  ggsave(paste0(figure_dir, "Tcell_broad_markers_preReannotation.png"), width=10, height=5)
+  
+  ## Remove CD3+ macrophages from T cell and add to myeloid
+  tcell_cd3.myeloid<- subset(tcell_pd1, seurat_clusters==10)
+  myeloid_pd1<- merge(tcell_cd3.myeloid, myeloid_pd1)
+  tcell_pd1<- subset(tcell_pd1, seurat_clusters != 10)
+  
+  ## Rerun clustering
+  myeloid_pd1_meta<- myeloid_pd1@meta.data
+  myeloid_pd1<- RunFullSeurat(myeloid_pd1@assays$RNA@counts, samples= myeloid_pd1$sample, RunHarmony = TRUE)
+  myeloid_pd1<- AddMetaData(myeloid_pd1, myeloid_pd1_meta[,!colnames(myeloid_pd1_meta) %in% colnames(myeloid_pd1@meta.data)])
+  myeloid_pd1$broad_annot_projected_manual<- "Myeloid"
+  
+  tcell_pd1_meta<- tcell_pd1@meta.data
+  tcell_pd1<- RunFullSeurat(tcell_pd1@assays$RNA@counts, samples= tcell_pd1$sample, RunHarmony = TRUE)
+  tcell_pd1<- AddMetaData(tcell_pd1, tcell_pd1_meta[,!colnames(tcell_pd1_meta) %in% colnames(tcell_pd1@meta.data)])
+  
+  ## Confirm expression of expected markers
+  FeaturePlot(myeloid_pd1, features=c("CSF1R", "CD3G")) 
+  ggsave(paste0(figure_dir, "Myeloid_broad_markers.png"), width=10, height=5)
+  
+  FeaturePlot(tcell_pd1, features=c("CSF1R", "CD3G")) 
+  ggsave(paste0(figure_dir, "Tcell_broad_markers.png"), width=10, height=5)
 
 saveRDS(myeloid_pd1, file=paste0(analysis_dir, "myeloid_seurat.Rds"))
 saveRDS(tcell_pd1, file=paste0(analysis_dir, "tcell_seurat.Rds"))
@@ -116,53 +147,9 @@ DimPlot(myeloid_pd1, group.by="detailed_annot_projected", pt.size = 1, label=TRU
   scale_color_manual(values=immune_colors[names(immune_colors) %in% myeloid_pd1$detailed_annot_projected])
 ggsave(paste0(figure_dir, "UMAP_myeloid_detailedAnnot_projectedFromFull.png"), width=6, height=6)
 
-## Very few Bcells and no dendritic cells predicted based on projection. Seems to be DC based on IL3RA expression/outlier cluster?
+## Very few Bcells and no dendritic cells predicted based on projection. Seem to not be B cells?
 FeaturePlot(myeloid_pd1, features=c("CD207", "CD19", "IL3RA", "CLEC4C", "CSF1R", "CD3G"))
 ggsave(paste0(figure_dir, "UMAP_Myeloid_detailedMarkers.png"), width=6, height=8)
-
-  ## subcluster potential bcells/dc
-  c12<- subset(myeloid_pd1, seurat_clusters==12)
-  c12<- RunFullSeurat(c12@assays$RNA@counts, RunHarmony = TRUE, samples=c12$sample, dims=89, pca_dims = 89)
-  c12<- FindClusters(c12, resolution = 1)
-  FeaturePlot(c12, features=c("CSF1R", "IL3RA","CD207", "CD19")) + DimPlot(c12, label=TRUE)
-  c12$detailed_annot<- ifelse(c12$seurat_clusters == 0, "Myeloid", ifelse(c12$seurat_clusters==1, "DC", "BCell"))
-  FeaturePlot(c12, features=c("CSF1R", "IL3RA","CD207", "CD19")) + DimPlot(c12,group.by = "detailed_annot", label=TRUE)
-  ggsave(paste0(figure_dir, "Myeloid_recluster_Bcell.DC.png"), width=6, height=6)
-  
-  ## Add back to full seurat
-  myeloid_pd1$detailed_annot_projected_manual<- ifelse(myeloid_pd1$seurat_clusters == 12,
-                                                       as.character(plyr::mapvalues(colnames(myeloid_pd1),
-                                                                                    colnames(c12),
-                                                                                    c12$detailed_annot,
-                                                                                    warn_missing = FALSE)),
-                                                       myeloid_pd1$detailed_annot_projected)
-
-  
-
-## Plot updated annotations
-DimPlot(myeloid_pd1, group.by="detailed_annot_projected_manual", pt.size = 1, label=TRUE, label.size = 6)+ NoLegend()+
-  scale_color_manual(values=immune_colors[names(immune_colors) %in% myeloid_pd1$detailed_annot_projected_manual])
-ggsave(paste0(figure_dir, "UMAP_myeloid_detailedAnnot_projectedFromFull.png"), width=6, height=6)
-  
-## Confirm high expression of myeloid markers by predicted detailed annotation
-cowplot::plot_grid(plotlist=lapply(c( "CSF1R",  "CD207", "MS4A1", "IL3RA"), function(x){
-  VlnPlot(myeloid_pd1, features=x, group.by = "detailed_annot_projected_manual")+ NoLegend()+
-    scale_fill_manual(values=immune_colors[names(immune_colors) %in% myeloid_pd1$detailed_annot_projected_manual])+
-    xlab("")
-}), ncol=4)
-ggsave(paste0(figure_dir, "Vln_myeloid_detailedMarkers_projectedFromFull_manual.png"), width=9, height=4)
-
-
-## Save with annotations
-saveRDS(myeloid_pd1, file=paste0(analysis_dir, "myeloid_seurat.Rds"))
-
-## Remove DC/BC, rerun clustering, and save
-myeloid_pd1_noDC.B<- subset(myeloid_pd1, detailed_annot_projected_manual=="Myeloid")
-myeloid_pd1_noDC.B_meta<- myeloid_pd1_noDC.B@meta.data
-myeloid_pd1_noDC.B<- RunFullSeurat(myeloid_pd1_noDC.B@assays$RNA@counts, RunHarmony = TRUE, samples=myeloid_pd1_noDC.B$sample)
-myeloid_pd1_noDC.B<- AddMetaData(myeloid_pd1_noDC.B, myeloid_pd1_noDC.B_meta[,!colnames(myeloid_pd1_noDC.B_meta) %in% 
-                                                                               colnames(myeloid_pd1_noDC.B@meta.data)])
-saveRDS(myeloid_pd1_noDC.B, file=paste0(analysis_dir, "myeloid_noDC.B_seurat.Rds"))
 ```
 
 
@@ -194,17 +181,17 @@ FeaturePlot(tcell_pd1, features=c("CD3G", "CD4", "CD8A"), cols = c("grey", "red"
 ggsave(paste0(figure_dir, "UMAP_Tcell_detailedMarkers.png"), width=12, height=3)
 
 ## Save with annotations
-saveRDS(tcell_pd1, file=paste0(analysis_dir, "tcell_pd1_seurat.Rds"))
+saveRDS(tcell_pd1, file=paste0(analysis_dir, "tcell_seurat.Rds"))
 
 ## Split into cd4/cd8, recluster
 cd4_pd1<- subset(tcell_pd1, detailed_annot_projected=="CD4")
 cd4_pd1_meta<- cd4_pd1@meta.data
-cd4_pd1<- RunFullSeurat(cd4_pd1@assays$RNA@counts, samples=cd4_pd1$sample, RunHarmony = FALSE)
+cd4_pd1<- RunFullSeurat(cd4_pd1@assays$RNA@counts, samples=cd4_pd1$sample, RunHarmony = TRUE)
 cd4_pd1<- AddMetaData(cd4_pd1, cd4_pd1_meta[,!colnames(cd4_pd1_meta) %in% colnames(cd4_pd1@meta.data)])
 
 cd8_pd1<- subset(tcell_pd1, detailed_annot_projected=="CD8")
 cd8_pd1_meta<- cd8_pd1@meta.data
-cd8_pd1<- RunFullSeurat(cd8_pd1@assays$RNA@counts, samples=cd8_pd1$sample, RunHarmony = FALSE)
+cd8_pd1<- RunFullSeurat(cd8_pd1@assays$RNA@counts, samples=cd8_pd1$sample, RunHarmony = TRUE)
 cd8_pd1<- AddMetaData(cd8_pd1, cd8_pd1_meta[,!colnames(cd8_pd1_meta) %in% colnames(cd8_pd1@meta.data)])
 
 ## Both CD4 and CD8 show misannotated cells- fix annotation and recluster
@@ -213,12 +200,28 @@ p2<-FeaturePlot(cd4_pd1, features=c("CD4", "CD8A"), cols=c("grey", "red"))
 cowplot::plot_grid(plotlist=list(p1, p2), ncol=1)
 ggsave(paste0(figure_dir,"UMAP_CD4.CD8_detailedMarkers_preReannotation.png"), width=7, height=6)
 
-  ## Fix CD4: 1 clear CD8 cluster + 1 with CD4/CD8 (kept as CD4) + 1 cycling cluster annotated cell wise
+  ## Fix CD4: 2 clear CD8 cluster + 1 with CD4/CD8 to subcluster + 1 cycling cluster annotated cell wise
   DimPlot(cd4_pd1, label=TRUE) + VlnPlot(cd4_pd1, features=c("CD4", "CD8A"))
-  cd4_pd1$detailed_annot_projected_manual<- ifelse(cd4_pd1$seurat_clusters==3, "CD8", cd4_pd1$detailed_annot_projected) ## clear cluster
-  cd4_pd1$cd8_expr<- as.data.frame(cd4_pd1@assays$RNA@counts["CD8A",])
-  cd4_pd1$detailed_annot_projected_manual<- ifelse(cd4_pd1$seurat_clusters==6 & cd4_pd1$cd8_expr > 0, "CD8",
-                                                   cd4_pd1$detailed_annot_projected_manual)
+  
+    ## clear clusters
+    cd4_pd1$detailed_annot_projected_manual<- ifelse(cd4_pd1$seurat_clusters %in% c(4,6), "CD8", cd4_pd1$detailed_annot_projected) 
+    
+    ## subclustering
+    subcluster<- subset(cd4_pd1, seurat_clusters ==5)
+    subcluster<- RunFullSeurat(subcluster@assays$RNA@counts, RunHarmony = TRUE, samples=subcluster$sample,
+                               pca_dims = 95, dims = 95)
+    subcluster$detailed_annot_projected_manual<- gsub(1, "CD8", gsub(0, "CD4", subcluster$seurat_clusters))
+    cd4_pd1$detailed_annot_projected_manual<- ifelse(colnames(cd4_pd1) %in% colnames(subcluster),
+                                                     as.character(plyr::mapvalues(colnames(cd4_pd1),
+                                                                                  colnames(subcluster),
+                                                                                  subcluster$detailed_annot_projected_manual,
+                                                                                  warn_missing = FALSE)),
+                                                     cd4_pd1$detailed_annot_projected_manual)
+    
+    ## cycling annoated cell wise
+    cd4_pd1$cd8_expr<- as.data.frame(cd4_pd1@assays$RNA@counts["CD8A",])
+    cd4_pd1$detailed_annot_projected_manual<- ifelse(cd4_pd1$seurat_clusters==7 & cd4_pd1$cd8_expr > 0, "CD8",
+                                                     cd4_pd1$detailed_annot_projected_manual)
   
   DimPlot(cd4_pd1, label=TRUE) + 
     FeaturePlot(cd4_pd1, features=c("CD4", "CD8A"), cols=c("grey", "red"))+
@@ -229,10 +232,14 @@ ggsave(paste0(figure_dir,"UMAP_CD4.CD8_detailedMarkers_preReannotation.png"), wi
   
   ## Fix CD8: 1 clear CD4 cluster + 1 cycling cluster annotated cell wise
   DimPlot(cd8_pd1, label=TRUE) + VlnPlot(cd8_pd1, features=c("CD4", "CD8A"))
-  cd8_pd1$detailed_annot_projected_manual<- ifelse(cd8_pd1$seurat_clusters==1, "CD4", cd8_pd1$detailed_annot_projected)
-  cd8_pd1$cd4_expr<- as.data.frame(cd8_pd1@assays$RNA@counts["CD4",])
-  cd8_pd1$detailed_annot_projected_manual<- ifelse(cd8_pd1$seurat_clusters%in%c(6,7) & cd8_pd1$cd4_expr > 0, "CD4",
-                                                   cd8_pd1$detailed_annot_projected_manual)
+  
+    ## clear cluster
+    cd8_pd1$detailed_annot_projected_manual<- ifelse(cd8_pd1$seurat_clusters==1, "CD4", cd8_pd1$detailed_annot_projected)
+    
+    ## cell wise for cycling
+    cd8_pd1$cd4_expr<- as.data.frame(cd8_pd1@assays$RNA@counts["CD4",])
+    cd8_pd1$detailed_annot_projected_manual<- ifelse(cd8_pd1$seurat_clusters%in%c(8) & cd8_pd1$cd4_expr > 0, "CD4",
+                                                     cd8_pd1$detailed_annot_projected_manual)
   
   DimPlot(cd8_pd1, label=TRUE) + 
     FeaturePlot(cd8_pd1, features=c("CD4", "CD8A"), cols=c("grey", "red"))+
@@ -243,10 +250,10 @@ ggsave(paste0(figure_dir,"UMAP_CD4.CD8_detailedMarkers_preReannotation.png"), wi
   ## Add CD4/CD8 to correct object and recluster
   cd8_pd1_reAnnot<- my_mergeRerunClustering(subset(cd8_pd1, detailed_annot_projected_manual=="CD8"),
                                             subset(cd4_pd1, detailed_annot_projected_manual=="CD8"), 
-                                            Integration="None")
+                                            Integration="Harmony", integrateBy = "sample")
   cd4_pd1_reAnnot<- my_mergeRerunClustering(subset(cd8_pd1, detailed_annot_projected_manual=="CD4"),
                                             subset(cd4_pd1, detailed_annot_projected_manual=="CD4"), 
-                                            Integration="None")
+                                            Integration="Harmony", integrateBy = "sample")
   
   ## Confirm finalized annots
   p1<-FeaturePlot(cd8_pd1_reAnnot, features=c("CD4", "CD8A"), cols=c("grey", "red"))

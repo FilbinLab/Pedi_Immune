@@ -203,13 +203,17 @@ p2<-FeaturePlot(cd4_pd1, features=c("CD4", "CD8A"), cols=c("grey", "red"))
 cowplot::plot_grid(plotlist=list(p1, p2), ncol=1)
 ggsave(paste0(figure_dir,"UMAP_CD4.CD8_detailedMarkers_preReannotation.png"), width=7, height=6)
 
-  ## Fix CD4: 1 clear CD8 cluster + 1 with CD4/CD8 (kept as CD4) + 1 cycling cluster annotated cell wise
-  cd4_pd1<- FindClusters(cd4_pd1, resolution = 1.4)
+  ## Fix CD4: 1 clear CD8 cluster + 1 with CD4/CD8 (kept as CD4) + 1 cluster annotated cell-wise
+  cd4_pd1<- FindClusters(cd4_pd1, resolution = 1.8)
   DimPlot(cd4_pd1, label=TRUE) + VlnPlot(cd4_pd1, features=c("CD4", "CD8A"))
-  cd4_pd1$detailed_annot_projected_manual<- ifelse(cd4_pd1$seurat_clusters==0, "CD8", cd4_pd1$detailed_annot_projected) ## clear cluster
-  cd4_pd1$cd8_expr<- as.data.frame(cd4_pd1@assays$RNA@counts["CD8A",])
-  cd4_pd1$detailed_annot_projected_manual<- ifelse(cd4_pd1$seurat_clusters==6 & cd4_pd1$cd8_expr > 0, "CD8",
-                                                   cd4_pd1$detailed_annot_projected_manual)
+  
+    ## clear cluster
+    cd4_pd1$detailed_annot_projected_manual<- ifelse(cd4_pd1$seurat_clusters==7, "CD8", cd4_pd1$detailed_annot_projected) 
+    
+    ## cell wise
+    cd4_pd1$cd8_expr<- as.data.frame(cd4_pd1@assays$RNA@counts["CD8A",])
+    cd4_pd1$detailed_annot_projected_manual<- ifelse(cd4_pd1$seurat_clusters %in% c(3,6,4,0) & cd4_pd1$cd8_expr > 0, "CD8",
+                                                     cd4_pd1$detailed_annot_projected_manual)
   
   DimPlot(cd4_pd1, label=TRUE) + 
     FeaturePlot(cd4_pd1, features=c("CD4", "CD8A"), cols=c("grey", "red"))+
@@ -218,10 +222,16 @@ ggsave(paste0(figure_dir,"UMAP_CD4.CD8_detailedMarkers_preReannotation.png"), wi
   ggsave(paste0(figure_dir, "CD4_reannotateToCD8.png") ,width = 10, height=10)
   
   
-  ## Fix CD8: 1 clear CD4 cluster 
-  cd8_pd1<- FindClusters(cd8_pd1, resolution = 1.5)
+  ## Fix CD8: 1 clear CD4 cluster, 1 cycling annotated cell wise
   DimPlot(cd8_pd1, label=TRUE) + VlnPlot(cd8_pd1, features=c("CD4", "CD8A"))
-  cd8_pd1$detailed_annot_projected_manual<- ifelse(cd8_pd1$seurat_clusters==1, "CD4", cd8_pd1$detailed_annot_projected)
+  
+    ## clear cluster
+    cd8_pd1$detailed_annot_projected_manual<- ifelse(cd8_pd1$seurat_clusters==2, "CD4", cd8_pd1$detailed_annot_projected)
+    
+    ## cell wise
+    cd8_pd1$cd4_expr<- as.data.frame(cd8_pd1@assays$RNA@counts["CD4",])
+    cd8_pd1$detailed_annot_projected_manual<- ifelse(cd8_pd1$seurat_clusters==3 & cd8_pd1$cd4_expr > 0, "CD4",
+                                                     cd8_pd1$detailed_annot_projected_manual)
   
   DimPlot(cd8_pd1, label=TRUE) + 
     FeaturePlot(cd8_pd1, features=c("CD4", "CD8A"), cols=c("grey", "red"))+
@@ -232,16 +242,40 @@ ggsave(paste0(figure_dir,"UMAP_CD4.CD8_detailedMarkers_preReannotation.png"), wi
   ## Add CD4/CD8 to correct object and recluster
   cd8_pd1_reAnnot<- my_mergeRerunClustering(subset(cd8_pd1, detailed_annot_projected_manual=="CD8"),
                                             subset(cd4_pd1, detailed_annot_projected_manual=="CD8"), 
-                                            Integration="None")
+                                            Integration="Harmony", integrateBy = "sample")
   cd4_pd1_reAnnot<- my_mergeRerunClustering(subset(cd8_pd1, detailed_annot_projected_manual=="CD4"),
                                             subset(cd4_pd1, detailed_annot_projected_manual=="CD4"), 
-                                            Integration="None")
+                                            Integration="Harmony", integrateBy = "sample")
   
-  ## COnfirm finalized annots
+  ## Confirm finalized annots
+  p1<-FeaturePlot(cd8_pd1_reAnnot, features=c("CD4", "CD8A"), cols=c("grey", "red"))
+  p2<- FeaturePlot(cd4_pd1_reAnnot, features=c("CD4", "CD8A"), cols=c("grey", "red"))
+  cowplot::plot_grid(plotlist=list(p1, p2), ncol=1)
+  
+  ## Fix cd8 missannotated as cd4- don't cluster prior to reannotation, but do after
+  cd4_pd1<- cd4_pd1_reAnnot; cd8_pd1<- cd8_pd1_reAnnot
+  cd4_pd1<- FindClusters(cd4_pd1, resolution = 1.5)
+  cd4_pd1$cd8_expr<- as.data.frame(cd4_pd1@assays$RNA@counts["CD8A",])
+  cd4_pd1$detailed_annot_projected_manual<- ifelse(cd4_pd1$seurat_clusters %in% c(2) & cd4_pd1$cd8_expr > 0, "CD8",
+                                                     cd4_pd1$detailed_annot_projected_manual)
+ 
+  
+  ## Add CD4/CD8 to correct object and recluster
+  cd8_pd1_reAnnot<- my_mergeRerunClustering(subset(cd8_pd1, detailed_annot_projected_manual=="CD8"),
+                                            subset(cd4_pd1, detailed_annot_projected_manual=="CD8"), 
+                                            Integration="Harmony", integrateBy = "sample")
+  cd4_pd1_reAnnot<- subset(cd4_pd1, detailed_annot_projected_manual=="CD4")
+  cd4_pd1_reAnnot_meta<-cd4_pd1_reAnnot@meta.data
+  cd4_pd1_reAnnot<- RunFullSeurat(cd4_pd1_reAnnot@assays$RNA@counts, RunHarmony = TRUE, samples=cd4_pd1_reAnnot_meta$sample)
+  cd4_pd1_reAnnot<- AddMetaData(cd4_pd1_reAnnot, cd4_pd1_reAnnot_meta[,!colnames(cd4_pd1_reAnnot_meta) %in% colnames(cd4_pd1_reAnnot@meta.data)])
+  
+  ## Confirm finalized annots
   p1<-FeaturePlot(cd8_pd1_reAnnot, features=c("CD4", "CD8A"), cols=c("grey", "red"))
   p2<- FeaturePlot(cd4_pd1_reAnnot, features=c("CD4", "CD8A"), cols=c("grey", "red"))
   cowplot::plot_grid(plotlist=list(p1, p2), ncol=1)
   ggsave(paste0(figure_dir, "UMAP_Tcells_detailedMarkers_postReannotation.png"), width=6, height=6)
+  
+
   
   ## Add back to full tcell
   tcell_pd1$detailed_annot_projected_manual<- ifelse(colnames(tcell_pd1) %in% colnames(cd4_pd1_reAnnot), "CD4",

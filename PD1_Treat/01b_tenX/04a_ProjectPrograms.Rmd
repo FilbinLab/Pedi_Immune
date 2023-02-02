@@ -48,7 +48,7 @@ tenx_seurat<- lapply(tenx_seurat, function(x){x$Sequencing<- "tenx"; return(x)})
 
 
 
-## Full cohort seurat objects (tenx- for projection)
+## Full cohort seurat objects (ss2 for projection)
 full_myeloid_seurat<- readRDS(paste0(full_cohort_dir,
                                      "01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/",
                                      "pedOnly_nomuv63/",
@@ -65,18 +65,21 @@ full_cd8_seurat<- readRDS(paste0(full_cohort_dir,
 
 ## Colors 
 tcell_colors<- readRDS(paste0(full_cohort_dir, "/plot_colors/Tcell.programs_rank8sharedByunion_reAnnot.Rds"))
+tcell_colors<- c(tcell_colors, Activated_EM="red")
 myeloid_colors<- readRDS(paste0(full_cohort_dir, "/plot_colors/Myeloid_program_colors.Rds"))
 myeloid_colors<- myeloid_colors$rank6
+myeloid_colors<- c(myeloid_colors, CD3pos_Myeloid="green", Microglia="olivedrab4")
 immune_colors<- c(tcell_colors, myeloid_colors)
 colors_treatment<- c(PD1="orange", Untreated="purple")
 
-## Full cohort marker genes
+## untreated cohort marker genes
 tcell_markers<- readRDS(paste0(full_cohort_dir, 
                              "02a_Tcells/02_Ped.Adult/01_compare_NMF/analysis/newMarkers_deNovoPed.AdultTcell/", 
                              "new_markers_NMFrank8_bySeurat_sharedByunion_reAnnot.Rds"))
 myeloid_markers<- read.csv(paste0(full_cohort_dir,
                                "02b_Myeloid/01a_NMF/analysis/de.novoNMF/pedOnly_nomuv63/", 
                                "top_DE_genes_10Xannotated_NMF_rank6.csv"))
+
 
   ## Top markers per program
   top_tcell_markers<- tcell_markers %>% group_by(cluster) %>% top_n(n=5, wt=avg_log2FC) %>% as.data.frame()
@@ -85,22 +88,11 @@ myeloid_markers<- read.csv(paste0(full_cohort_dir,
 ```
 
 
-## While waiting on further BT2080 t cell sequencing: remove few BT2080 t cells (confounder, makes plots look weird)
-```{r}
-remove_BT2080Tcell<- TRUE
-if(remove_BT2080Tcell){
-  figure_dir<- paste0(figure_dir, "removeBT2080Tcells/")
-  if(!dir.exists(figure_dir)){dir.create(figure_dir)}
-  tenx_seurat$cd4<- subset(tenx_seurat$cd4, sample!="BT2080")
-  tenx_seurat$cd8<- subset(tenx_seurat$cd8, sample!="BT2080")
-}
-
-```
 
 
 ## Project programs from full cohort to 10x
 ```{r}
-## tenx
+## Project
 tenx_seurat$cd4<- my_project_seurat(full_cd4_seurat,tenx_seurat$cd4, reference_annotation = "NMF_rank8_annot_mergedByunion_reAnnot")
 tenx_seurat$cd8<- my_project_seurat(full_cd8_seurat,tenx_seurat$cd8, reference_annotation = "NMF_rank8_annot_mergedByunion_reAnnot")
 tenx_seurat$myeloid<- my_project_seurat(full_myeloid_seurat,tenx_seurat$myeloid, reference_annotation = "NMF_rank6_annotByAdult10X")
@@ -118,6 +110,10 @@ for(i in names(tenx_seurat)){
 
 ## UMAPs of projected programs
 ```{r}
+## Load files
+files<- list.files(data_dir)
+tenx_seurat<- lapply(files, function(x){readRDS(paste0(data_dir, x))})
+names(tenx_seurat)<- gsub("_seurat.Rds", "", files)
 
 all_plots<- lapply(names(tenx_seurat), function(x){
   tmp<- tenx_seurat[[x]]
@@ -185,281 +181,5 @@ all_plots<- lapply(names(tenx_seurat), function(x){
 })
 cowplot::plot_grid(plotlist=all_plots, ncol=3)
 ggsave(paste0(figure_dir, "Heatmap_ExpectedMarkerGenes_All.png"), width=35, height=9)
-```
-
-NOT RUN YET
-## DE between programs by treatment
-Separately for tenx/10x, then look for overlaps
-```{r}
-## tenx
-tenx_de<-lapply(tenx_seurat, function(seurat){
-  ## Identify programs to test- >3 cells in program in both treated/untreated
-  programs_in_both<- table(seurat$Treatment, seurat$Program_projected)>3
-  programs_in_both<- colnames(programs_in_both)[colSums(programs_in_both)==2]
-  message(paste0("Programs testing: ", paste(programs_in_both, collapse = ", ")))
-  
-  ## Cycle through each program shared by treated/untreated (>3 cells in program)
-  programs_de<- lapply(programs_in_both, function(program){
-    print(program)
-    seurat_subset<- subset(seurat, Program_projected==program)
-    seurat_subset<- SetIdent(seurat_subset, value=seurat_subset$Treatment)
-    markers<- FindMarkers(seurat_subset, ident.1 = "Untreated", ident.2="PD1")
-    markers$program<- program
-    markers$gene<- rownames(markers)
-    return(markers)
-  })
-  programs_de<- do.call("rbind", programs_de)
-  
-  return(programs_de)
-})
-
-  ## Remove any cell types with no degs
-  tenx_de<- tenx_de[lapply(tenx_de, class)=="data.frame"]
-  
-  ## filter
-  tenx_de<- lapply(tenx_de, function(x){
-    x[x$p_val_adj<0.1,]
-  })
-  
-  saveRDS(tenx_de, file=paste0(analysis_dir, "DE_Untreated.v.PD1_byProgram_tenx.Rds"))
-  
-  
-## tenx
-tenx_de<-lapply(tenx_seurat, function(seurat){
-  ## Identify programs to test- >3 cells in program in both treated/untreated
-  programs_in_both<- table(seurat$Treatment, seurat$Program_projected)>3
-  programs_in_both<- colnames(programs_in_both)[colSums(programs_in_both)==2]
-  message(paste0("Programs testing: ", paste(programs_in_both, collapse = ", ")))
-  
-  ## Cycle through each program shared by treated/untreated (>3 cells in program)
-  programs_de<- lapply(programs_in_both, function(program){
-    print(program)
-    seurat_subset<- subset(seurat, Program_projected==program)
-    seurat_subset<- SetIdent(seurat_subset, value=seurat_subset$Treatment)
-    markers<- FindMarkers(seurat_subset, ident.1 = "Untreated", ident.2="PD1")
-    markers$program<- program
-    markers$gene<- rownames(markers)
-    return(markers)
-  })
-  programs_de<- do.call("rbind", programs_de)
-  
-  return(programs_de)
-})
-
-  ## Remove any cell types with no degs
-  tenx_de<- tenx_de[lapply(tenx_de, class)=="data.frame"]
-  
-  ## filter
-  tenx_de<- lapply(tenx_de, function(x){
-    x[x$p_val_adj<0.1,]
-  })
-  
-  saveRDS(tenx_de, file=paste0(analysis_dir, "DE_Untreated.v.PD1_byProgram_TenX.Rds"))
-
-## Merge results by cell type
-all_degs<- lapply(gsub("tenx", "", names(tenx_de)), function(x){
-  tenx<- tenx_de[[paste0("tenx", x)]]
-  tenx<- tenx_de[[paste0("tenx_", x)]]
-  
-  ## Merge DE results
-  tenx$Seq<- "tenx"; tenx$Seq<- "TenX"
-  de_both<- rbind(tenx, tenx)
-  return(de_both)
-}); names(all_degs)<-gsub("tenx", "", names(tenx_de))
-  
-## Venn diagram of overlaps
-all_plots<-lapply(gsub("tenx", "", names(tenx_de)), function(x){
-  de_both<-all_degs[[x]]
-  cowplot::plot_grid(plotlist=lapply(unique(de_both$program), function(program){
-    tmp<- de_both[de_both$program==program,]
-    ggVennDiagram::ggVennDiagram(list(tenx=tmp$gene[tmp$Seq=="tenx"],
-                                      tenx=tmp$gene[tmp$Seq=="TenX"]))+
-      scale_fill_gradient(low="white", high="red")+
-      scale_color_manual(values=rep("black",3))+
-      ggtitle(program)
-  }))
-  ggsave(paste0(figure_dir, "Venn_DEGoverlap_tenx.v.TenX_", x, ".png"), width=9, height=6)
-})
-  
-## Get overlapping genes
-degs_shared<- lapply(gsub("tenx", "", names(tenx_de)), function(x){
-  de_both<- all_degs[[x]]
-  
-  ## Get genes that are DE in both
-  genes_shared<- as.data.frame(t(table(de_both$program, de_both$gene)))
-  genes_shared<- genes_shared[genes_shared$Freq==2,]
-  de_shared<- de_both[paste0(de_both$gene, de_both$program) %in% paste0(genes_shared$Var1, genes_shared$Var2),]
-  
-  ## Subset to genes with same logFC
-  de_shared<- de_shared %>% group_by(program, gene) %>% filter(length(unique(sign(avg_log2FC))) == 1 ) %>% as.data.frame()
-  de_shared<- de_shared[order(de_shared$program, de_shared$gene),]
-  
-  ## Reverse logFC sign- so that positive == up in PD1
-  de_shared$avg_log2FC<- de_shared$avg_log2FC * -1
-  de_shared$cell_type<- x
-  return(de_shared)
-})
-degs_shared<- do.call("rbind", degs_shared)
-
-
-## List of GOI of shared DEGs (based on lit review)
-GOI<- c("GADD45B", "IL6ST", "TOB1", "HAMP", "LYVE1", "NINJ1", "RHOB", "SLC2A5", "STAB1", "IL32")
-names(GOI)<- plyr::mapvalues(GOI, degs_shared$gene, degs_shared$program, warn_missing = FALSE)
-
-## Plot expression for tenx/tenx for all goi
-all_plots<- lapply(gsub("tenx_", "", names(tenx_seurat)), function(x){
-  tmp<- all_seurat[[x]]
-  goi_use<- GOI[names(GOI) %in% tmp$Program_projected]
-  
-  ## Create pseudobulking variable
-  tmp$pb<- paste0(tmp$sample, "_", gsub("\\.", "\n", gsub("_", "\n", tmp$Program_projected)))
-  pb<- pseudobulk_byVariable(tmp, tmp@meta.data, "pb")
-  
-  pb_center<- NormCenter(pb)$center_data
-  
-  ## Plot
-  myHeatmap(pb_center, GOI=goi_use, min.value = -3, max.value = 3, facetWrap = TRUE,
-            orderSubtypes =sample_order) +
-    scale_fill_gradient2(high="red", low="blue", mid="white", name="Centered log2(TPM)")+
-    ggtitle(x)
-})
-cowplot::plot_grid(plotlist=all_plots, ncol=1)
-ggsave(paste0(figure_dir, "Heatmap_DEGsSharedBytenx.TenX_PD1.v.Untreated_All.png"), width=12, height=12)
-```
-
-
-
-## For visualization purposes: map 10x/treated onto full seurat object 
-For full immune cohort T cells: can use either ped/adult or just ped. Visualization is nicer with ped/adult, but should probably use ped alone for actual projections (keep it more of a direct comparison, plus doesn't make sense for myeloid, so want to treat tcell/myeloid the same)
-```{r}
-## Load in tcell seurat objects- pediatric and adult
-full_cd4_seurat<- readRDS(paste0(full_cohort_dir,
-                                   "02a_Tcells/02_Ped.Adult/03_Visualize.Reannotate_programs/analysis/Reannotate_programs/",
-                                   "rank8_sharedByunion/",
-                                   "ped.adult_seurat_cd4_harmony.Rds"))
-full_cd8_seurat<- readRDS(paste0(full_cohort_dir,
-                                   "02a_Tcells/02_Ped.Adult/03_Visualize.Reannotate_programs/analysis/Reannotate_programs/",
-                                   "rank8_sharedByunion/",
-                                   "ped.adult_seurat_cd8_harmony.Rds"))
-
-## Named list of objects to help with iterating over
-ref_list<- list(cd4=full_cd4_seurat, cd8=full_cd8_seurat, myeloid=full_myeloid_seurat)
-tenxpd1_list<- list(cd4=subset(tenx_seurat$tenx_cd4, Treatment=="PD1"),
-                    cd8=subset(tenx_seurat$tenx_cd8, Treatment=="PD1"),
-                    myeloid=subset(tenx_seurat$tenx_myeloid, Treatment=="PD1"))
-tenx_list<- tenx_seurat; names(tenx_list)<-gsub("tenx_", "", names(tenx_list))
-color_list<- list(cd4=tcell_colors, cd8=tcell_colors, myeloid=myeloid_colors)
-
-## tenx PD1
-tenxpd1_list<- lapply(names(tenxpd1_list), function(x){
-  print(x)
-  my_mapSeurat(ref_list[[x]], tenxpd1_list[[x]], metadata_column_to_project = "Final_Annot" )
-})
-names(tenxpd1_list)<- names(ref_list)
-
-
-  ## Plot by program (reference + query)
-  all_plots<- lapply(names(tenxpd1_list), function(x){
-    ref<- ref_list[[x]]; query<- tenxpd1_list[[x]]
-    
-    p1<-DimPlot(ref, group.by = "Final_Annot") + 
-      scale_color_manual(values=color_list[[x]])+
-      ggtitle(paste0(x, " :Full cohort"))
-    
-    p2<- DimPlot(query, reduction="ref.umap", group.by = "Final_Annot") + 
-      scale_color_manual(values=color_list[[x]])+
-      ggtitle(paste0(x, " : PD1 tenx"))
-    p1+p2
-  })
-  cowplot::plot_grid(plotlist = all_plots, ncol=1)
-  ggsave(paste0(figure_dir, "UMAP_tenx_mapOntoFull_byProgram_All.png"), width=14, height=12)
-  
-  ## breakdown by program
-  all_plots<- lapply(names(tenxpd1_list), function(x){
-    my_barchart_programProp(tenxpd1_list[[x]], coloring_variable="predicted.Final_Annot", colors=color_list[[x]])+ggtitle(x)
-  })
-  cowplot::plot_grid(plotlist = all_plots, ncol=3)
-  ggsave(paste0(figure_dir, "Barchart_tenx_mapOntoFull_byProgram_All.png"), width=12, height=4)
-
-  
-## 10x- pd1 and nontreated
-tenx_list<- lapply(names(tenx_list), function(x){
-  print(x)
-  my_mapSeurat(ref_list[[x]], tenx_list[[x]], metadata_column_to_project = "Final_Annot" )
-})  
-names(tenx_list)<- gsub("tenx_", "", names(tenx_seurat))
-    
-
-  ## Plot by program (reference + query)
-  all_plots<- lapply(names(tenx_list), function(x){
-    ref<- ref_list[[x]]; query<- tenx_list[[x]]
-    
-    p1<-DimPlot(ref, group.by = "Final_Annot") + 
-      scale_color_manual(values=color_list[[x]])+
-      ggtitle(paste0(x, ": Full cohort"))
-    
-    p2<- DimPlot(query, reduction="ref.umap", group.by = "Final_Annot") + 
-      scale_color_manual(values=color_list[[x]])+
-      ggtitle(paste0(x, ": 10X"))
-    p1+p2
-  })
-  cowplot::plot_grid(plotlist = all_plots, ncol=1)
-  ggsave(paste0(figure_dir, "UMAP_tenX_mapOntoFull_byProgram_All.png"), width=14, height=12)
-
-  
-  ## Plot by treatment
-  all_plots<- lapply(names(tenx_list), function(x){
-    query<- tenx_list[[x]]
-    DimPlot(query, group.by = "Treatment", reduction="ref.umap")+scale_color_manual(values=colors_treatment)+
-      ggtitle(paste0(x, " : 10X2"))
-  })
-  cowplot::plot_grid(plotlist = all_plots, ncol=1)
-  ggsave(paste0(figure_dir, "UMAP_tenX_mapOntoFull_byTreatment_All.png"),width=6, height=15)
-  
-    ## breakdown by program
-  all_plots<- lapply(names(tenx_list), function(x){
-    my_barchart_programProp(tenx_list[[x]], coloring_variable="predicted.Final_Annot", colors=color_list[[x]])+ggtitle(x)
-  })
-  cowplot::plot_grid(plotlist = all_plots, ncol=3)
-  ggsave(paste0(figure_dir, "Barchart_tenx_mapOntoFull_byProgram_All.png"), width=12, height=4)
-  
-
-## Breakdown merged across all- including gbm from full cohort
-gbm_samples<- c("BT1857", "BT1478", "BT1745")
-
-  ## Merge seurat objects- no clustering, not needed
-  all_seurat_list<- lapply(names(ref_list), function(x){
-    ref<- ref_list[[x]]; ref<- subset(ref, sample %in% gbm_samples)
-    ref$Treatment<- "Untreated"; ref$Sequencing<- "tenx"; ref$predicted.Final_Annot<- ref$Final_Annot
-    tenx<-tenxpd1_list[[x]]
-    tenx<- tenx_list[[x]]
-    seurat<- merge(ref, c(tenx, tenx))
-    return(seurat)
-  })
-  names(all_seurat_list)<- names(ref_list)
-  
-  ## Bar chart
-  sample_order<- c("BT1478", "BT1857", "BT1745", "E167CD35resub", "BT1910", "BT1935", "GEX")
-  all_plots<- lapply(names(all_seurat_list), function(x){
-    seurat<- all_seurat_list[[x]]
-    seurat$sample<- factor(seurat$sample, levels=sample_order[sample_order %in% unique(seurat$sample)])
-    my_barchart_programProp(seurat, coloring_variable="predicted.Final_Annot", colors=color_list[[x]])+
-      theme(axis.text.x = element_text(angle=45, hjust=1))+xlab("")
-    
-  })
-  cowplot::plot_grid(plotlist=all_plots, ncol=3)
-  ggsave(paste0(figure_dir, "Barchart_tenx.tenx_mapOntoFull_byProgram_All.png"), width=12, height=4)
-  
-  ## Bar chart averaged over treatment
-    all_plots<- lapply(names(all_seurat_list), function(x){
-    seurat<- all_seurat_list[[x]]
-    seurat$sample<- factor(seurat$sample, levels=sample_order[sample_order %in% unique(seurat$sample)])
-    my_barchart_programProp(seurat,grouping_variable = "Treatment", coloring_variable="predicted.Final_Annot", colors=color_list[[x]])+
-      theme(axis.text.x = element_text(angle=45, hjust=1))+xlab("")
-    
-  })
-  cowplot::plot_grid(plotlist=all_plots, ncol=3)
-  ggsave(paste0(figure_dir, "Barchart_tenx.tenx_mapOntoFull_byProgram_byTreatment_All.png"), width=12, height=4)
-
 ```
 
