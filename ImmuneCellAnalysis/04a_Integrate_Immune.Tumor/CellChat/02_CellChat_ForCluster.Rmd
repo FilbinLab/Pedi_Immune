@@ -4,8 +4,15 @@ output: html_document
 ---
 
 ```{r}
+#!/usr/bin/env Rscript
+
+## Libraries
 library(CellChat)
 library(Seurat) 
+
+## Helper function
+#cellchatHelper<-paste0("~/scripts/R/CellChat_HelperFunctions.R")
+#source(cellchatHelper)
 
 options(stringsAsFactors = FALSE)
 
@@ -26,36 +33,34 @@ setwd(working_dir)
 
 ```
 
+
 ```{r}
-## args: seurat_dir seurat_obj_name CellAnnot_column_in_seurat analysis_name output_dir file_with_comparisons receiver_cell_type sender_cell_type
-## file_with_comparisons should be a text file with 3 columns that follow the structure: comparison_name sender receiver
+## args: seurat object name, column in metadata to use, output directory, cell type of interest #1, cell type of interest #2, whether or not to downsample (TRUE/FALSE)
+## cell types #1 and #2 should be present in under annotColumn within the seurat object's metadata
+
+#args=commandArgs(trailingOnly=TRUE)
+
+#seurat_obj<- args[1]
+#annotColumn<- args[2]
+#output_dir<- args[3]
+#celltype_1<- args[4]
+#celltype_2<- args[5]
+#downsample<- args[6]
+
+seurat_obj<-  "/Users/jlabelle/Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/04a_Integrate_Immune.Tumor/CellChat/analysis/seurat_list_bySample.Rds"
+annotColumn<- "immunePrograms_tumorCellTypes"
+output_dir<- "test"
+celltype_1<- "Cycling"
+celltype_2<- "AC-like"
+downsample<-TRUE
 ```
 
 ```{r}
-args=commandArgs(trailingOnly=TRUE)
-
-seurat_dir<- args[1]
-seurat_obj_name<- args[2]
-annotColumn<- args[3]
-full_analysis_name<- args[4]
-output_dir<- args[5]
-comparisons_file<- args[6]
-receiver_cell_type<- args[7]
-sender_cell_type<- args[8]
-
-seurat_dir<- paste0(working_dir, "analysis/CellChat/")
-seurat_obj_name<- "seurat_list_bySample.Rds"
-annotColumn<- "detailed_annotForCellChat"
-full_analysis_name<- "test"
-comparisons_file<- "analysis/CellChat/all_comparisons.txt"
-receiver_cell_type<- "AllReceiver"
-sender_cell_type<- "AllSender"
-```
+message(paste0("Processing comparison: ", celltype_1, " vs ", celltype_2))
 
 ## Load in list of seurat objects
 ## 1 object for every sample, with tumor + Tcell data combined
-```{r}
-seurat_list<- readRDS(paste0(seurat_dir, seurat_obj_name))
+seurat_list<- readRDS(seurat_obj)
 
 ## Set column to use as cell annotations
 ## Can use "CellAnnot" for merged annotations (like OPC-like*) or "OriginalAnnot" for completely un-merged annots
@@ -65,16 +70,8 @@ seurat_list<- lapply(seurat_list, function(x){
   return(tmp)
 })
 
-## Load in desired comparisons
-comparisons<- read.table(comparisons_file)
-comparison_names<- comparisons$V1
-comparisons<- as.list(as.data.frame(t(comparisons[,2:3])))
-names(comparisons)<- comparison_names
-```
 
-## Settings
-1. CellChat settings
-```{r}
+
 ## CellChat settings
 Pvaluethresh<- 1
 PCthresh<-0.2
@@ -82,129 +79,113 @@ raw.use=TRUE
 population.size = FALSE
 min.cells = 10
 only.pos=TRUE
-```
-
-## Initialize settings df
-```{r}
-settings_df<- data.frame(PvalueThres=Pvaluethresh,
-                         PCthresh=PCthresh,
-                         raw.use=as.character(raw.use),
-                         population.size=as.character(population.size),
-                         min.cells=as.integer(min.cells),
-                         only.pos=only.pos,
-                         comparison_file=comparisons_file)
-
-```
 
 
-## For each comparison:
-1. Set analysis name
-2. Set subtypes that contain both cell types
-```{r}
-comparisons_metadata<- lapply(names(comparisons), function(x){
-  comparison<- comparisons[[x]]
-  
-  ## Make analysis name that will be used for everything downstream for this comparison
-  analysisName<- paste0(sender_cell_type, "_", 
-                        gsub(" ", "", comparison[1]), ".",
-                        receiver_cell_type, "_", 
-                        gsub(" ", "", comparison[2]))
-  
-  ## Create list with analysis name/subtypes/comparison to be used to run CellChat
-  comparison_info<- list(analysisName=analysisName,
-                         comparison=comparison)
-  return(comparison_info)
+
+## remove any samples that don't have at least 10 cells for each cell type of interest
+nCellsOfInterest<- lapply(seurat_list, function(x){
+  tbl<- table(x$CellAnnot)
+  c(tbl[celltype_1], tbl[celltype_2])
 })
-names(comparisons_metadata)<- names(comparisons)
 
-```
+samplePF<- lapply(nCellsOfInterest, function(x){
+  x[celltype_1]>10 & x[celltype_2] >10})
+seurat_list<- seurat_list[unlist(samplePF) & !(is.na(samplePF))]
+
+all_samples<-names(seurat_list)
+message(paste0("Samples used: ", paste(all_samples, collapse=", ")))
 
 
-## For each comparison:
-1. Subset to just samples with at least 10 cells in each cell type of interest
-2. Create cellChat object for each of these samples
-```{r}
-allCellChat<- lapply(comparisons_metadata, function(meta){
-  seurat<-seurat_list
-  comparison<- meta$comparison
-  print(paste0("Processing comparison: ", comparison[1], " vs ", comparison[2]))
-        
-  ## remove any samples that don't have at least 10 cells for each cell type of interest
-  nCellsOfInterest<- lapply(seurat, function(x){
-          tbl<- table(x$CellAnnot)
-          c(tbl[comparison[1]], tbl[comparison[2]])
-  })
-
-  samplePF<- lapply(nCellsOfInterest, function(x){
-                  x[comparison[1]]>10 & x[comparison[2]] >10})
-  seurat<- seurat[unlist(samplePF) & !(is.na(samplePF))]
-  
-  all_samples<-names(seurat)
-  print(paste0("Samples used: ", paste(all_samples, collapse=", ")))
+## If downsample- randomly sample celltype 1 and celltype 2 so they have the same # of cells as the smallest program in their respective broad subtype (min 11)
+if(downsample){
+  seurat_list<- lapply(seurat_list, function(seurat){
+    ## Set broad cell types used for celltype 1 and celltype 2
+    celltype_1_broad<-as.character(plyr::mapvalues(celltype_1, seurat$CellAnnot, seurat$highLevel_annot, warn_missing = FALSE))
+    celltype_2_broad<-as.character(plyr::mapvalues(celltype_2, seurat$CellAnnot, seurat$highLevel_annot, warn_missing = FALSE))
       
-  ## Subset seurat to just cells of interest
-  seurat<- lapply(seurat, function(x){
-    subset(x, CellAnnot %in% comparison)
-  })
-        
-  ## Create object, preprocess
-  all_cellChat<- lapply(all_samples, function(x){
-    CreateCellChatObject(mySample = x, 
-                         all_merged_seurat_obj = seurat,
-                         SpecifyCellAnnot = FALSE, ## already subset to cells of interest
-                         Pvaluethresh = Pvaluethresh,
-                         PCthresh =PCthresh,
-                         only.pos=only.pos) 
-  })
-  names(all_cellChat)<- all_samples
-  
-  return(all_cellChat)})
-
-names(allCellChat)<- names(comparisons_metadata)
-```
-
-
-## For each cellchat object built for each comparison:
-1. Add settings df to each object
-2. Run CellChat 
-```{r}
-all_cellChat_interact<- lapply(names(allCellChat), function(comparisonName){
-  all_cellChat<- allCellChat[[comparisonName]]
-  comparison<- comparisons_metadata[[comparisonName]]$comparison
-  analysisName<-comparisons_metadata[[comparisonName]]$analysisName
-  
-  message(paste0("Computing interaction network for ", comparison[[1]]," vs ", comparison[[2]]))
-  
-  ## Compute interaction network
-  cellChat<- all_cellChat
+    ## Get number of cells per program, with high level
+    nCells<- as.data.frame(table(seurat$CellAnnot))
+    colnames(nCells)<-c("Program", "NCells")
+    nCells$broad<- as.character(plyr::mapvalues(nCells$Program, seurat$CellAnnot, seurat$highLevel_annot, warn_missing = FALSE))
     
-  ## skip if no cellchat objects for that subtype
-  if(class(cellChat) != "list"){next}
-  
+    ## Remove any programs without >10 cells- not running in CellChat
+    nCells<- nCells[nCells$NCells>10,]
+    
+    ## Get min number of cells in a program, by broad group
+    minCells<- sapply(unique(nCells$broad), function(x){
+      min(nCells[nCells$broad==x,"NCells"])
+    })
+    
+    ## Randomly sample celltype1 down to min for its broad program
+    ds_celltype1<- sample(x=colnames(seurat)[seurat$CellAnnot==celltype_1],
+                          size=minCells[celltype_1_broad], 
+                          replace=FALSE)
+    
+    ## Randomly sample celltype2 down to min for its broad program
+    ds_celltype2<- sample(x=colnames(seurat)[seurat$CellAnnot==celltype_2],
+                          size=minCells[celltype_2_broad], 
+                          replace=FALSE)
+    
+    ## Subset seurat to just these cells
+    seurat<- subset(seurat, cells=c(ds_celltype1, ds_celltype2))
+    return(seurat)
+  })
+}else{seurat_list<- lapply(seurat_list, function(x){ ## If not downsampling- just use all cells in celltype1 and celltype2
+  subset(x, CellAnnot %in% c(celltype_1, celltype_2))
+})
+}
+
+
+## Create object, preprocess
+cellChat<- lapply(all_samples, function(x){
+  CreateCellChatObject(mySample = x, 
+                       all_merged_seurat_obj = seurat_list,
+                       SpecifyCellAnnot = FALSE, ## already subset to cells of interest
+                       Pvaluethresh = Pvaluethresh,
+                       PCthresh =PCthresh,
+                       only.pos=only.pos) 
+})
+names(cellChat)<- all_samples
+
+message(paste0("Computing interaction network for ", celltype_1," vs ", celltype_2))
+
+
+## skip if no cellchat objects for that subtype
+if(class(cellChat) != "list"){
+  message("Not enough cells present in either group- cellchat not run!")
+  quit
+}else{
+  ## Compute interaction network
   cellChat_interact<- lapply(cellChat, function(x){
-          InferCellCellInteractions(x, 
-                                    raw.use=raw.use, 
-                                    population.size = population.size, 
-                                    min.cells = min.cells)
+    InferCellCellInteractions(x, 
+                              raw.use=raw.use, 
+                              population.size = population.size, 
+                              min.cells = min.cells)
   })
   
-  ## Save settings to object
-  settings_df_ind<- settings_df
-  settings_df_ind$cellTypesUsed<- paste(comparison, collapse=".")
-  settings_df_ind$analysisName<- analysisName
-  settings_df_ind<- as.data.frame(t(settings_df_ind))
+  
+  saveRDS(cellChat_interact, file=paste0(output_dir, "/cellChat_res_", celltype_1,".vs.", celltype_2, ".Rds"))    
+  
+  ## Extract results
+  PathwaysRemove<-c("HLA", "COL", "LAMININ", "MHC-I")
+  sigLRs_list<- lapply(names(cellChat_interact), function(sample){
+    cellchat<- cellChat_interact[[sample]]
+    if(length(cellchat@netP$pathways)>1){
+      sigLRs<-  subsetCommunication(cellchat, thresh = 1)
+      sigLRs<- sigLRs[!sigLRs$pathway_name %in% PathwaysRemove,]
+      sigLRs$sample<- sample
+      return(sigLRs)
+    }else{print(paste0("No LRs for ", sample)); return(NULL)}
+  })
+  names(sigLRs_list)<-names(cellChat_interact)
+  sigLRs_list<- sigLRs_list[unlist(lapply(sigLRs_list, function(x){!is.null(x)}))]
+  
+  ## collapse to DF
+  sigLRs_df<- do.call("rbind", sigLRs_list)
   
   
-  cellChat_interact[["Settings"]]<- settings_df_ind
-  
-  return(cellChat_interact)
-})
-
-names(all_cellChat_interact)<-names(allCellChat)
-
-
-save(all_cellChat_interact, file=paste0(analysis_dir, "/all_cellChat_interact_", 
-                                       full_analysis_name, ".Robj"))    
+  saveRDS(sigLRs_df, file=paste0(output_dir, "/cellChat_LRs_",celltype_1, ".vs.", celltype_2, ".Rds"))
+}
 ```
 
 

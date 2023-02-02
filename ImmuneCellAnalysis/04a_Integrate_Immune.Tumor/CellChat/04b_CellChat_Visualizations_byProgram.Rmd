@@ -40,28 +40,51 @@ myPalette <- colorRampPalette(rev(brewer.pal(11, "Spectral")))
 ## Settings
 ```{r}
 ## Remove BCOR?
-remove_bcor<- TRUE
+remove_bcor<- FALSE
 
 ## Remove epn?
-remove_epn<- TRUE
+remove_epn<-FALSE
 
 ## Just epn (for supplemental)
-just_epn<- FALSE
+just_epn<- TRUE
+
+## Use downsampled results?
+downsampled<-TRUE
 
 ## Set new figure dir
 if(remove_bcor & remove_epn & !just_epn){
-  figure_dir_use<- paste0(figure_dir, "removeBCOR.EPN/")
-  if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
+  if(downsampled){
+    figure_dir_use<- paste0(figure_dir, "downsampled/removeBCOR.EPN/")
+  }else{
+    figure_dir_use<- paste0(figure_dir, "removeBCOR.EPN/")
+  }
+  
 } else if(just_epn){
-  figure_dir_use<- paste0(figure_dir, "onlyEPN/")
-  if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
+  if(downsampled){
+    figure_dir_use<- paste0(figure_dir, "downsampled/onlyEPN/")
+  }else{
+    figure_dir_use<- paste0(figure_dir, "onlyEPN/")
+  }
+  
+} else{
+  if(downsampled){
+    figure_dir_use<- paste0(figure_dir, "downsampled/")
+  }else{
+    figure_dir_use<- figure_dir
+  }
 }
+
 print(paste0("FIGURE DIRECTORY IN USE: ", figure_dir_use))
+if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use, recursive = TRUE)}
+
+## Set analysis dir
+if(downsampled){analysis_dir_use<- paste0(analysis_dir, "downsampled/")}
+if(!downsampled){analysis_dir_use<- paste0(analysis_dir, "all_cells/")}
 ```
 
 ## Load in LR results for all analyses (already merged)
 ```{r}
-allLRs<- readRDS(paste0(analysis_dir, "all_LRs.Rds")) 
+allLRs<- readRDS(paste0(analysis_dir_use, "all_LRs.Rds")) 
 
 ## Subset to just sig- by pvalue and prob
 sigLRs<- allLRs[allLRs$pvalue<=0.1 & allLRs$Prob>0,]
@@ -93,10 +116,11 @@ if(just_epn){
 
 ## Set minor cell types within major cell type, add onto sigLRs
 ```{r}
-cd4_types<- unique(sigLRs$sender)[grepl("CD4", unique(sigLRs$sender))]
-cd8_types<- unique(sigLRs$sender)[grepl("CD8", unique(sigLRs$sender))]
+cd4_types<- as.character(unique(sigLRs$sender)[grepl("CD4", unique(sigLRs$sender))])
+cd8_types<- as.character(unique(sigLRs$sender)[grepl("CD8", unique(sigLRs$sender))])
 myeloid_types<- c("IFN_TAM", "Monocytes", "Inflammatory", "Hypoxic_TAM", "Stress_Response", "SEPP1_Mo_TAM")
-tumor_types<- unique(sigLRs$sender)[!unique(sigLRs$sender) %in% c(cd4_types, cd8_types, myeloid_types)]
+tumor_types<- as.character(unique(sigLRs$sender)[!unique(sigLRs$sender) %in% c(cd4_types, cd8_types, myeloid_types)])
+all_cell_types<- list(CD4=cd4_types, CD8=cd8_types, Myeloid=myeloid_types, Tumor=tumor_types)
 
 sigLRs$sender_major<- ifelse(sigLRs$sender %in% tumor_types, "Tumor",
                       ifelse(sigLRs$sender %in% myeloid_types, "Myeloid",
@@ -121,169 +145,203 @@ sigLRs$receiver<- gsub("_", "\n", sigLRs$receiver)
 
 ## 1. all LRs between 2 major cell types, regardless of minor cell types
 ```{r}
-## Set major sender/receiver cell types
-majorSender<- "Tumor"
-majorReceiver<- "CD8"
-sigLRs_plot<-sigLRs[sigLRs$sender_major==majorSender & sigLRs$receiver_major==majorReceiver,]
+celltypes<- c("Tumor", "Myeloid", "CD4", "CD8")
+sr_pairs<-with(subset(expand.grid(celltypes,celltypes),Var1!=Var2),paste0(Var1,'-',Var2))
 
-## Add column for unique ID- by sample/ligand/receptor
-sigLRs_plot$UniqueID<- paste0(sigLRs_plot$Sample, "_", sigLRs_plot$ligand, "_",sigLRs_plot$receptor)
+for(p in sr_pairs){
+  ## Set major sender/receiver cell types
+  majorSender<- unlist(strsplit(p, split="-"))[1]
+  majorReceiver<- unlist(strsplit(p, split="-"))[2]
+  sigLRs_plot<-sigLRs[sigLRs$sender_major==majorSender & sigLRs$receiver_major==majorReceiver,]
+  
+  ## Add column for unique ID- by sample/ligand/receptor
+  sigLRs_plot$UniqueID<- paste0(sigLRs_plot$Sample, "_", sigLRs_plot$ligand, "_",sigLRs_plot$receptor)
+  
+  ## remove duplicate interactions
+  sigLRs_unique<- merge(aggregate(Prob ~ UniqueID, sigLRs_plot, max), sigLRs_plot)
+  sigLRs_unique<- sigLRs_unique[!duplicated(sigLRs_unique$UniqueID),] ## removes any total duplicates (identical prob too)
+  
+  ## Set variable to facet wrap by- usually will be subtype -  and plot
+  sigLRs_unique$FacetWrap1<- sigLRs_unique$Subtype
+  
+  sigLRs_unique$LR<- sigLRs_unique$interaction_name
+  PlotPvalueProb(sigLRs_unique,xAxis = "sample", labelXAxis = TRUE, facetWrap = c("Subtype"))+
+    theme(axis.text = element_text(face="bold"))+
+    ggtitle("")+
+    theme(panel.grid.major.x = element_blank() ,panel.grid.major.y = element_line( size=.1, color="black" ) )+
+    ggtitle(paste0("Sender: ", majorSender, "\nReceiver: ", majorReceiver))
+  
+  
+  ## get appropriate width/height
+  height<- 3+length(unique(sigLRs_unique$LR))*.1
+  width<- 5+length(unique(sigLRs_unique$sample)) * .25
+  
+  ## save
+  ggsave(paste0(figure_dir_use, "Sender.", majorSender, "_Receiver.", majorReceiver, ".png"), width=width, height=height)
+}
 
-## remove duplicate interactions
-sigLRs_unique<- merge(aggregate(Prob ~ UniqueID, sigLRs_plot, max), sigLRs_plot)
-sigLRs_unique<- sigLRs_unique[!duplicated(sigLRs_unique$UniqueID),] ## removes any total duplicates (identical prob too)
 
-## Set variable to facet wrap by- usually will be subtype -  and plot
-sigLRs_unique$FacetWrap1<- sigLRs_unique$Subtype
-
-PlotPvalueProb(sigLRs_unique,xAxis = "Sample", labelXAxis = TRUE, facetWrap = c("Subtype"))+
-  theme(axis.text = element_text(face="bold"))+
-  ggtitle("")+
-  theme(panel.grid.major.x = element_blank() ,panel.grid.major.y = element_line( size=.1, color="black" ) )+
-  ggtitle(paste0("Sender: ", majorSender, "\nReceiver: ", majorReceiver))
-
-
-## get appropriate width/height
-height<- 3+length(unique(sigLRs_unique$LR))*.1
-width<- 5+length(unique(sigLRs_unique$Sample)) * .25
-
-## save
-ggsave(paste0(figure_dir_use, "Sender.", majorSender, "_Receiver.", majorReceiver, ".png"), width=width, height=height)
 ```
 
 
 ## 2. All LRs between 1 major cell type and minor cell types
 ```{r}
-## Set major sender/receiver cell types
-majorSender<- "Tumor"
-majorReceiver<- "CD8" 
+celltypes<- c("Tumor", "Myeloid", "CD4", "CD8")
+sr_pairs<-with(subset(expand.grid(celltypes,celltypes),Var1!=Var2),paste0(Var1,'-',Var2))
 
-## Subset to sender/receiver major cell type
-sigLRs_plot<-sigLRs[sigLRs$sender_major==majorSender & sigLRs$receiver_major==majorReceiver,]
+for(p in sr_pairs){
+  ## Set major sender/receiver cell types
+  majorSender<- unlist(strsplit(p, split="-"))[1]
+  majorReceiver<- unlist(strsplit(p, split="-"))[2]
+  
+  ## Subset to sender/receiver major cell type
+  sigLRs_plot<-sigLRs[sigLRs$sender_major==majorSender & sigLRs$receiver_major==majorReceiver,]
+  
+  ## Add column for unique ID- by sample/ligand/receptor/receiver cell type
+  sigLRs_plot$UniqueID<- paste0(sigLRs_plot$Sample, "_", sigLRs_plot$ligand, "_",
+                                sigLRs_plot$receptor, "_",sigLRs_plot$receiver)
+  
+  ## remove duplicate interactions
+  sigLRs_unique<- merge(aggregate(Prob ~ UniqueID, sigLRs_plot, max), sigLRs_plot)
+  sigLRs_unique<- sigLRs_unique[!duplicated(sigLRs_unique$UniqueID),] ## removes any total duplicates (identical prob too)
+  
+  ## Set variable to facet wrap by and plot
+  sigLRs_unique$FacetWrap1<- sigLRs_unique$receiver
+  
+  sigLRs_unique$LR<- sigLRs_unique$interaction_name
+  PlotPvalueProb(sigLRs_unique,xAxis = "sample", labelXAxis = TRUE, facetWrap = c( "Receiver"))+
+    theme(axis.text = element_text(face="bold"))+
+    ggtitle("")+
+    theme(panel.grid.major.x = element_blank() ,panel.grid.major.y = element_line( size=.1, color="black" ) )+
+    ggtitle(paste0("Sender: ", majorSender, "\nReceiver: ", majorReceiver))
+  
+  
+  ## get appropriate width/height
+  height<- 3+length(unique(sigLRs_unique$LR))*.1
+  width<- 5+length(unique(sigLRs_unique$Sample)) * .25
+  
+  ## save
+  ggsave(paste0(figure_dir_use, "Sender.", majorSender, "_Receiver.All",majorReceiver, ".png"), width=width, height=height)
+}
 
-## Add column for unique ID- by sample/ligand/receptor/receiver cell type
-sigLRs_plot$UniqueID<- paste0(sigLRs_plot$Sample, "_", sigLRs_plot$ligand, "_",
-                              sigLRs_plot$receptor, "_",sigLRs_plot$receiver)
-
-## remove duplicate interactions
-sigLRs_unique<- merge(aggregate(Prob ~ UniqueID, sigLRs_plot, max), sigLRs_plot)
-sigLRs_unique<- sigLRs_unique[!duplicated(sigLRs_unique$UniqueID),] ## removes any total duplicates (identical prob too)
-
-## Set variable to facet wrap by and plot
-sigLRs_unique$FacetWrap1<- sigLRs_unique$receiver
-#sigLRs_unique$FacetWrap1<- sigLRs_unique$Subtype
-
-#PlotPvalueProb(sigLRs_unique,xAxis = "Sample", labelXAxis = TRUE, facetWrap = c("Subtype", "Receiver"),
-               #ncolForFacetWrap = length(unique(paste0(sigLRs_unique$FacetWrap1, sigLRs_unique$FacetWrap2))))+
- # theme(axis.text = element_text(face="bold"))+
-  #ggtitle("")+
-  #theme(panel.grid.major.x = element_blank() ,panel.grid.major.y = element_line( size=.1, color="black" ) )+
-  #ggtitle(paste0("Sender: ", majorSender, "\nReceiver: ", majorReceiver))
-
-PlotPvalueProb(sigLRs_unique,xAxis = "Sample", labelXAxis = TRUE, facetWrap = c( "Receiver"),
-               ncolForFacetWrap = length(unique(paste0(sigLRs_unique$FacetWrap1))))+
-  theme(axis.text = element_text(face="bold"))+
-  ggtitle("")+
-  theme(panel.grid.major.x = element_blank() ,panel.grid.major.y = element_line( size=.1, color="black" ) )+
-  ggtitle(paste0("Sender: ", majorSender, "\nReceiver: ", majorReceiver))
 
 
-## get appropriate width/height
-height<- 3+length(unique(sigLRs_unique$LR))*.1
-width<- 5+length(unique(sigLRs_unique$Sample)) * .25
-
-## save
-ggsave(paste0(figure_dir_use, "Sender.", majorSender, "_Receiver.All",majorReceiver, ".png"), width=width, height=height)
 ```
 
 
 ## 3. All LRs between 2 major cell types' minor cell types- heatmap colored by % of samples that LR is found in
 ```{r}
-## Set major sender/receiver cell types
-majorSender<- "Tumor"
-majorReceiver<- "Myeloid" 
+celltypes<- c("Tumor", "Myeloid", "CD4", "CD8")
+sr_pairs<-with(subset(expand.grid(celltypes,celltypes),Var1!=Var2),paste0(Var1,'-',Var2))
 
-## Subset to sender/receiver major cell type
-sigLRs_plot<- sigLRs
-sigLRs_plot<-sigLRs_plot[sigLRs_plot$sender_major==majorSender & sigLRs_plot$receiver_major==majorReceiver,]
+for(p in sr_pairs){
+  ## Set major sender/receiver cell types
+  majorSender<- unlist(strsplit(p, split="-"))[1]
+  majorReceiver<- unlist(strsplit(p, split="-"))[2]
+  
+  ## Subset to sender/receiver major cell type
+  sigLRs_plot<- sigLRs
+  sigLRs_plot<-sigLRs_plot[sigLRs_plot$sender_major==majorSender & sigLRs_plot$receiver_major==majorReceiver,]
+  
+  ## Remove \n from sender cell types for better plotting
+  sigLRs_plot$sender<- gsub("\n", "_", sigLRs_plot$sender)
+  
+  ## For each unique sender/receiver combination, determine the total number of samples tested
+  sigLRs_plot$interaction_id<- paste0(sigLRs_plot$sender, "_", sigLRs_plot$receiver)
+  sigLRs_plot<- sigLRs_plot %>% group_by(interaction_id) %>% 
+    mutate(nSamples_inInteraction=length(unique(sample))) %>% as.data.frame()
+  
+  ## For each unique LR/interaction, determine the total number of samples identified
+  sigLRs_plot$UniqueID<- paste0(sigLRs_plot$ligand, "_", sigLRs_plot$receptor, "_", sigLRs_plot$interaction_id)
+  sigLRs_plot<- sigLRs_plot %>% group_by(UniqueID) %>% mutate(nSamples_inLR=length(unique(sample))) %>% as.data.frame()
+  
+  ## For each unique LR/interaction, divide n samples with LR/ n samples in interacting pair
+  sigLRs_unique<- sigLRs_plot[!duplicated(sigLRs_plot$UniqueID),]
+  sigLRs_unique$perSamples_inLR<- sigLRs_unique$nSamples_inLR/sigLRs_unique$nSamples_inInteraction
+  
+  ## Add on ID for ligand/receptor
+  sigLRs_unique$LR<- paste0(sigLRs_unique$ligand, "_", sigLRs_unique$receptor)
+  
+  ggplot(sigLRs_unique, aes(x=sender, y=LR, fill=perSamples_inLR))+
+    geom_tile()+
+    theme_linedraw() + 
+    facet_grid(cols = vars(receiver), scales = "free_x", space="free_x")+
+    scale_fill_gradient(low="white", high="red")+
+    theme(axis.text.x = element_text(angle=45, hjust=1),
+          axis.text=element_text(color="black", face="bold"),
+          axis.title = element_text(color="black", face="bold"))+
+    ylab("") + xlab("Sender cell type")
+  
+  height<- 3+length(unique(sigLRs_unique$LR))*.1
+  width<- 5+length(unique(sigLRs_unique$sender)) * .25
+  ggsave(paste0(figure_dir_use, "HeatmapBySampleProportion_Sender.", majorSender, "_Receiver.", majorReceiver, ".png"),
+         width=width, height=height)
+  
+}
 
-## Remove \n from sender cell types for better plotting
-sigLRs_plot$sender<- gsub("\n", "_", sigLRs_plot$sender)
 
-## For each unique sender/receiver combination, determine the total number of samples tested
-sigLRs_plot$interaction_id<- paste0(sigLRs_plot$sender, "_", sigLRs_plot$receiver)
-sigLRs_plot<- sigLRs_plot %>% group_by(interaction_id) %>% 
-  mutate(nSamples_inInteraction=length(unique(Sample))) %>% as.data.frame()
-
-## For each unique LR/interaction, determine the total number of samples identified
-sigLRs_plot$UniqueID<- paste0(sigLRs_plot$ligand, "_", sigLRs_plot$receptor, "_", sigLRs_plot$interaction_id)
-sigLRs_plot<- sigLRs_plot %>% group_by(UniqueID) %>% mutate(nSamples_inLR=length(unique(Sample))) %>% as.data.frame()
-
-## For each unique LR/interaction, divide n samples with LR/ n samples in interacting pair
-sigLRs_unique<- sigLRs_plot[!duplicated(sigLRs_plot$UniqueID),]
-sigLRs_unique$perSamples_inLR<- sigLRs_unique$nSamples_inLR/sigLRs_unique$nSamples_inInteraction
-
-## Add on ID for ligand/receptor
-sigLRs_unique$LR<- paste0(sigLRs_unique$ligand, "_", sigLRs_unique$receptor)
-
-ggplot(sigLRs_unique, aes(x=sender, y=LR, fill=perSamples_inLR))+
-  geom_tile()+
-  theme_linedraw() + 
-  facet_grid(cols = vars(receiver), scales = "free_x", space="free_x")+
-  scale_fill_gradient(low="white", high="red")+
-  theme(axis.text.x = element_text(angle=45, hjust=1),
-        axis.text=element_text(color="black", face="bold"),
-        axis.title = element_text(color="black", face="bold"))+
-  ylab("") + xlab("Sender cell type")
-
-height<- 3+length(unique(sigLRs_unique$LR))*.1
-width<- 5+length(unique(sigLRs_unique$sender)) * .25
-ggsave(paste0(figure_dir_use, "HeatmapBySampleProportion_Sender.", majorSender, "_Receiver.", majorReceiver, ".png"),
-       width=width, height=height)
 ```
 
 ## 4. Number of interactions between all pairwise combinations of 2 sets of minor cell types
-Plotting options: sankey plot (USED DOWNSTREAM), heatmap
+Plotting options: sankey plot (USED DOWNSTREAM), heatmap, chord diagram
 
 ## Preprocess
 ```{r}
-## Settings: major sender/receiver cell types, normalization method-"noNorm", "bySample", "byCell"
-majorCellType1<- "Myeloid"
-majorCellType2<- c("CD4", "CD8")
-norm_method<- "byCellBySample"
+## subset to unique LRs in pair
+sigLRs$UniqueID<- paste0(sigLRs$sender, ".to.", sigLRs$receiver, "_", sigLRs$interaction_name)
+sigLRs<- sigLRs[!duplicated(sigLRs$UniqueID),]
 
-## Use helper function to preprocess for sankey plot
-sigLRs_nLR<- process_LR_forSankeyPlot(sigLRs, majorCellType1, majorCellType2, norm_method)
-
-```
+## Get number of interactions per pair
+bd<- as.data.frame(table(sigLRs$sender, sigLRs$receiver))
+colnames(bd)<- c("sender", "receiver", "nLR")
 
 
+## Add major sender/receiver
+bd$major_sender<- as.character(plyr::mapvalues(bd$sender, sigLRs$sender, sigLRs$sender_major, warn_missing = FALSE))
+bd$major_receiver<- as.character(plyr::mapvalues(bd$receiver, sigLRs$receiver, sigLRs$receiver_major, warn_missing = FALSE))
 
-## Sankey plot
-```{r}
-sigLRs_plot<- sigLRs_nLR
+
 
 ## Order cell types by major cell type
 ordered_celltypes<- gsub("\n", "_", c(cd4_types, cd8_types, myeloid_types, tumor_types))
 sigLRs_plot$receiver.plot<- factor(sigLRs_plot$receiver, levels=ordered_celltypes[ordered_celltypes %in% sigLRs_plot$receiver])
 sigLRs_plot$sender.plot<- factor(sigLRs_plot$sender, levels=ordered_celltypes[ordered_celltypes %in% sigLRs_plot$sender])
-sigLRs_plot$major_sender<- gsub("CD4", "Immune", gsub("CD8", "Immune",gsub("Myeloid2", "Immune", sigLRs_plot$major_sender)))
+#sigLRs_plot$major_sender<- gsub("CD4", "Immune", gsub("CD8", "Immune",gsub("Myeloid", "Immune", sigLRs_plot$major_sender)))
+```
+
+
+## Sankey plot
+```{r}
+sigLRs_plot <-bd
 
 ## Plot with my helper function
-my_sankeyPlot(sigLRs_plot)
+sr_pairs<- list(list(c("CD4", "CD8"), c("Tumor")),
+                list(c("CD4", "CD8"), c("Myeloid")),
+                list(c("Myeloid"), c("Tumor")),
+                list(c("CD4"), c("CD8")))
+sigLRs_plot$nLRs_norm<- sigLRs_plot$nLR
 
-
-ggsave(paste0(figure_dir_use, "Sankey_ByTotalLR_Norm", norm_method,"_",
-              paste(majorCellType1, collapse="."),".",
-              paste(majorCellType2, collapse="."), ".pdf"),
-       device="pdf",
-       width=8, height=16)
+all_plots<- lapply(sr_pairs, function(p){
+  tmp<- sigLRs_plot[(sigLRs_plot$major_receiver %in% p[[1]] & sigLRs_plot$major_sender %in% p[[2]]) |
+                    (sigLRs_plot$major_receiver %in% p[[2]] & sigLRs_plot$major_sender %in% p[[1]]), ]
+  if(length(p[[1]])>1 | length(p[[2]]) > 1){ ## simplify to combine cd4/cd8 if needed
+    tmp$major_receiver<- gsub("CD4", "Immune", gsub("CD8", "Immune", tmp$major_receiver))
+    tmp$major_sender<- gsub("CD4", "Immune", gsub("CD8", "Immune", tmp$major_sender))
+  }
+  
+  my_sankeyPlot(tmp)
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=length(sr_pairs))
+ggsave(paste0(figure_dir_use, "Sankey_LRs_withCD4.CD8.pdf"), width=length(sr_pairs)*10, height=25)
 
 ```
 
+
+
+
 ## Heatmap
 ```{r}
-sigLRs_plot<- sigLRs_nLR
+sigLRs_plot<- bd
 
 ## Switch sender/receiver for one- just for plotting purposes
 sigLRs_plot$sender.plot<- ifelse(sigLRs_plot$major_receiver==majorCellType1, sigLRs_plot$receiver, sigLRs_plot$sender)

@@ -13,6 +13,7 @@ library(patchwork)
 library(Seurat) 
 library(ggh4x)
 library(ggalluvial)
+library(circlize)
 
 options(stringsAsFactors = FALSE)
 
@@ -37,33 +38,59 @@ nCellTypes<- readRDS( "analysis/nCellTypes_bySample.Rds")
 
 library(RColorBrewer)
 myPalette <- colorRampPalette(rev(brewer.pal(11, "Spectral")))
+
+immune_colors<- readRDS("../../plot_colors/ImmuneCell.celltypes.Rds")
 ```
 
 ## Settings
 ```{r}
 ## Remove BCOR?
-remove_bcor<- TRUE
+remove_bcor<- FALSE
 
 ## Remove epn?
-remove_epn<- TRUE
+remove_epn<- FALSE
 
 ## Just epn (for supplemental)
 just_epn<- FALSE
 
+## Use downsampled results?
+downsampled<-FALSE
+
 ## Set new figure dir
 if(remove_bcor & remove_epn & !just_epn){
-  figure_dir_use<- paste0(figure_dir, "removeBCOR.EPN/")
-  if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
+  if(downsampled){
+    figure_dir_use<- paste0(figure_dir, "downsampled/removeBCOR.EPN/")
+  }else{
+    figure_dir_use<- paste0(figure_dir, "removeBCOR.EPN/")
+  }
+  
 } else if(just_epn){
-  figure_dir_use<- paste0(figure_dir, "onlyEPN/")
-  if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use)}
+  if(downsampled){
+    figure_dir_use<- paste0(figure_dir, "downsampled/onlyEPN/")
+  }else{
+    figure_dir_use<- paste0(figure_dir, "onlyEPN/")
+  }
+  
+} else{
+  if(downsampled){
+    figure_dir_use<- paste0(figure_dir, "downsampled/")
+  }else{
+    figure_dir_use<- figure_dir
+  }
 }
+
 print(paste0("FIGURE DIRECTORY IN USE: ", figure_dir_use))
+if(!dir.exists(figure_dir_use)){dir.create(figure_dir_use, recursive = TRUE)}
+
+## Set analysis dir
+if(downsampled){analysis_dir_use<- paste0(analysis_dir, "downsampled/")}
+if(!downsampled){analysis_dir_use<- paste0(analysis_dir, "all_cells/")}
 ```
+
 
 ## Load in LR results for all analyses (already merged)
 ```{r}
-allLRs<- readRDS(paste0(analysis_dir, "all_LRs.Rds")) 
+allLRs<- readRDS(paste0(analysis_dir_use, "all_LRs.Rds")) 
 
 ## Subset to just sig- by pvalue and prob
 sigLRs<- allLRs[allLRs$pvalue<=0.1 & allLRs$Prob>0,]
@@ -84,6 +111,7 @@ if(just_epn){
   sigLRs<- sigLRs[sigLRs$Subtype == "EPN",]
 }
 
+sigLRs$sender<- as.character(sigLRs$sender); sigLRs$receiver<- as.character(sigLRs$receiver)
 ```
 
 
@@ -158,4 +186,36 @@ my_sankeyPlot(sigLRs_plot,
 ggsave(paste0(figure_dir_use, "Sankey_MajorCellTypes_tumorPrograms.png"), width=6, height=8)
 ```
 
+## Chord diagram of major cell types
+```{r}
+## Simplify tumor cell type
+sigLRs_tmp<- sigLRs
+sigLRs_tmp$sender<- gsub("GIPC-like", "Other", gsub("Neuronal-like", "Other", gsub("Ribo-Active", "Other", sigLRs_tmp$sender)))
+sigLRs_tmp$receiver<- gsub("GIPC-like", "Other", gsub("Neuronal-like", "Other", gsub("Ribo-Active", "Other", sigLRs_tmp$receiver)))
+
+## Simplify sender to major cell type (for immune only)
+sigLRs_tmp$sender<- ifelse(sigLRs_tmp$sender_major != "Tumor", sigLRs$sender_major, sigLRs_tmp$sender)
+sigLRs_tmp$receiver<- ifelse(sigLRs_tmp$receiver_major != "Tumor", sigLRs$receiver_major, sigLRs_tmp$receiver)
+
+
+
+colors_use<- c(immune_colors[names(immune_colors) %in% sigLRs_tmp$sender_major], Tumor="violetred")
+
+sigLRs_tmp<- sigLRs
+sigLRs_tmp$sender<- sigLRs$sender_major
+sigLRs_tmp$receiver<- sigLRs$receiver_major
+
+## Remove interactions between same broad group for clarity
+sigLRs_tmp<- sigLRs_tmp[sigLRs_tmp$sender_major != sigLRs_tmp$receiver_major,]
+nLR_broad<- table(sigLRs_tmp$sender_major, sigLRs_tmp$receiver_major)
+
+
+
+pdf(paste0(figure_dir_use,  "Chord_nLR_broad_noTransparency.pdf"), width=5, height=5)
+chordDiagram(nLR_broad, row.col = colors_use, 
+             grid.col=colors_use, transparency = 0,
+             annotationTrack = c("name","grid"))
+circos.clear()
+dev.off()
+```
 

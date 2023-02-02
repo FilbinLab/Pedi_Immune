@@ -3,6 +3,10 @@ title: "R Notebook"
 output: html_document
 ---
 
+Following cellchat run separately for each pairwise interaction of interest (run on O2), read in results and generate single dataframe for visualization
+
+Note that, originally, this analysis was run on O2 as a single batch for all comparisons. It was later updated so that a separate batch is submitted for each comparison of interest (to reduce run time). For program-wise analysis, both methods were used, but the "final" analysis used is the approach using a separate batch for each comparison of interest- processing of both approaches is shown here for completeness, but the approach using a "single batch" is moved to ARCHIVE. For program-wise analysis downsampled, only the "separate batch" method is used. For celltype-wise analysis, only the "single batch" approach is used.
+
 ```{r}
 library(CellChat)
 library(NMF)
@@ -41,6 +45,7 @@ subtypes<- read.csv("../../../notUploaded/Subtypes.csv")
 
 ## By CellType (CD4, CD8, tumor cell types, myeloid)
 ## Load in each analysis, extract results, and merge
+"single batch" approach
 ```{r}
 ## Settings for extracting results, converting to simple df
 PathwaysRemove<-c("HLA", "COL", "LAMININ", "MHC-I")
@@ -49,7 +54,7 @@ senderCells<- unique(nCellTypes$CellType)
 receiverCells<- unique(nCellTypes$CellType)
 
 ## List of results
-files<- list.files(data_dir) ## adding "byProgram"- other cellChat analyses already processed
+files<- list.files(paste0(data_dir, "byCellType/")) ## adding "byProgram"- other cellChat analyses already processed
 files<- files[!grepl("byProgram", files)]
 
 ## Ran myeloid --> tcell and tcell --> myeloid- this produces same results
@@ -59,19 +64,76 @@ files<- files[files!="myeloid_tcell"]
 ## Cycle through each output,
 all_output<- lapply(files, function(x){
   print(x)
-  cc_output<- readRDS(paste0(data_dir, x))
+  cc_output<- readRDS(paste0(data_dir,"byCellType/", x))
   sigLRs<- Extract_res_allComparisons(cc_output, PathwaysRemove, sigThreshold, senderCells, receiverCells, subtypes)
   sigLRs$analysis<- gsub("all_cellChat_interact_", "", gsub(".Rds", "", x))
   return(sigLRs)
 })
 all_sigLRs<- do.call("rbind", all_output)
 saveRDS(all_sigLRs, file=paste0(analysis_dir, "byCellType/all_LRs.Rds")) ## adding "byProgram" or "byDetailedAnnot"
-write.csv(all_sigLRs, file=paste0(analysis_dir, "byCellType/all_LRsm.csv")) ## adding "byProgram" or "byDetailedAnnot"
+write.csv(all_sigLRs, file=paste0(analysis_dir, "byCellType/all_LRs.csv")) ## adding "byProgram" or "byDetailedAnnot"
 ```
 
+
+
+
+## By Program (CD4, CD8, myeloid programs, tumor celll types)
+"separate batches"- used downstream
+```{r}
+analysis_dir_use<- paste0(analysis_dir, "byProgram/all_cells/")
+data_dir_use<- paste0(data_dir, "byProgram/")
+
+files<-list.files(data_dir_use)
+files<- files[grepl("cellChat_LRs", files)]
+
+all_res<- lapply(files, function(file){
+  readRDS(paste0(data_dir_use, file))
+})
+all_res<- do.call("rbind", all_res)
+
+## Add on subtype
+all_res$Subtype<- as.character(plyr::mapvalues(all_res$sample, subtypes$sample, subtypes$MySubtypes,warn_missing = FALSE))
+
+## rename columns to match other cellchat results
+all_res<- all_res %>% dplyr::rename(Prob=prob, sender=source, receiver=target, pvalue=pval) %>% as.data.frame()
+
+saveRDS(all_res,paste0(analysis_dir_use, "all_LRs.Rds"))
+write.csv(all_res,paste0(analysis_dir_use, "all_LRs.csv"))
+```
+
+
+## By program (downsampled)
+```{r}
+analysis_dir_use<- paste0(analysis_dir, "byProgram/downsampled/")
+data_dir_use<- paste0(data_dir, "byProgram_downsampled/")
+
+files<-list.files(data_dir_use)
+files<- files[grepl("cellChat_LRs", files)]
+
+all_res<- lapply(files, function(file){
+  readRDS(paste0(data_dir_use, file))
+})
+all_res<- do.call("rbind", all_res)
+
+## Add on subtype
+all_res$Subtype<- as.character(plyr::mapvalues(all_res$sample, subtypes$sample, subtypes$MySubtypes,warn_missing = FALSE))
+
+## rename columns to match other cellchat results
+all_res<- all_res %>% dplyr::rename(Prob=prob, sender=source, receiver=target, pvalue=pval) %>% as.data.frame()
+
+saveRDS(all_res,paste0(analysis_dir_use, "all_LRs.Rds"))
+write.csv(all_res,paste0(analysis_dir_use, "all_LRs.csv"))
+```
+
+
+## NO LONGER IN USE
 ## By Program (CD4, CD8, myeloid programs, tumor celll types)
 ## Load in each analysis, extract results, and merge
+"single batch"- not used downstream
 ```{r}
+analysis_dir_use<- paste0(analysis_dir, "byProgram/ARCHIVE/")
+data_dir_use<- paste0(data_dir, "ARCHIVE/")
+
 ## Settings for extracting results, converting to simple df
 PathwaysRemove<-c("HLA", "COL", "LAMININ", "MHC-I")
 sigThreshold<- 1
@@ -79,7 +141,7 @@ senderCells<- unique(nCellTypes$CellType)
 receiverCells<- unique(nCellTypes$CellType)
 
 ## List of results
-files<- list.files(data_dir, pattern="byProgram") ## adding "byProgram"- other cellChat analyses already processed
+files<- list.files(data_dir_use, pattern="byProgram") ## adding "byProgram"- other cellChat analyses already processed
 
 ## Cycle through each output,
 all_output<- lapply(files, function(x){
@@ -90,11 +152,7 @@ all_output<- lapply(files, function(x){
   return(sigLRs)
 })
 all_sigLRs<- do.call("rbind", all_output)
-saveRDS(all_sigLRs, file=paste0(analysis_dir, "byProgram/all_LRs.Rds")) 
-write.csv(all_sigLRs, file=paste0(analysis_dir, "byProgram/all_LRs.csv"))
+saveRDS(all_sigLRs, file=paste0(analysis_dir_use, "all_LRs.Rds")) 
+write.csv(all_sigLRs, file=paste0(analysis_dir_use, "all_LRs.csv"))
 ```
-
-
-
-
 

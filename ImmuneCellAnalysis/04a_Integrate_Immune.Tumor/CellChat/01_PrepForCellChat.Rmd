@@ -251,6 +251,44 @@ all_list_filtered<- lapply(names(all_list_filtered), function(x){
 
 ```
 
+## Generating comparisons file input, updated as of 01/18/22
+Previously 1 batch submitted for each comparisons file on O2. To speed up computational time, updated to submit 1 batch for each pair
+Generate updated comparisons file- all pairs in one file, no analysis name
+```{r}
+all_seurat<- readRDS(paste0(analysis_dir, "seurat_tumor.tcell.myeloid.Rds"))
+
+## Vector of all programs
+programs<- unique(all_seurat$immunePrograms_tumorCellTypes)
+programs<- programs[!grepl("Unclear", programs)]
+
+## All combinations
+pairs<- apply(combn(programs,2),2,paste,collapse='__')
+pairs<- data.frame(celltype1=sapply(pairs, function(x){unlist(strsplit(x, "__"))[1]}),
+                   celltype2=sapply(pairs, function(x){unlist(strsplit(x, "__"))[2]}),
+                   row.names = NULL)
+
+## Get number of cells per program per sample
+nCells<- as.data.frame(table(all_seurat$sample, all_seurat$immunePrograms_tumorCellTypes))
+colnames(nCells)<- c("Sample", "Program", "NCells")
+nCells<- nCells[nCells$NCells>10,c("Sample", "Program")]
+
+## List of samples with programs in each
+sample_list<- as.list(as.character(unique(nCells$Sample)))
+sample_list<- lapply(sample_list, function(x){as.character(nCells$Program[nCells$Sample==x])})
+names(sample_list)<- as.character(unique(nCells$Sample))
+
+## Remove combinations without >10 cells in both celltypes in at least 1 sample
+pairs_pf<- apply(pairs, 1, function(x){
+  sum(unlist(lapply(sample_list, function(s){x["celltype1"] %in% s & x["celltype2"] %in% s})))
+})
+pairs_pf<- pairs[pairs_pf != 0,]
+
+## Write out
+write.table(pairs_pf, file=paste0(analysis_dir, "byProgram/all_comparisons_byPrograms.txt"), col.names = FALSE, quote = FALSE, row.names = FALSE)
+
+```
+
+
 ```{r}
 ## How many cells are actually input into cellchat for each interaction? 
 ## To simplify analysis, remove an interactions that do not have at least 1 sample with >10 cells in both interactor
@@ -283,20 +321,5 @@ comparisons<- comparisons[!comparisons$V1 %in% interactions_remove,]
 write.table(all_comparisons, file=paste0(analysis_dir, "all_comparisons.txt"), col.names = FALSE, quote = FALSE, row.names = FALSE)
 ```
 
-## For testing purposes: subsample from program to determine what effect cell count has on results
-Specifically: IFN_TAM shows high LR --> CD4, but if you divide by total cell count, this effect disappears
-Is the normalization removing technical bias or hiding real biological difference?
-To test: run cellchat on IFN_TAM + CD4 programs, subsampling # of IFN cells
-If no big difference in # LRs across subsampling: no need to normalize (i.e., was hiding biological difference)
-If clearly decreasing # LRs: cell count affects # LR detected, need to normalize (i.e., was removing technical bias)
-```{r}
-## Read in seurat object
-all_seurat<- readRDS(paste0(analysis_dir, "seurat_tumor.tcell.myeloid.Rds"))
 
-## Subset to IFN_TAM + CD4 programs
-cd4_programs<- unique(all_seurat$immunePrograms_tumorCellTypes[grepl("CD4", all_seurat$immunePrograms_tumorCellTypes)])
-seurat_use<- subset(all_seurat, immunePrograms_tumorCellTypes %in% c(cd4_programs, "IFN_TAM"))
-
-## 
-```
 
