@@ -40,7 +40,6 @@ source(nmf_helper)
 rank_use<- 13
 
 ## TenX seurat object. for rank 13- removed 61 myeloid as AC
-rank_use<- 9
 if(rank_use==13){
   myeloid_seurat<- readRDS("analysis/manual_broad_annot/myeloid_seurat_removeAC.byNMF.Rds")
 }else{
@@ -91,6 +90,7 @@ myeloid_colors<- c(myeloid_colors,Inflammatory_Microglia="olivedrab", CD3pos_Mye
 ## UMAP
 ```{r}
 ## Umap by program
+ranks<-13
 all_plots<- lapply(ranks, function(r){
   myeloid_seurat$tmp<- myeloid_seurat@meta.data[[paste0("NMF_rank", r, "_annot")]]
   DimPlot(myeloid_seurat, group.by = "tmp")+
@@ -98,7 +98,19 @@ all_plots<- lapply(ranks, function(r){
     ggtitle(paste0("rank ", r))
 })
 cowplot::plot_grid(plotlist = all_plots, ncol=length(ranks))
-ggsave(paste0(figure_dir, "UMAP_byAnnotProgram_ranks", paste(ranks, collapse = "."), ".png"), 
+ggsave(paste0(figure_dir, "UMAP_byAnnotProgram_ranks", paste(ranks, collapse = "."), ".pdf"), device="pdf",
+       width=6*length(ranks), height=5)
+
+## Umap by program, simplified
+ranks<-13
+all_plots<- lapply(ranks, function(r){
+  myeloid_seurat$tmp<- myeloid_seurat@meta.data[[paste0("NMF_rank", r, "_annot_simplified")]]
+  DimPlot(myeloid_seurat, group.by = "tmp")+
+    scale_color_manual(values=myeloid_colors[names(myeloid_colors) %in% myeloid_seurat$tmp])+
+    ggtitle(paste0("rank ", r))
+})
+cowplot::plot_grid(plotlist = all_plots, ncol=length(ranks))
+ggsave(paste0(figure_dir, "UMAP_byAnnotProgram_ranks", paste(ranks, collapse = "."), "_simplified.pdf"), device="pdf",
        width=6*length(ranks), height=5)
 
 ```
@@ -114,6 +126,16 @@ all_plots<- lapply(ranks, function(r){
 })
 cowplot::plot_grid(plotlist = all_plots, ncol=length(ranks))
 ggsave(paste0(figure_dir, "Barchart_proportionProgram_bySample_ranks", paste(ranks, collapse = "."), ".png"), 
+       width=4*length(ranks), height=4)
+
+## Proportion of program by sample, simplified
+all_plots<- lapply(ranks, function(r){
+  myeloid_seurat$tmp<- myeloid_seurat@meta.data[[paste0("NMF_rank", r, "_annot_simplified")]]
+  my_barchart_programProp(myeloid_seurat, coloring_variable = "tmp", colors=myeloid_colors)+
+    ggtitle(paste0("rank ", r))
+})
+cowplot::plot_grid(plotlist = all_plots, ncol=length(ranks))
+ggsave(paste0(figure_dir, "Barchart_proportionProgram_bySample_ranks", paste(ranks, collapse = "."), "_simplified.png"), 
        width=4*length(ranks), height=4)
 ```
 
@@ -139,7 +161,7 @@ top_markers$cluster<- factor(top_markers$cluster, levels=sort(unique(top_markers
 top_markers<- top_markers[order(top_markers$cluster),]
 
 all_plots<- lapply(ranks, function(r){
-    myeloid_seurat$tmp<- myeloid_seurat@meta.data[[paste0("NMF_rank", r, "_annot")]]
+    myeloid_seurat$tmp<- myeloid_seurat@meta.data[[paste0("NMF_rank", r, "_annot_simplified")]]
     
     ## Remove 1/2/3 distinction
     #myeloid_seurat$tmp<- gsub("1","", gsub("2", "",gsub("Monocytes3", "Monocytes", myeloid_seurat$tmp)))
@@ -153,7 +175,7 @@ all_plots<- lapply(ranks, function(r){
       xlab("")+ylab("")
 })
 cowplot::plot_grid(plotlist = all_plots, ncol=1)
-ggsave(paste0(figure_dir, "DotPlot_expectedMarkers", paste(ranks, collapse = "."),"_withSubsets.png"), width=14, height=4*length(ranks))
+ggsave(paste0(figure_dir, "DotPlot_expectedMarkers", paste(ranks, collapse = "."),"_simplified.pdf"),device="pdf", width=14, height=4*length(ranks))
 ```
 
 ## Density plots by mg/mo/monocyte tam score
@@ -295,3 +317,46 @@ sapply(colnames(myeloid_df)[4:ncol(myeloid_df)], function(x){
 
 
 ```
+
+## Expression of CD3 in: tenX ped, ss2 ped, ss2 adult
+```{r}
+rank_use<-13
+full_myeloid_seurat<- readRDS(paste0("../../",
+                               "01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/pedOnly_nomuv63/",
+                              "myeloid_seurat_noDC.B_harmony.Rds"))
+load(paste0(working_dir, "../../01_Preprocessing/03_PreprocessAdultDatasets/analysis/Preprocess_AdultMyeloid/GBMNeftel_IDHmut2018_myeloid_merged_seurat.Robj"))
+adult_myeloid_seurat<-adult_seurat; rm(adult_seurat)
+tenX_markers<- read.csv(paste0(analysis_dir, "/../../nmf/Myeloid/top_DE_genes_NMF_rank13_annotated.csv"))
+
+## Plot CD3 and CD8 in all
+p1<- FeaturePlot(myeloid_seurat, features=c("CD3G", "CD8A"), cols=c("grey", "red"))
+p2<- FeaturePlot(full_myeloid_seurat, features=c("CD3G", "CD8A"), cols=c("grey", "red"))
+p3<- FeaturePlot(adult_myeloid_seurat, features=c("CD3G", "CD8A"), cols=c("grey", "red"))
+
+cowplot::plot_grid(plotlist=list(p1, p2, p3), ncol=1)
+ggsave(paste0(figure_dir, "UMAP_tenX.full.adultSS2_CD3.pdf"), device="pdf", width=8, height=9)
+
+## Add signature score for program from de novo 10x
+myeloid_seurat<- AddModuleScore(myeloid_seurat, 
+                                      features=list(CD3posMyeloid=tenX_markers$gene[tenX_markers$cluster=="CD3pos_Myeloid"]),
+                                      name = "CD3pos_Myeloid_Signature")
+full_myeloid_seurat<- AddModuleScore(full_myeloid_seurat, 
+                                     features=list(CD3posMyeloid=tenX_markers$gene[tenX_markers$cluster=="CD3pos_Myeloid"]),
+                                     name = "CD3pos_Myeloid_Signature")
+adult_myeloid_seurat<- AddModuleScore(adult_myeloid_seurat, 
+                                      features=list(CD3posMyeloid=tenX_markers$gene[tenX_markers$cluster=="CD3pos_Myeloid"]),
+                                      name = "CD3pos_Myeloid_Signature")
+
+## fix name
+full_myeloid_seurat$CD3pos_Myeloid_Signature<- full_myeloid_seurat$CD3pos_Myeloid_Signature1
+adult_myeloid_seurat$CD3pos_Myeloid_Signature<- adult_myeloid_seurat$CD3pos_Myeloid_Signature1
+myeloid_seurat$CD3pos_Myeloid_Signature<- myeloid_seurat$CD3pos_Myeloid_Signature1
+
+## plot
+p1<-FeaturePlot(myeloid_seurat, features="CD3pos_Myeloid_Signature", cols=c("blue", "orange"))+ggtitle("Ped TenX: CD3pos myeloid signature")
+p2<-FeaturePlot(full_myeloid_seurat, features="CD3pos_Myeloid_Signature", cols=c("blue", "orange"))+ggtitle("Ped SS2: CD3pos myeloid signature")
+p3<-FeaturePlot(adult_myeloid_seurat, features="CD3pos_Myeloid_Signature", cols=c("blue", "orange"))+ggtitle("Adult SS2: CD3pos myeloid signature")
+cowplot::plot_grid(plotlist=list(p1, p2, p3), ncol=3)
+ggsave(paste0(figure_dir, "UMAP_full.adultSS2_CD3posSignature.pdf"), device="pdf", width=12, height=3.5)
+```
+
