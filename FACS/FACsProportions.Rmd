@@ -93,8 +93,23 @@ ggplot(facs_melt, aes(x=reorder(Sample, Order), y=ImmuneCellProportion, fill=Cel
         strip.text.x = element_text(face="bold", color="black"),
         axis.title.y =  element_text(face="bold", color="black", size=12))+
   xlab("")+
-  scale_fill_manual(values=c(TCell="red", Myeloid="blue"))
-#ggsave(paste0(figure_dir, "ImmuneCellFACsPercentage.png"), width=9, height=4)
+  scale_fill_manual(values=c(TCell="cadetblue4", Myeloid="gold3"))
+ggsave(paste0(figure_dir, "ImmuneCellFACsPercentage.png"), width=9, height=4)
+
+## Remove adult samples + BCOR sample(s)
+samples_remove<-c("MUV063", "MV092", "MUV091", "MUV090", "MUV065")
+facs_melt<- facs_melt[!facs_melt$Sample %in% samples_remove,]
+ggplot(facs_melt, aes(x=reorder(Sample, Order), y=ImmuneCellProportion, fill=CellType))+
+  geom_bar(position="stack", stat="identity")+
+  facet_grid(cols=vars(Subtype), scale="free_x", space="free_x")+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle=45, hjust=1, face="bold", color="black"),
+        axis.text.y = element_text(face="bold", color="black"),
+        strip.text.x = element_text(face="bold", color="black"),
+        axis.title.y =  element_text(face="bold", color="black", size=12))+
+  xlab("")+
+  scale_fill_manual(values=c(TCell="cadetblue4", Myeloid="gold3"))
+ggsave(paste0(figure_dir, "ImmuneCellFACsPercentage_NoAdult.BCOR.pdf"),device="pdf", width=6, height=3)
 ```
 
 ## Test if differences are sig with anova
