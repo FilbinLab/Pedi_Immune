@@ -1,0 +1,586 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+Based on CellChat results (run separately by sample, pair of programs), see an upregulation in interactions b/w a few pairs- most clearly IFN TAMs --> tumor (AC mostly)
+
+Some of this may be due to the high total number of cells in the IFN TAM subset- although likely not totally, because samples with high # of IFN TAMs do not generally have a higher number of LRs than samples with a low # of IFN TAMs
+
+To try to determine whether this effect is real: run permutation testing by group. May extend to all combinations, but for now, try just for a few of interest
+
+Approach (using IFN TAMs --> tumor as an example):
+1. for each sample, get number of IFN TAMs 
+2. Randomly select the same number of non IFN-TAM myeloid cells
+3. Run CellChat comparing that subset --> all tumor types (separately, can start with just AC-like)
+4. Get number of significant LRs
+5. Do this 100 times
+6. If the actual number of LRs in the real IFN TAM --> AC is greater than at least 95 of these permutations: congratulations it's significant!
+
+
+```{r}
+library(CellChat)
+library(Seurat) 
+
+options(stringsAsFactors = FALSE)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/04a_Integrate_Immune.Tumor/CellChat/")
+
+
+analysis_dir<- paste0(working_dir, "/analysis/permutation_testing/")
+figure_dir<- paste0(working_dir, "/figures/permutation_testing/")
+for(i in c(analysis_dir, figure_dir)){if(!dir.exists(i)){dir.create(i)}}
+
+
+cellchatHelper<- paste0(base_dir, script_dir, "CellChat_HelperFunctions.R")
+source(cellchatHelper)
+
+setwd(working_dir)
+```
+
+## Load seurat object list
+```{r}
+seurat_obj_list<- readRDS("analysis/seurat_list_bySample.Rds")
+
+## set metadata column to use downstream
+meta_use<- "immunePrograms_tumorCellTypes"
+
+## Remove unclear t cells
+seurat_obj_list<- lapply(seurat_obj_list, function(seurat_obj){
+  subset(seurat_obj, immunePrograms_tumorCellTypes != "Unclear_IFN.Response")
+})
+
+
+
+## Add detailed annot
+seurat_obj_list<- lapply(seurat_obj_list, function(seurat_obj){
+  seurat_obj$detailed_annot<- ifelse(grepl("CD4", seurat_obj$detailed_annotForCellChat), "CD4",
+                                     ifelse(grepl("CD8", seurat_obj$detailed_annotForCellChat), "CD8",
+                                            ifelse(seurat_obj$detailed_annotForCellChat=="Myeloid", "Myeloid", "Tumor")))
+  return(seurat_obj)
+})
+
+
+## Set simplified programs- remove lowly present tumor cell populations
+seurat_obj_list_use<- lapply(seurat_obj_list, function(seurat_obj){
+  nCells<- table(seurat_obj$immunePrograms_tumorCellTypes)
+  programs_use<-names(nCells)[nCells>=10]
+  seurat_use<- subset(seurat_obj, immunePrograms_tumorCellTypes %in% programs_use)
+  return(seurat_use)
+})
+
+
+## Set seurat object to use downstream
+if(meta_use=="immunePrograms_tumorCellTypes"){
+  seurat_obj_list_use<- seurat_obj_list_use
+}else{seurat_obj_list_use<- seurat_obj_list}
+
+seurat_obj_list_use<- lapply(seurat_obj_list, function(seurat_use){
+  seurat_use$meta_use<-seurat_use@meta.data[[meta_use]]
+  return(seurat_use)
+})
+
+
+saveRDS(seurat_obj_list, file="analysis/seurat_list_bySample_editedForInput.Rds")
+```
+
+## Run cellchat split by sample
+This section run on O2
+```{r}
+seurat_obj_list<- readRDS("analysis/seurat_list_bySample_editedForInput.Rds")
+
+## Input settings
+permute_program<-"IFN_TAM"
+stable_program<-"AC-like"
+n_permutations<- 2
+meta_use<- "immunePrograms_tumorCellTypes"
+
+
+## Set metadata to use
+seurat_obj_list<- lapply(seurat_obj_list, function(seurat_use){
+  seurat_use$meta_use<-seurat_use@meta.data[[meta_use]]
+  return(seurat_use)
+})
+
+## Set cell types
+programs<-unique(unlist(lapply(seurat_obj_list, function(x){x$immunePrograms_tumorCellTypes})))
+cd4_types<- programs[grepl("CD4", programs)]
+cd8_types<- programs[grepl("CD8", programs)]
+myeloid_types<- c("IFN_TAM", "Monocytes", "Inflammatory", "Hypoxic_TAM", "Stress_Response", "SEPP1_Mo_TAM")
+tumor_types<-programs[!programs %in% c(cd4_types, cd8_types, myeloid_types)]
+cell_types<- list(CD4=cd4_types, CD8=cd8_types, Myeloid=myeloid_types, Tumor=tumor_types)
+
+## Initialize list to save results
+cellchat_res_permutations<- list()
+
+## Identify major cell type that permutation group occurs in
+major_permute<-names(cell_types[unlist(lapply(cell_types, function(x){ permute_program %in% x}))])
+message(paste0("Permutation testing running for ", permute_program, " (in ", major_permute, ") with ", stable_program))
+
+message("Determining samples that can be used for permutation testing")
+
+## For each sample, determine if it's usable (has enough of both cell groups)
+samples_notEnoughInBroadPermute<- c()
+samples_notEnoughInStableGroup<- c()
+samples_notEnoughInPermuteGroup<-c()
+samples_used<-c()
+
+for(seurat in seurat_obj_list){
+  sample_use<- unique(seurat$sample)
+  
+  ## Skip samples without at least 10 cells in broad permutation group
+  n_cells_inPermuteBroad<- nrow(seurat@meta.data[seurat$detailed_annot==major_permute,])
+  if(n_cells_inPermuteBroad<10){
+    samples_notEnoughInBroadPermute<- c(samples_notEnoughInBroadPermute, sample_use)
+    next
+  }
+  
+  ## skip samples without at least 10 cells in stable group
+  n_cells_inStableProgram<- nrow(seurat@meta.data[seurat$immunePrograms_tumorCellTypes==stable_program,])
+  
+  if(n_cells_inStableProgram<10){
+    samples_notEnoughInStableGroup<- c(samples_notEnoughInStableGroup, sample_use)
+    next
+    }
+  
+  ## Total number of cells in program to test
+  n_cells_inPermuteProgram<- nrow(seurat@meta.data[seurat$immunePrograms_tumorCellTypes==permute_program,])
+  
+  if(n_cells_inPermuteProgram<10){
+    samples_notEnoughInPermuteGroup<- c(samples_notEnoughInPermuteGroup, sample_use)
+    next
+    }
+  samples_used<-c(samples_used, sample_use)
+}
+message(paste0("Samples without enough ", stable_program, ": ", paste(samples_notEnoughInStableGroup, collapse = ", ")))
+message(paste0("Samples without enough ", major_permute, ": ", paste(samples_notEnoughInBroadPermute, collapse = ", ")))
+message(paste0("Samples without enough ", permute_program, ": ", paste(samples_notEnoughInPermuteGroup, collapse = ", ")))
+message(paste0("Samples used for permutation testing: ", paste(samples_used, collapse=", ")))
+
+## Subset to just these samples
+seurat_obj_list<- seurat_obj_list[names(seurat_obj_list) %in% samples_used]
+
+
+for(perm in 1:n_permutations){
+  message(paste0("RUNNING PERMUTATION NUMBER ", perm, " OF ", n_permutations))
+  
+  message("STEP 1: randomly select cells from same BROAD group as permutation group")
+  
+  permute_sample_list<- lapply(seurat_obj_list, function(seurat){
+    ## Get number of cells in permute program
+    n_cells_inPermuteProgram<- nrow(seurat@meta.data[seurat$immunePrograms_tumorCellTypes==permute_program,])
+    
+    ## Get cells eligible for permutation- same broad cell type as program to permute
+    seurat_permute<- subset(seurat, detailed_annot==major_permute )
+    
+    ## Sample cells eligible for permutation, equal to total number of cells in program to test (with replacement)
+    set.seed(perm)
+    #permuted_cells<-sample(colnames(seurat_permute), size=n_cells_inPermuteProgram, replace = FALSE)
+    permuted_cells<- colnames(seurat_permute)[seurat_permute$meta_use==permute_program]
+    
+    ## Create count matrix/metadata- may be duplicated
+    cm<- seurat_permute@assays$RNA@data
+    cm_permute<- cm[,permuted_cells]
+    meta_permute<- seurat_permute@meta.data[permuted_cells,]
+    colnames(cm_permute)<- rownames(meta_permute) ## rownames in meta renamed when duplicated- change colnames in cm to match
+    
+    ## Set meta so they're all "IFN TAM" (or whatever you're permuting)
+    meta_permute$meta_use<-permute_program
+    
+    ## Combine with the other group to compare (not permuted)
+    seurat_stable<- subset(seurat, immunePrograms_tumorCellTypes==stable_program)
+    cm_final<- cbind(cm_permute, seurat_stable@assays$RNA@data)
+    meta_final<- rbind(meta_permute, seurat_stable@meta.data)
+    
+    return(list(cm=cm_final, meta=meta_final))
+    
+  })
+
+
+  message("STEP 2: Create cellchat objects")
+  ## Create cellchat object
+  cellchat_list<- lapply(permute_sample_list, function(cm_meta){
+    cellchat <- createCellChat(object = cm_meta$cm, 
+                             meta = cm_meta$meta, 
+                             group.by = "meta_use")
+    return(cellchat)
+  })
+  
+  
+  ## Set database
+  cellchat_list<- lapply(cellchat_list, function(cellchat){
+    cellchat@DB <-CellChatDB.human 
+    return(cellchat)
+  })
+  
+  
+  # subset the expression data of signaling genes for saving computation cost
+  cellchat_list<- lapply(cellchat_list, function(cellchat){
+    return(subsetData(cellchat))
+  })
+  
+  message("STEP 3: Run CellChat")
+  ## Find overexpressed genes
+  cellchat_list<- lapply(cellchat_list, function(cellchat){
+    identifyOverExpressedGenes(cellchat)
+  })
+  
+  cellchat_list<- lapply(cellchat_list, function(cellchat){
+    identifyOverExpressedInteractions(cellchat)
+  })
+  
+  ## Compute the communication probability and infer ce llular communication network
+  cellchat_list<- lapply(names(cellchat_list), function(sample){
+      message(sample)
+      cellchat<- cellchat_list[[sample]]
+     computeCommunProb(cellchat)
+  })
+  names(cellchat_list)<- names(permute_sample_list)
+  
+  cellchat_list<- lapply(cellchat_list, function(cellchat){
+    filterCommunication(cellchat, min.cells = 10)
+  })
+  
+  ## Infer the cell-cell communication at a signaling pathway level
+  message("Infer the cell-cell communication at a signaling pathway level")
+  cellchat_list<- lapply(cellchat_list, function(cellchat){
+    computeCommunProbPathway(cellchat)
+  })
+  
+  ## Calculate the aggregated cell-cell communication network
+  message("Calculate the aggregated cell-cell communication network")
+  cellchat_list<- lapply(cellchat_list, function(cellchat){
+    aggregateNet(cellchat)
+  })
+  
+  message("STEP 4: Extract results")  
+  PathwaysRemove<-c("HLA", "COL", "LAMININ", "MHC-I")
+  sigLRs_list<- lapply(names(cellchat_list), function(sample){
+    cellchat<- cellchat_list[[sample]]
+    if(length(cellchat@netP$pathways)>1){
+      sigLRs<-  subsetCommunication(cellchat, thresh = 1)
+      sigLRs<- sigLRs[!sigLRs$pathway_name %in% PathwaysRemove,]
+      return(sigLRs)
+    }else{print(paste0("No LRs for ", sample)); return(NULL)}
+  })
+  names(sigLRs_list)<-names(cellchat_list)
+  sigLRs_list<- sigLRs_list[unlist(lapply(sigLRs_list, function(x){!is.null(x)}))]
+  
+  ## Add major cell type to LRs 
+  sigLRs_list<- lapply(sigLRs_list, function(sigLRs){
+    sigLRs$major_sender<- sapply(sigLRs$source, function(x){names(cell_types[unlist(lapply(cell_types, function(y){x %in% y}))])})
+    sigLRs$major_receiver<- sapply(sigLRs$target, function(x){names(cell_types[unlist(lapply(cell_types, function(y){x %in% y}))])})
+    return(sigLRs)
+  })
+
+  ## Add on sample and collapse to DF
+  sigLRs_list<- lapply(names(sigLRs_list), function(sample){
+    tmp<- sigLRs_list[[sample]]
+    tmp$sample<- sample
+    return(tmp)
+  })
+  sigLRs_df<- do.call("rbind", sigLRs_list)
+  cellchat_res_permutations[[paste0("PN_",perm)]]<- sigLRs_df
+  message("-----------------------------------------")
+  message("                                         ")
+  }
+
+
+
+#saveRDS(cellchat_list, file=paste0(analysis_dir, "test_twoPermute_IFN.AC.Rds")) 
+#write.csv(sigLRs_df, file=paste0(analysis_dir, "test_twoPermute_IFN.AC_res.csv" ))
+```
+
+
+## Load in permutation results and check whether they are sig different from actual groups 
+```{r}
+## Load actual LRs
+actual_LR<- read.csv(paste0(analysis_dir, "../byProgram/all_LRs.csv"))
+actual_LR<- actual_LR[actual_LR$pvalue<0.1,]
+
+## Set comparison to check
+comparison<- c("IFN_TAM", "AC-like")
+
+## Subset actual LR to desired sender/receiver
+actual_LR<- actual_LR[actual_LR$sender==comparison[1] & actual_LR$receiver==comparison[2],]
+
+## List of files
+data_dir<- paste0(analysis_dir,paste(comparison, collapse = "."), "/")
+files<- list.files(data_dir)
+
+## Read res in
+all_res<- lapply(files, function(file){
+  LR<- readRDS(paste0(data_dir, file))
+  return(LR)
+})
+
+## Subset to sig, unique interactions
+all_sig_res<- lapply(all_res, function(pr){
+  pr<- pr[pr$pval<0.1,]
+  pr<- pr[pr$source != pr$target, ]
+  pr$UniqueID<-paste0(pr$source, pr$target, pr$interaction_name)
+  pr<- pr[!duplicated(pr$UniqueID),]
+  return(pr)
+})
+
+## histogram of number of
+hist(unlist(lapply(all_sig_res, function(x){sum(x$source==comparison[1] & x$target==comparison[2])})))
+```
+
+```{r}
+actual<- read.csv("/Users/jlabelle/Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/04a_Integrate_Immune.Tumor/CellChat/analysis/byProgram/all_LRs.csv")
+actual_sig<- actual[actual$pvalue<0.1,]
+
+```
+
+
+```{r}
+
+seurat_obj_list<- readRDS("analysis/seurat_list_bySample_editedForInput.Rds")
+
+## Input settings
+permute_program<-"IFN_TAM"
+stable_program<-"AC-like"
+n_permutations<- 2
+meta_use<- "immunePrograms_tumorCellTypes"
+
+
+## Set metadata to use
+seurat_obj_list<- lapply(seurat_obj_list, function(seurat_use){
+  seurat_use$meta_use<-seurat_use@meta.data[[meta_use]]
+  return(seurat_use)
+})
+
+## Set cell types
+programs<-unique(unlist(lapply(seurat_obj_list, function(x){x$immunePrograms_tumorCellTypes})))
+cd4_types<- programs[grepl("CD4", programs)]
+cd8_types<- programs[grepl("CD8", programs)]
+myeloid_types<- c("IFN_TAM", "Monocytes", "Inflammatory", "Hypoxic_TAM", "Stress_Response", "SEPP1_Mo_TAM")
+tumor_types<-programs[!programs %in% c(cd4_types, cd8_types, myeloid_types)]
+cell_types<- list(CD4=cd4_types, CD8=cd8_types, Myeloid=myeloid_types, Tumor=tumor_types)
+
+## Initialize list to save results
+cellchat_res_permutations<- list()
+
+## Identify major cell type that permutation group occurs in
+major_permute<-names(cell_types[unlist(lapply(cell_types, function(x){ permute_program %in% x}))])
+message(paste0("Permutation testing running for ", permute_program, " (in ", major_permute, ") with ", stable_program))
+
+message("Determining samples that can be used for permutation testing")
+
+## For each sample, determine if it's usable (has enough of both cell groups)
+samples_notEnoughInBroadPermute<- c()
+samples_notEnoughInStableGroup<- c()
+samples_notEnoughInPermuteGroup<-c()
+samples_used<-c()
+
+for(seurat in seurat_obj_list){
+  sample_use<- unique(seurat$sample)
+  
+  ## Skip samples without at least 10 cells in broad permutation group
+  n_cells_inPermuteBroad<- nrow(seurat@meta.data[seurat$detailed_annot==major_permute,])
+  if(n_cells_inPermuteBroad<10){
+    samples_notEnoughInBroadPermute<- c(samples_notEnoughInBroadPermute, sample_use)
+    next
+  }
+  
+  ## skip samples without at least 10 cells in stable group
+  n_cells_inStableProgram<- nrow(seurat@meta.data[seurat$immunePrograms_tumorCellTypes==stable_program,])
+  
+  if(n_cells_inStableProgram<10){
+    samples_notEnoughInStableGroup<- c(samples_notEnoughInStableGroup, sample_use)
+    next
+    }
+  
+  ## Total number of cells in program to test
+  n_cells_inPermuteProgram<- nrow(seurat@meta.data[seurat$immunePrograms_tumorCellTypes==permute_program,])
+  
+  if(n_cells_inPermuteProgram<10){
+    samples_notEnoughInPermuteGroup<- c(samples_notEnoughInPermuteGroup, sample_use)
+    next
+    }
+  samples_used<-c(samples_used, sample_use)
+}
+message(paste0("Samples without enough ", stable_program, ": ", paste(samples_notEnoughInStableGroup, collapse = ", ")))
+message(paste0("Samples without enough ", major_permute, ": ", paste(samples_notEnoughInBroadPermute, collapse = ", ")))
+message(paste0("Samples without enough ", permute_program, ": ", paste(samples_notEnoughInPermuteGroup, collapse = ", ")))
+message(paste0("Samples used for permutation testing: ", paste(samples_used, collapse=", ")))
+
+## Subset to just these samples
+seurat_obj_list<- seurat_obj_list[names(seurat_obj_list) %in% samples_used]
+
+
+
+  
+  message("STEP 1: randomly select cells from same BROAD group as permutation group")
+  
+  permute_sample_list<- lapply(seurat_obj_list, function(seurat){
+    permuted_cells<- colnames(seurat)[seurat$meta_use==permute_program]
+    
+    ## Create count matrix/metadata- may be duplicated
+    cm<- seurat@assays$RNA@data
+    cm_permute<- cm[,permuted_cells]
+    meta_permute<- seurat@meta.data[permuted_cells,]
+    colnames(cm_permute)<- rownames(meta_permute) ## rownames in meta renamed when duplicated- change colnames in cm to match
+    
+    ## Set meta so they're all "IFN TAM" (or whatever you're permuting)
+    meta_permute$meta_use<-permute_program
+    
+    ## Combine with the other group to compare (not permuted)
+    seurat_stable<- subset(seurat, immunePrograms_tumorCellTypes==stable_program)
+    cm_final<- cbind(cm_permute, seurat_stable@assays$RNA@data)
+    meta_final<- rbind(meta_permute, seurat_stable@meta.data)
+    
+    return(list(cm=cm_final, meta=meta_final))
+    
+  })
+  
+
+  message("STEP 2: Create cellchat objects")
+  ## Create cellchat object
+  cellchat_list<- lapply(permute_sample_list, function(cm_meta){
+    cellchat <- createCellChat(object = cm_meta$cm, 
+                             meta = cm_meta$meta, 
+                             group.by = "meta_use")
+    return(cellchat)
+  })
+  
+  
+  ## Set database
+  cellchat_list<- lapply(cellchat_list, function(cellchat){
+    cellchat@DB <-CellChatDB.human 
+    return(cellchat)
+  })
+  
+  
+  # subset the expression data of signaling genes for saving computation cost
+  cellchat_list<- lapply(cellchat_list, function(cellchat){
+    return(subsetData(cellchat))
+  })
+  
+  message("STEP 3: Run CellChat")
+  ## Find overexpressed genes
+  cellchat_list<- lapply(cellchat_list, function(cellchat){
+    identifyOverExpressedGenes(cellchat)
+  })
+  
+  cellchat_list<- lapply(cellchat_list, function(cellchat){
+    identifyOverExpressedInteractions(cellchat)
+  })
+  
+  ## Compute the communication probability and infer ce llular communication network
+  cellchat_list<- lapply(names(cellchat_list), function(sample){
+      message(sample)
+      cellchat<- cellchat_list[[sample]]
+     computeCommunProb(cellchat)
+  })
+  names(cellchat_list)<- names(permute_sample_list)
+  
+  cellchat_list<- lapply(cellchat_list, function(cellchat){
+    filterCommunication(cellchat, min.cells = 10)
+  })
+  
+  ## Infer the cell-cell communication at a signaling pathway level
+  message("Infer the cell-cell communication at a signaling pathway level")
+  cellchat_list<- lapply(cellchat_list, function(cellchat){
+    computeCommunProbPathway(cellchat)
+  })
+  
+  ## Calculate the aggregated cell-cell communication network
+  message("Calculate the aggregated cell-cell communication network")
+  cellchat_list<- lapply(cellchat_list, function(cellchat){
+    aggregateNet(cellchat)
+  })
+  
+  message("STEP 4: Extract results")  
+  PathwaysRemove<-c("HLA", "COL", "LAMININ", "MHC-I")
+  sigLRs_list<- lapply(names(cellchat_list), function(sample){
+    cellchat<- cellchat_list[[sample]]
+    if(length(cellchat@netP$pathways)>1){
+      sigLRs<-  subsetCommunication(cellchat, thresh = 1)
+      sigLRs<- sigLRs[!sigLRs$pathway_name %in% PathwaysRemove,]
+      return(sigLRs)
+    }else{print(paste0("No LRs for ", sample)); return(NULL)}
+  })
+  names(sigLRs_list)<-names(cellchat_list)
+  sigLRs_list<- sigLRs_list[unlist(lapply(sigLRs_list, function(x){!is.null(x)}))]
+  
+  ## Add major cell type to LRs 
+  sigLRs_list<- lapply(sigLRs_list, function(sigLRs){
+    sigLRs$major_sender<- sapply(sigLRs$source, function(x){names(cell_types[unlist(lapply(cell_types, function(y){x %in% y}))])})
+    sigLRs$major_receiver<- sapply(sigLRs$target, function(x){names(cell_types[unlist(lapply(cell_types, function(y){x %in% y}))])})
+    return(sigLRs)
+  })
+
+  ## Add on sample and collapse to DF
+  sigLRs_list<- lapply(names(sigLRs_list), function(sample){
+    tmp<- sigLRs_list[[sample]]
+    tmp$sample<- sample
+    return(tmp)
+  })
+  sigLRs_df<- do.call("rbind", sigLRs_list)
+  cellchat_res_permutations[[paste0("PN_",perm)]]<- sigLRs_df
+  message("-----------------------------------------")
+  message("                                         ")
+  }
+```
+
+
+
+
+
+
+
+
+## Load in cellchat results and plot
+```{r}
+## Load LRs
+meta_use<- "detailed_annot"
+sigLRs<- read.csv(paste0(analysis_dir, "test_twoPermute_IFN.AC_res.csv" ), row.names = "X")
+
+## Subset to sig
+sigLRs<- sigLRs[sigLRs$pval<0.1 & sigLRs$prob>0,]
+
+## subset to unique LRs in pair
+sigLRs$UniqueID<- paste0(sigLRs$source, ".to.", sigLRs$target, "_", sigLRs$interaction_name)
+sigLRs<- sigLRs[!duplicated(sigLRs$UniqueID),]
+
+## Get number of interactions per pair
+bd<- as.data.frame(table(sigLRs$source, sigLRs$target))
+colnames(bd)<- c("sender", "receiver", "nLR")
+
+## Add major sender/receiver
+bd$major_sender<- as.character(plyr::mapvalues(bd$sender, sigLRs$source, sigLRs$major_sender, warn_missing = FALSE))
+bd$major_receiver<- as.character(plyr::mapvalues(bd$receiver, sigLRs$target, sigLRs$major_receiver, warn_missing = FALSE))
+
+
+sigLRs_plot<- bd
+
+## Order cell types by major cell type
+ordered_celltypes<- gsub("\n", "_", c(cd4_types, cd8_types, myeloid_types, tumor_types))
+sigLRs_plot$receiver.plot<- factor(sigLRs_plot$receiver, levels=ordered_celltypes[ordered_celltypes %in% sigLRs_plot$receiver])
+sigLRs_plot$sender.plot<- factor(sigLRs_plot$sender, levels=ordered_celltypes[ordered_celltypes %in% sigLRs_plot$sender])
+#sigLRs_plot$major_sender<- gsub("CD4", "Immune", gsub("CD8", "Immune",gsub("Myeloid", "Immune", sigLRs_plot$major_sender)))
+
+
+## Remove interactions between tumor cells
+sigLRs_plot<- sigLRs_plot[!(sigLRs_plot$major_sender=="Tumor" & sigLRs_plot$major_receiver=="Tumor"),]
+
+## Plot with my helper function
+sigLRs_plot$nLRs_norm<- sigLRs_plot$nLR
+#my_sankeyPlot(sigLRs_plot)
+
+
+ggplot(sigLRs_plot, aes(x=sender, y=receiver, fill=nLR))+
+  geom_tile()+
+  scale_fill_gradient2(low="purple", mid ="white", high="yellow", midpoint = 20)+
+  theme(axis.text.x = element_text(angle=45, hjust=1))+
+  facet_grid(rows=vars(major_receiver),cols=vars(major_sender), space="free", scales = "free")+
+  geom_text(aes(label = nLR))
+ggsave(paste0(figure_dir, "nSigLRs_by", meta_use, ".png"), width=5, height=4)
+```
+

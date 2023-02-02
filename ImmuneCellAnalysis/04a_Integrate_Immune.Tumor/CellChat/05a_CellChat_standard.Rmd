@@ -1,0 +1,156 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+Run CellChat according to "standard" vignette (https://htmlpreview.github.io/?https://github.com/sqjin/CellChat/blob/master/tutorial/CellChat-vignette.html#part-ii-inference-of-cell-cell-communication-network)
+
+For other CelLChat analyses, each pairwise comparison (e.g., Cytotoxic vs Memory) is run separately. This allows for identification of LRs that are not necessarily specific to that pair, which may be better for L/R identification. However, the standard approach, while it may leave out some of these non-specific LRs, may be better for looking at overall interaction networks.
+
+```{r}
+library(CellChat)
+library(Seurat) 
+
+options(stringsAsFactors = FALSE)
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/04a_Integrate_Immune.Tumor/CellChat/")
+
+
+analysis_dir<- paste0(working_dir, "/analysis/standardCellChat/")
+figure_dir<- paste0(working_dir, "/figures/standardCellChat/")
+for(i in c(analysis_dir, figure_dir)){if(!dir.exists(i)){dir.create(i)}}
+
+
+cellchatHelper<- paste0(base_dir, script_dir, "CellChat_HelperFunctions.R")
+source(cellchatHelper)
+
+setwd(working_dir)
+```
+
+## Load seurat object
+```{r}
+seurat_obj<- readRDS("analysis/seurat_tumor.tcell.myeloid.Rds")
+
+## Remove unclear t cells
+seurat_obj<- subset(seurat_obj, immunePrograms_tumorCellTypes != "Unclear_IFN.Response")
+
+
+## Add detailed annot
+seurat_obj$detailed_annot<- ifelse(grepl("CD4", seurat_obj$detailed_annotForCellChat), "CD4",
+                                   ifelse(grepl("CD8", seurat_obj$detailed_annotForCellChat), "CD8",
+                                          ifelse(seurat_obj$detailed_annotForCellChat=="Myeloid", "Myeloid", "Tumor")))
+
+
+## Set simplified programs- remove lowly present tumor cell populations
+nCells<- table(seurat_obj$immunePrograms_tumorCellTypes)
+programs_use<-names(nCells)[nCells>=30]
+seurat_use<- subset(seurat_obj, immunePrograms_tumorCellTypes %in% programs_use)
+
+## set metadata column to use downstream
+meta_use<- "immunePrograms_tumorCellTypes"
+
+## Set seurat object to use downstream
+if(meta_use=="immunePrograms_tumorCellTypes"){
+  seurat_use<- seurat_use
+}else{seurat_use<- seurat_obj}
+seurat_use$meta_use<-seurat_use@meta.data[[meta_use]]
+
+## Set cell types
+cd4_types<- unique(sigLRs$source)[grepl("CD4", unique(sigLRs$source))]
+cd8_types<- unique(sigLRs$source)[grepl("CD8", unique(sigLRs$source))]
+myeloid_types<- c("IFN_TAM", "Monocytes", "Inflammatory", "Hypoxic_TAM", "Stress_Response", "SEPP1_Mo_TAM")
+tumor_types<- unique(sigLRs$source)[!unique(sigLRs$source) %in% c(cd4_types, cd8_types, myeloid_types)]
+cell_types<- list(CD4=cd4_types, CD8=cd8_types, Myeloid=myeloid_types, Tumor=tumor_types)
+```
+
+## Run cellchat with all samples together
+```{r}
+## Create cellchat object
+cellchat <- createCellChat(object = seurat_use@assays$RNA@counts, 
+                           meta = seurat_use@meta.data, 
+                           group.by = "meta_use")
+
+## Set database
+cellchat@DB <-CellChatDB.human 
+
+# subset the expression data of signaling genes for saving computation cost
+cellchat <- subsetData(cellchat)
+
+## Find overexpressed genes
+cellchat <- identifyOverExpressedGenes(cellchat)
+cellchat <- identifyOverExpressedInteractions(cellchat)
+
+## Compute the communication probability and infer cellular communication network
+cellchat <- computeCommunProb(cellchat)
+cellchat <- filterCommunication(cellchat, min.cells = 10)
+
+## Infer the cell-cell communication at a signaling pathway level
+cellchat <- computeCommunProbPathway(cellchat)
+
+## Calculate the aggregated cell-cell communication network
+cellchat <- aggregateNet(cellchat)
+
+## Extract results
+PathwaysRemove<-c("HLA", "COL", "LAMININ", "MHC-I")
+sigLRs<-  subsetCommunication(cellchat, thresh = 1)
+sigLRs<- sigLRs[!sigLRs$pathway_name %in% PathwaysRemove,]
+
+## Add major cell type to LRs
+sigLRs$major_sender<- sapply(sigLRs$source, function(x){names(cell_types[unlist(lapply(cell_types, function(y){x %in% y}))])})
+sigLRs$major_receiver<- sapply(sigLRs$target, function(x){names(cell_types[unlist(lapply(cell_types, function(y){x %in% y}))])})
+
+write.csv(sigLRs, file=paste0(analysis_dir, "standardCellChat_sigLRs_by",meta_use, ".csv" ))
+saveRDS(cellchat, file=paste0(analysis_dir, "standardCellChat_res_by", meta_use,".Rds"))
+```
+
+
+```{r}
+## Load LRs
+meta_use<- "immunePrograms_tumorCellTypes"
+sigLRs<- read.csv(paste0(analysis_dir, "standardCellChat_sigLRs_by",meta_use, ".csv" ), row.names = "X")
+
+## Subset to sig
+sigLRs<- sigLRs[sigLRs$pval<0.1,]
+
+## Check that no LRs are duplicated
+sigLRs$UniqueID<- paste0(sigLRs$source, ".to.", sigLRs$target, "_", sigLRs$interaction_name)
+nrow(sigLRs)==length(unique(sigLRs$UniqueID))
+
+## Get number of interactions per pair
+bd<- as.data.frame(table(sigLRs$source, sigLRs$target))
+colnames(bd)<- c("sender", "receiver", "nLR")
+
+## Add major sender/receiver
+bd$major_sender<- as.character(plyr::mapvalues(bd$sender, sigLRs$source, sigLRs$major_sender, warn_missing = FALSE))
+bd$major_receiver<- as.character(plyr::mapvalues(bd$receiver, sigLRs$target, sigLRs$major_receiver, warn_missing = FALSE))
+
+
+sigLRs_plot<- bd
+
+## Order cell types by major cell type
+ordered_celltypes<- gsub("\n", "_", c(cd4_types, cd8_types, myeloid_types, tumor_types))
+sigLRs_plot$receiver.plot<- factor(sigLRs_plot$receiver, levels=ordered_celltypes[ordered_celltypes %in% sigLRs_plot$receiver])
+sigLRs_plot$sender.plot<- factor(sigLRs_plot$sender, levels=ordered_celltypes[ordered_celltypes %in% sigLRs_plot$sender])
+#sigLRs_plot$major_sender<- gsub("CD4", "Immune", gsub("CD8", "Immune",gsub("Myeloid", "Immune", sigLRs_plot$major_sender)))
+
+
+## Remove interactions between tumor cells
+#sigLRs_plot<- sigLRs_plot[!(sigLRs_plot$major_sender=="Tumor" & sigLRs_plot$major_receiver=="Tumor"),]
+
+## Plot with my helper function
+sigLRs_plot$nLRs_norm<- sigLRs_plot$nLR
+my_sankeyPlot(sigLRs_plot)
+
+
+ggplot(sigLRs_plot, aes(x=sender, y=receiver, fill=nLR))+
+  geom_tile()+
+  scale_fill_gradient2(low="purple", mid ="white", high="yellow", midpoint = 7)+
+  theme(axis.text.x = element_text(angle=45, hjust=1))+
+  facet_grid(rows=vars(major_receiver),cols=vars(major_sender), space="free", scales = "free")+
+  geom_text(aes(label = nLR))
+```
+
