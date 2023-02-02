@@ -178,6 +178,23 @@ ggplot(df_bd, aes(x=Subtype, y=CellProportion, fill=CellType))+
   xlab("")+ ylab("Proportion of cell type")+
   scale_fill_manual(values=c(immune_colors[names(immune_colors) %in% unique(df_bd$CellType)]))
 ggsave(paste0(figure_dir, "Immune_broadAnnot_BreakdownAcrossAllSubtypes.pdf"), device="pdf", width=4, height=4)
+
+## Breakdown of myeloid/tcell/dc/bcell/monocytes by subtype
+seurat_plot$plotting<- gsub("CD4", "Tcell", gsub("CD8", "Tcell", seurat_plot$plotting))
+
+df_bd<- as.data.frame(table(seurat_plot$NiceSubtype, seurat_plot$plotting))
+colnames(df_bd)<- c("Subtype", "CellType", "NCells")
+df_bd <- df_bd %>% group_by(Subtype) %>% mutate(CellProportion=NCells/sum(NCells)) %>% as.data.frame()
+df_bd$CellType<- factor(df_bd$CellType, levels=rev(c("Tcell", "Myeloid", "DC","Monocyte", "BCell")))
+
+ggplot(df_bd, aes(x=Subtype, y=CellProportion, fill=CellType))+
+  geom_bar(position = "stack", stat="identity") + 
+  theme_classic()+
+  bargraph_bd_theme()+
+  xlab("")+ ylab("Proportion of cell type")+
+  scale_fill_manual(values=c(immune_colors[names(immune_colors) %in% unique(df_bd$CellType)]))
+ggsave(paste0(figure_dir, "Immune_broadAnnot.withDC.Mono.BC_BreakdownAcrossAllSubtypes.pdf"), device="pdf", width=4, height=4)
+
 ```
 
 
@@ -233,6 +250,20 @@ ggsave(paste0(figure_dir, "Myeloid_Sample.png"), width=6.5, height=5.5)
 seurat_plot<- myeloid_seurat_noDC.Bcell; seurat_plot$plotting<- seurat_plot$sampleid
 DimPlot(seurat_plot, group.by = "plotting", label = FALSE) %>% umap_theme(colors=colors_use)
 ggsave(paste0(figure_dir, "Myeloid_Sample_noDC.Bcell.png"), width=6.5, height=5.5)
+
+## As pf 2/2/23- updating sample IDs to simplify and de-identify. use updated IDs here
+## Both T cell /myeloid
+updated_ids<- read.csv("../..//notUploaded/ImmuneDraft_Rebecca/updatedSampleIDs.csv")
+immune_seurat$updated_sampleID<- as.character(plyr::mapvalues(immune_seurat$sample, updated_ids$Sample, updated_ids$NewSampleID, warn_missing = FALSE))
+samples_use<- unique(updated_ids$NewSampleID)[unique(updated_ids$NewSampleID) %in% immune_seurat$updated_sampleID]
+colors_use<- samples_use
+colors_use<- distinctColorPalette(length(samples_use))
+names(colors_use)<-samples_use
+immune_seurat$updated_sampleID<- factor(immune_seurat$updated_sampleID, 
+                                        levels=samples_use)
+seurat_plot<- immune_seurat; seurat_plot$plotting<- seurat_plot$updated_sampleID
+DimPlot(seurat_plot, group.by = "plotting", label = FALSE) %>% umap_theme(colors=colors_use)
+ggsave(paste0(figure_dir, "TCellMyeloid_Sample_updatedIDs.pdf"), device="pdf", width=6, height=6.5)
 
 ```
 
@@ -400,7 +431,7 @@ ggplot(df_bd, aes(x=Subtype, y=CellProportion, fill=CellType))+
   xlab("")+ ylab("Percentage of cell types")+
   scale_fill_manual(values=immune_colors[names(immune_colors) %in% unique(df_bd$CellType)])+
   facet_grid(cols=vars(Age), scale="free_x", space="free_x")
-ggsave(paste0(figure_dir, "CellTypeBreakdownAcrossSubtypes_WithCycling_WithAdult.png"), width=5, height=4)
+ggsave(paste0(figure_dir, "CellTypeBreakdownAcrossSubtypes_WithCycling_WithAdult.pdf"),device="pdf", width=5, height=4)
 ```
 
 
