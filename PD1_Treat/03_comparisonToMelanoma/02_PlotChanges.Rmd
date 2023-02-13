@@ -1,0 +1,162 @@
+---
+title: "Plot anti PD1 treated melanoma"
+author: "Jenna LaBelle"
+output: html_document
+---
+
+## Plot expected microenvironmental changes in processed melanoma PD1- based on changes observed in glioma
+
+```{r}
+library(Seurat) 
+
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/PD1_Treat/03_comparisonToMelanoma/")
+
+analysis_dir<- paste0(working_dir, "/analysis/plot/")
+figure_dir<- paste0(working_dir, "/figures/plot/")
+data_dir<- paste0(working_dir, "analysis/preprocess/")
+full_cohort_dir<- "../../ImmuneCellAnalysis/"
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(preprocessing)
+source(nmf_helper)
+source(paste0(base_dir, script_dir, "seurat_transferAnchors_helper.R"))
+
+immune_colors<- readRDS(paste0(full_cohort_dir, "/plot_colors/ImmuneCell.celltypes.Rds"))
+
+```
+
+## Load processed seurat objects
+```{r}
+cd8_seurat<- readRDS(paste0(data_dir, "cd8_seurat.Rds"))
+cd4_seurat<- readRDS(paste0(data_dir, "cd4_seurat.Rds"))
+
+glioma_cd4_seurat<- readRDS("../03_comparisonToAdult/analysis/Merge/cd4_seurat.Rds")
+```
+
+
+## Expression of dysfunctional markers  by treatment/response
+```{r}
+GOI<- c("PDCD1", "TIGIT", "CTLA4", "GZMB", "SELPLG", "PTGER2", "KLRB1", "GNLY")
+
+## All cells
+  ## Create pseudobulking variable
+  cd8_seurat$pb<- paste0(cd8_seurat$treatment, "_", cd8_seurat$response)
+  pb<- pseudobulk_byVariable(cd8_seurat, cd8_seurat@meta.data, "pb")
+  
+  pb_center<- NormCenter(pb)$center_data
+  
+  ## Plot
+  myHeatmap(pb_center, GOI=GOI, min.value = -3, max.value = 3, facetWrap = TRUE, orderSubtypes = c("Pre", "Post")) +
+    scale_fill_gradient2(high="red", low="blue", mid="white", name="Centered log2(TPM)")
+  ggsave(paste0(figure_dir, "CD8_dysfunctionalGenes_byTreatment.Response.pdf"),device="pdf", width=6, height=5)
+  
+## Predysfunctional only- based on nature 2020 signatures
+  ## subset to predys
+  predys<- subset(cd8_seurat, nature_2020_max=="predysfunctional")
+  
+  ## Create pseudobulking variable
+  predys$pb<- paste0(predys$treatment, "_", predys$response)
+  pb<- pseudobulk_byVariable(predys, predys@meta.data, "pb")
+  
+  pb_center<- NormCenter(pb)$center_data
+  
+  ## Plot
+  myHeatmap(pb_center, GOI=GOI, min.value = -3, max.value = 3, facetWrap = TRUE, orderSubtypes = c("Pre", "Post")) +
+    scale_fill_gradient2(high="red", low="blue", mid="white", name="Centered log2(TPM)")
+  ggsave(paste0(figure_dir, "CD8Predysfunctional_dysfunctionalGenes_byTreatment.Response.pdf"),device="pdf", width=6, height=5)
+  
+## Predysfunctional only- based on gloioma signatures
+  ## subset to predys
+  predys<- subset(cd8_seurat, glioma_max=="glioma_Predysfunctional")
+  
+  ## Create pseudobulking variable
+  predys$pb<- paste0(predys$treatment, "_", predys$response)
+  pb<- pseudobulk_byVariable(predys, predys@meta.data, "pb")
+  
+  pb_center<- NormCenter(pb)$center_data
+  
+  ## Plot
+  myHeatmap(pb_center, GOI=GOI, min.value = -3, max.value = 3, facetWrap = TRUE, orderSubtypes = c("Pre", "Post")) +
+    scale_fill_gradient2(high="red", low="blue", mid="white", name="Centered log2(TPM)")
+  ggsave(paste0(figure_dir, "CD8GliomaPredysfunctional_dysfunctionalGenes_byTreatment.Response.pdf"),device="pdf", width=6, height=5)
+```
+
+## Proportion of tregs by treatment/response
+```{r}
+## By treatment, regardless of response
+my_barchart_programProp(cd4_seurat, grouping_variable ="treatment" , coloring_variable = "Treg",
+                        colors = c(Treg="yellow", Other="grey"))
+ggsave(paste0(figure_dir, "CD4_Treg_proportion.png"), width=4, height=3)
+
+## By treatment + response
+cd4_seurat$tmp<- paste0(cd4_seurat$treatment, "_", cd4_seurat$response)
+my_barchart_programProp(cd4_seurat, grouping_variable ="tmp" , coloring_variable = "Treg", 
+                        colors = c(Treg="yellow", Other="grey"), 
+                        grouping_variable_order = c("Pre_Responder", "Post_Responder",
+                                                    "Pre_Non-responder", "Post_Non-responder"))+
+  xlab("")
+ggsave(paste0(figure_dir, "CD4_Treg_proportion_byResponse.pdf"),device="pdf", width=4, height=3)
+
+## Plot treg proportion compared to glioma
+  ## Add column to glioma for treg or other
+  glioma_cd4_seurat$Program_projected<- ifelse(glioma_cd4_seurat$Age_Group=="Ped",
+                                               glioma_cd4_seurat$Program_projected,
+                                               glioma_cd4_seurat$MaxScoringProgram)
+  glioma_cd4_seurat$Treg<- ifelse(glioma_cd4_seurat$Program_projected=="Treg", "Treg", "Other")
+  
+  ## Make metadata match
+  glioma_cd4_seurat$sample<- ifelse(glioma_cd4_seurat$Age_Group=="Ped", glioma_cd4_seurat$sample,
+                                    glioma_cd4_seurat$old.ident)
+  cd4_seurat$Treatment<-gsub("Pre", "Untreated", gsub("Post", "PD1", cd4_seurat$treatment))
+  cd4_seurat$TumorType<- "Melanoma"
+  glioma_cd4_seurat$TumorType<- paste0(glioma_cd4_seurat$Age_Group, "_Glioma")
+  cd4_seurat$sample<- paste0(cd4_seurat$sample, "_", cd4_seurat$Treatment)
+  
+  ## Merge- no need to run clustering
+  cd4_merge<- merge(cd4_seurat, glioma_cd4_seurat)
+  
+  ## Plot-barchart
+  cd4_merge$tmp<- paste0(cd4_merge$Treatment, "_", cd4_merge$TumorType)
+  my_barchart_programProp(cd4_merge, grouping_variable = "tmp", coloring_variable = "Treg", wrapping_variable = "TumorType",
+                          colors=c(Treg="yellow", Other="grey"), 
+                          grouping_variable_order = c("Untreated_Ped_Glioma", "PD1_Ped_Glioma",
+                                                      "Untreated_Adult_Glioma", "PD1_Adult_Glioma",
+                                                      "Untreated_Melanoma", "PD1_Melanoma"))
+  ggsave(paste0(figure_dir, "Barchart_ProportionTregs_byTumor.Treatment.pdf"), device="pdf", width=5, height=3)
+  
+  
+  
+   ## Plot- boxplot
+  meta<- cd4_merge@meta.data %>% group_by(sample) %>% summarise(nTreg=sum(Treg=="Treg"),
+                                                                nCells=n(),
+                                                                perTreg=nTreg/nCells) %>% as.data.frame()
+  meta$Group<- as.character(plyr::mapvalues(meta$sample, cd4_merge$sample, cd4_merge$tmp, warn_missing = FALSE))
+  meta$Group<- factor(meta$Group, levels=c("Untreated_Ped_Glioma", "PD1_Ped_Glioma",
+                                                      "Untreated_Adult_Glioma", "PD1_Adult_Glioma",
+                                                      "Untreated_Melanoma", "PD1_Melanoma"))
+  meta$TumorType<- gsub("Untreated_", "", gsub("PD1_", "", meta$Group))
+  meta$TumorType<- factor(meta$TumorType, levels=c("Ped_Glioma", "Adult_Glioma", "Melanoma"))
+  
+  ggplot(meta, aes(x=Group, y=perTreg,fill=TumorType))+
+    geom_boxplot()+
+    theme_bw()+
+    geom_point()+
+    facet_grid(cols=vars(TumorType), scale="free", space="free")+
+    scale_fill_manual(values=c(Ped_Glioma="red", Adult_Glioma="blue", Melanoma="olivedrab"))+
+    theme(axis.text.x = element_text(angle=45,hjust=1),
+          legend.position = "none")+
+    ylab("Proportion of Tregs in CD4")+
+    xlab("")
+  ggsave(paste0(figure_dir, "Boxplot_ProportionTregs_byTumor.Treatment.pdf"),device="pdf", width=5, height=4)
+  
+ 
+```
+
