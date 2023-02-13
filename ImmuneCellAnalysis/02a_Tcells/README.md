@@ -1,7 +1,10 @@
 ## T cell analysis
 
 All Tcell analysis (NMF, comparing programs, detailed annotation based on program) is run here
-![Tcellworkflow](Tcellanalysisworkflow.png)
+<p align="center">
+  <img width="230" height="350" src="Tcellanalysisworkflow.png">
+</p>
+
 
 This includes pediatric Tcells, adult Tcells, and comparisons between the two. It does NOT include basic visualizations (UMAP with annotations, etc) or any analyses that also use myeloid cells. 
 
