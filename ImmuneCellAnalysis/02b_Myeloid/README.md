@@ -1,7 +1,7 @@
 ## Analysis of myeloid scRNAseq
 
 Overall approach:
-1) [De novo NMF for pediatric myeloid cells](#1.-NMF) 
+1) [De novo NMF for pediatric myeloid cells](#NMF) 
 2) [Correlate with adult GBM 10X to help annotate](#2.-Use-published-10x-glioma-associated-myeloid-scRNAseq-data-as-reference-to-help-annotate)
 3) [Identify higher-level cell types (macrophage/microglia) across programs](#3. Additional layers of annotation *(/02_AdditionalAnnotation/)*)
 4) [Compare programs (+ cells types) to adult myeloid cells (SmartSeq2 IDHmut/GBM datasets)](#4. Adult/pediatric comparison: */03_CompareToAdult/*) 
@@ -10,7 +10,7 @@ Overall approach:
   <img width="500" height="280" src="Myeloidanalysisworkflow.png">
 </p>
 
-### 1. NMF ###
+### NMF ###
  
 ***01a_NMF/***
 - Ran NMF locally for myeloid cells, as well as with Cycling set as separate program (this option not used downstream)- ***01a_NMF*.Rmd***
