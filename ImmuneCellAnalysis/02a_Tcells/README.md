@@ -2,7 +2,7 @@
 
 All Tcell analysis (NMF, comparing programs, detailed annotation based on program) is run here:
 
-1. [Run NMF for pediatric and published adult T cells](#1\\.-Run-NMF)
+1. [Run NMF for pediatric and published adult T cells](#1-Run-NMF)
 2. [Correlate pediatric and adult programs identified](#Correlate-pediatric-and-adult-programs)
 3. [Identify CD4 and CD8 T cells](#Identify-CD4-and-CD8-T-cells)
 4. [Visualize final programs](#Visualize-final-programs)
@@ -17,7 +17,7 @@ All Tcell analysis (NMF, comparing programs, detailed annotation based on progra
 
 This includes pediatric Tcells, adult Tcells, and comparisons between the two. It does NOT include basic visualizations (UMAP with annotations, etc) or any analyses that also use myeloid cells. 
 
-### 1. Run NMF:
+### 1 Run NMF:
 
 In ***01a_Ped/NMF*** and ***01b_Adult/NMF***:
 	- Run de novo NMF on all Tcells separately for pediatric (***01a_Ped/NMF***) and adult (***01b_Adult/NMF***) T cells. 
