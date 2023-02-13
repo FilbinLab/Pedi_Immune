@@ -3,9 +3,9 @@
 
 *Note:*
 
-*Tracer + clonal analysis was run for most immune samples by Orr Ashenberg (Regev lab). Not repeated by me. I use the output file for # clonal cells, clonotype, etc, from this analysis.  Output is in: data/data_fromOrr/2020_12_10_pedbrain_immune_no_batchcorrect.Rda and 2020_12_10_clonalTcells_cluster.Rda*
+*Tracer + clonal analysis was run for most immune samples by Orr Ashenberg (Regev lab). I used the output file for # clonal cells, clonotype, etc, from this analysis.  Output is in: data/data_fromOrr/2020_12_10_pedbrain_immune_no_batchcorrect.Rda and 2020_12_10_clonalTcells_cluster.Rda*
 
-*For 5 samples (BT1873/BT1857/MUV92/MUV94/MUV95), tracer analysis was run by Filbin lab. For these samples, I ran all post-processing to determine clonal cells, clonotype, etc*
+*For 5 samples (BT1873/BT1857/MUV92/MUV94/MUV95), tracer analysis was run by me. For these samples, I ran all post-processing to determine clonal cells, clonotype, etc*
 
 *Except for 03_PreprocessAdultDatasets directory, all files deal with Filbin pediatric samples ONLY. In downstream analyses, ped/adult are merged. Here, pediatric/adult are kept separate for now.*
 
