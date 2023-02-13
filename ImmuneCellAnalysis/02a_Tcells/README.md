@@ -1,6 +1,6 @@
 ## T cell analysis
 
-All Tcell analysis (NMF, comparing programs, detailed annotation based on program) is run here
+All Tcell analysis (NMF, comparing programs, detailed annotation based on program) is run here:
 <p align="center">
   <img width="230" height="350" src="Tcellanalysisworkflow.png">
 </p>
