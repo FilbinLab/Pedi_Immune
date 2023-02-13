@@ -1,6 +1,10 @@
 # Pediatric immune microenvironment profiling
 ## scRNAseq profiling of pediatric glioma-associated immune cells across 6 glioma subtypes
 
+<p align="center">
+  <img width="800" height="550" src="Workflow_v2.png">
+</p>
+
 Brief description of main folders (see detailed README in subdirectories for more info):
 
 *TumorCellAnnotation/*: Processing and annotating tumor cells separately for each subtype
