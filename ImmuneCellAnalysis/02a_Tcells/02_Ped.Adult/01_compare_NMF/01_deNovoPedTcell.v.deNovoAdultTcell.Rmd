@@ -174,7 +174,7 @@ for(r in ranks){
   scores_factor_cor = scores_factor_hc$cor_coef[scores_factor_hc$hc_obj$order, scores_factor_hc$hc_obj$order]
   
   ## Heatmap of correlations
-  hm_colors = rev((brewer.pal(n=9, name="RdBu")))
+  #hm_colors = rev((brewer.pal(n=9, name="RdBu")))
   hm_colors<- c("#003366","cyan4", "white","#FFFFCC", "#FFCC66")
   hm_colors = colorRampPalette(colors = hm_colors)
   pheatmap(scores_factor_cor, color = hm_colors(100), 
@@ -189,6 +189,9 @@ for(r in ranks){
   plot(scores_factor_hc$hc_obj)
   dev.off()
 }
+
+## RAW DATA EXPORT
+write.csv(all_scores$rank8, file=paste0(analysis_dir, "scores_PedTcellrank", r, "_AdultTcellrank", r,".csv"))
 ```
 
 ## Annotate gene lists based on correlation (+ marker genes for Treg/Stress annotation)

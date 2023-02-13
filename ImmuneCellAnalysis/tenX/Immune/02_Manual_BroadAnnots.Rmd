@@ -111,3 +111,12 @@ my_barchart_programProp(seurat_obj, coloring_variable = "broad_annot",
 ggsave(paste0(figure_dir, "Barchart_broad_annot_bySample.png"), width=4, height=3)
 ```
 
+## RAW DATA EXPORT
+```{r}
+df<- seurat_obj@meta.data[,c("sample", "broad_annot", "detailed_annot", "Final_Annot", 
+                             "tcr_reconstructed","v_gene", "j_gene", "raw_clonotype_id", "clonotype_size", "clonal")]
+df<- df %>% dplyr::rename(Program=Final_Annot) %>% as.data.frame()
+
+write.csv(df, file="../../../notUploaded/ImmuneDraft_Rebecca/raw_results_files/ped_10XGenomics_cellwise_annotations.csv")
+```
+

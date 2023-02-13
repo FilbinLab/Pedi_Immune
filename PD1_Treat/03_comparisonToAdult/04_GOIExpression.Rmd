@@ -203,6 +203,9 @@ colnames(fc)<- gsub("\\.", "\n", colnames(fc))
 myHeatmap(fc, GOI=GOI, min.value = -2, max.value = 2, facetWrap = TRUE, addBoxes = padjust_plot) +
   scale_fill_gradientn(colors=c( "khaki3", "lemonchiffon1","white","palevioletred1", "palevioletred2", "violetred4"))
 ggsave(paste0(figure_dir, "Heatmap_foldChange_GOI_CD8_byProgram.pdf"),device="pdf", width=12, height=4)
+
+## RAW DATA EXPORT
+write.csv(fc, file="../..//notUploaded/ImmuneDraft_Rebecca/raw_results_files/fold.change_pd1.itn_adult.ped.csv")
 ```
 
 
@@ -429,4 +432,83 @@ cowplot::plot_grid(plotlist=all_plots, ncol=1)
 ggsave(paste0(figure_dir, "DotPlot_TcellStateScores_CD4.CD8.png"), width=13, height=8)
 ```
 
-#
+
+## RAW DATA EXPORT
+```{r}
+## Pediatric SS2- for merging with "ped_cellwise_annotations.csv"
+ped_cellwise_annotations<- read.csv("../../notUploaded/ImmuneDraft_Rebecca/raw_results_files/ped_cellwise_annotations.csv", row.names = "X")
+
+ped_ss2<- lapply(seurat_list, function(x){subset(x, Age_Group=="Ped" & Treatment=="PD1" & Sequencing=="SS2")})
+ped_ss2_tmp<- merge(ped_ss2$cd4, ped_ss2$cd8)
+ped_ss2<- merge(ped_ss2_tmp, ped_ss2$myeloid)
+  
+  ## Add sort info
+  ped_ss2$sort<- ifelse(grepl("CD3", ped_ss2$orig.ident), "CD3", 
+                        ifelse(grepl("CD45", ped_ss2$orig.ident), "CD45",
+                        ifelse(grepl("BT2080", ped_ss2$orig.ident), "CD3", "issue")))
+  ped_ss2$subtype<- "GBM"
+  
+  ## Add mg/mo score/annot- just null
+  ped_ss2$Microglia_Macrophage_annot<- "NA"; ped_ss2$Microglia_Macrophage_Score<- "NA"
+  
+  ## add clonal- just null. never used (too few samples)
+  ped_ss2$tcr_reconstructed<- "NA"; ped_ss2$clonal_group<- "NA"; ped_ss2$group_size<-"NA"; ped_ss2$clonal<- "NA"
+  
+  ped_ss2_df<- ped_ss2@meta.data[,c("sample", "sort", "subtype", "broad_annot_projected","detailed_annot_projected_manual",
+                                    "Program_projected", "Microglia_Macrophage_annot","Microglia_Macrophage_Score",
+                                    "tcr_reconstructed", "clonal_group", "group_size", "clonal")]
+  ped_ss2_df<- ped_ss2_df %>% dplyr::rename(broad_annot=broad_annot_projected, detailed_annot=detailed_annot_projected_manual,
+                                            Program=Program_projected) %>% as.data.frame()
+  
+  ## Add treatment info- to PD1 (to be added here) and full SS2 cohort
+  ped_ss2_df$Treatment<- "AntiPD1"
+  ped_cellwise_annotations$Treatment<- "ITN"
+  
+  ## Combine
+  ped_cellwise_annotations<- rbind(ped_cellwise_annotations, ped_ss2_df)
+  
+  write.csv(ped_cellwise_annotations, file="../../notUploaded/ImmuneDraft_Rebecca/raw_results_files/ped_cellwise_annotations.csv")
+  
+
+
+
+## Pediatric 10X- for merging with "ped_cellwise_annotations.csv"
+ped_10XGenomics_cellwise_annotations<- read.csv("../../notUploaded/ImmuneDraft_Rebecca/raw_results_files/ped_10XGenomics_cellwise_annotations.csv", row.names = "X")
+
+ped_tenx<- lapply(seurat_list, function(x){subset(x, Age_Group=="Ped" & Treatment=="PD1" & Sequencing=="TenX")})
+ped_tenx_tmp<- merge(ped_tenx$cd4, ped_tenx$cd8)
+ped_tenx<- merge(ped_tenx_tmp, ped_tenx$myeloid)
+  
+  ## Update/clarify any metadata columns
+  ped_tenx$broad_annot_projected_manual<- ifelse(is.na(ped_tenx$broad_annot_projected_manual), "Tcell", ped_tenx$broad_annot_projected_manual)
+  
+  
+  ## add clonal
+  ped_tenx$tcr_reconstructed<- ifelse(ped_tenx$v_gene != "NA", "Yes", "No")
+  ped_tenx$clonal<- ifelse(ped_tenx$tcr_reconstructed=="No", "NA", ifelse(ped_tenx$clonotype_size>1, "clonal", "nonclonal"))
+  
+  ped_tenx_df<- ped_tenx@meta.data[,c("sample",   "broad_annot_projected_manual","detailed_annot_projected_manual",
+                                    "Program_projected", 
+                                    "tcr_reconstructed", "v_gene", "j_gene", "raw_clonotype_id", "clonotype_size", "clonal")]
+  ped_tenx_df<- ped_tenx_df %>% dplyr::rename(broad_annot=broad_annot_projected_manual, detailed_annot=detailed_annot_projected_manual,
+                                            Program=Program_projected) %>% as.data.frame()
+  
+  ## Add treatment info- to PD1 (to be added here) and full tenx cohort
+  ped_tenx_df$Treatment<- "AntiPD1"
+  ped_10XGenomics_cellwise_annotations$Treatment<- "ITN"
+  
+  ## Combine
+  ped_10XGenomics_cellwise_annotations<- rbind(ped_10XGenomics_cellwise_annotations, ped_tenx_df)
+  
+  write.csv(ped_10XGenomics_cellwise_annotations, file="../../notUploaded/ImmuneDraft_Rebecca/raw_results_files/ped_10XGenomics_cellwise_annotations.csv")
+
+## Adult- generate new file
+adult<- lapply(seurat_list, function(x){subset(x, Age_Group=="Adult")})  
+adult_tmp<- merge(adult$cd4, adult$cd8)
+adult<- merge(adult_tmp, adult$myeloid)
+
+adult_df<- adult@meta.data[,c("sample", "broad_annot", "detailed_annot", "Program_projected")]
+adult_df<- adult_df %>% dplyr::rename(Program=Program_projected) %>% as.data.frame()
+write.csv(adult_df, file="../../notUploaded/ImmuneDraft_Rebecca/raw_results_files/adultPD1_cellwise_annotations.csv")
+```
+

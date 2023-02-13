@@ -119,11 +119,12 @@ marker_list<- c(ped_marker_list, adult_marker_list)
 scores<- as.data.frame(t(scoreNmfGenes(cm_list$center_data, cm_mean, marker_list)))
 
 saveRDS(scores, file=paste0(analysis_dir, "scores_pedRank", ped_rank, "_adultRank", adult_rank, ".Rds"))
+write.csv(scores,file=paste0(analysis_dir, "scores_pedRank", ped_rank, "_adultRank", adult_rank, ".csv") )
 ```
 
 ## Correlate scores
 ```{r}
-#scores<- readRDS(paste0(analysis_dir, "scores_pedRank", ped_rank, "_adultRank", adult_rank, ".Rds"))
+scores<- readRDS(paste0(analysis_dir, "scores_pedRank", ped_rank, "_adultRank", adult_rank, ".Rds"))
 
 ## Correlate and plot heatmap
 scores_factor_hc = clusterNmfFactors(scores)
@@ -134,13 +135,13 @@ scores_factor_cor<- as.data.frame(scores_factor_cor)
 scores_factor_cor$color<-ifelse(rownames(scores_factor_cor) %in% names(ped_marker_list), "red", "navy")
  
 ## Heatmap of correlations
-hm_colors = rev((brewer.pal(n=9, name="RdBu")))
+hm_colors<- c("#003366","cyan4", "white","#FFFFCC", "#FFCC66")
 hm_colors = colorRampPalette(colors = hm_colors)
 pheatmap(scores_factor_cor[,colnames(scores_factor_cor) != "color"], color = hm_colors(100),
          cluster_rows = F, cluster_cols = F,
          annotation_names_row = F, annotation_names_col =T,
          show_rownames = T, show_colnames = F,
-         filename =paste0(figure_dir, "Cor_Ped.rank", ped_rank,"_Adult.rank", adult_rank,  ".pdf"),
+         filename =paste0(figure_dir, "Cor_Ped.rank", ped_rank,"_Adult.rank", adult_rank,  "_updatedColors.pdf"),
          width = 10, height = 6)
  
 cols=scores_factor_cor[order(match(rownames(scores_factor_cor), p$gtable$grobs[[2]]$label)), ]$color
@@ -358,7 +359,12 @@ merged_seurat$MaxProgram_tmp<-plyr::mapvalues(colnames(merged_seurat), rownames(
 merged_seurat<- SetIdent(merged_seurat, value=merged_seurat$MaxProgram_tmp)
 markers<- FindAllMarkers(merged_seurat, min.pct = 0.2)
 filtered_markers<- markers[markers$p_val_adj<0.05 & markers$avg_log2FC>0.2,]
+
+## Subset to top 100 genes
+final_PA_gene_df<- filtered_markers %>% group_by(cluster) %>% top_n(n=100, wt=avg_log2FC) %>% as.data.frame()
+
 saveRDS(filtered_markers, file=paste0(analysis_dir, "markers_mergedPedAdult_assignMax_reidentify_pedRank", ped_rank, "_adultRank", adult_rank, ".Rds"))
+write.csv(final_PA_gene_df, file=paste0(analysis_dir, "markers_mergedPedAdult_assignMax_reidentify_pedRank", ped_rank, "_adultRank", adult_rank, ".csv"))
 ```
 
 ## Assign max scoring program, save to seurat
@@ -367,8 +373,8 @@ saveRDS(filtered_markers, file=paste0(analysis_dir, "markers_mergedPedAdult_assi
 final_PA_gene_df<-readRDS(paste0(analysis_dir, "markers_mergedPedAdult_assignMax_reidentify_pedRank", ped_rank, "_adultRank", adult_rank, ".Rds"))
 
 ## Subset to top 100 genes
-final_PA_gene_list<- final_PA_gene_df %>% group_by(cluster) %>% top_n(n=100, wt=avg_log2FC) %>% as.data.frame()
-final_PA_gene_list<- split(final_PA_gene_list, f=final_PA_gene_list$cluster)
+final_PA_gene_df<- final_PA_gene_df %>% group_by(cluster) %>% top_n(n=100, wt=avg_log2FC) %>% as.data.frame()
+final_PA_gene_list<- split(final_PA_gene_df, f=final_PA_gene_df$cluster)
 final_PA_gene_list<- lapply(final_PA_gene_list, function(x){x$gene})
 
 cm_list<- NormCenter(merged_seurat@assays$RNA@counts)
@@ -705,4 +711,14 @@ data_dir<- "../../scCoda/data/"
   ## Output
   write.csv(bd, file=paste0(data_dir, "pedOnly_nomuv63/Ped.AdultSubtpyes_Myeloid_NMFprograms_byCorrelation.csv"), row.names=FALSE)
 ```
+
+## RAW DATA EXPORT
+```{r}
+df<- merged_seurat@meta.data[,c("sampleid","Age", "MaxProgram_PA_mergedGenesets")]
+df<- df %>% dplyr::rename(sample=sampleid, age_group=Age, program=MaxProgram_PA_mergedGenesets) %>% as.data.frame()
+
+
+write.csv(df, file="../../../notUploaded/ImmuneDraft_Rebecca/raw_results_files/myeloid_ped.adult_cellwise_annotations.csv")
+```
+
 

@@ -199,3 +199,4 @@ tcell_seurat$tmp<- tcell_seurat@meta.data[[program_name]]
 my_barchart_programProp(tcell_seurat, coloring_variable = "tmp", colors=program_colors)
 ggsave(paste0(figure_dir, "Barchart_programProportion_bySample.pdf"), width=5, height=4, device="pdf")
 ```
+

@@ -195,6 +195,12 @@ merge_cd8$maxGeneset_lowScore<- ifelse(merge_cd8$maxGeneset_score<0.2, "ScoreToo
 merge_cd8$maxGeneset_lowScore<- gsub("[0-9]", "", merge_cd8$maxGeneset_lowScore)
 
 saveRDS(merge_cd8, file=paste0(analysis_dir, filename))
+
+## RAW DATA EXPORT
+df<- merge_cd8@meta.data[,c("sample", "TumorType", "cytotoxic1", "naive2", "predysfunctional3", "dysfunctional4", "maxGeneset")]
+colnames(df)<- gsub("[0-9]$", "_score", colnames(df))
+df<- df %>% dplyr::rename(Program=maxGeneset) %>% as.data.frame()
+write.csv(df, file="../../../../notUploaded/ImmuneDraft_Rebecca/raw_results_files/glioma.melanoma.nsclc_cd8_cellwise_scores.annotations.csv")
 ```
 
 ## Plots- CD8
@@ -409,6 +415,21 @@ marker_list_filtered<- lapply(marker_list, function(x){
 ## Save
 filename<- ifelse(downSize, "markers_forNature2020Annot_byTumorType_downSample.Rds","markers_forNature2020Annot_byTumorType.Rds")
 saveRDS(marker_list_filtered, file=paste0(analysis_dir, filename))
+
+## RAW DATA EXPORT
+  ## Subset to top 50
+  marker_list<- lapply(marker_list_filtered, function(x){
+    tmp<- x[order(x$cluster, -x$avg_log2FC),]
+    tmp<- tmp %>% group_by(cluster) %>% top_n(n=50, wt=avg_log2FC) %>% as.data.frame()
+    return(tmp)
+  })
+  
+  ## Add on tumor type
+  marker_list<- lapply(names(marker_list), function(tumortype){tmp<- marker_list[[tumortype]]; tmp$tumortype<- tumortype;return(tmp)})
+  
+  ## collapse to df
+  marker_df<- do.call("rbind", marker_list)
+  write.csv(marker_df, file="../../../../notUploaded/ImmuneDraft_Rebecca/raw_results_files/program_markers_cd8_glioma.melanoma.nsclc.csv")
 ```
 
 
@@ -477,6 +498,8 @@ lapply(c("cytotoxic", "dysfunctional", "predysfunctional", "naive"), function(x)
   print(mean(as.numeric(tmp)[as.numeric(tmp) != 1]))
   
 })
+
+write.csv(scores, file=paste0(analysis_dir, "scores_CD8programs_Glioma.vs.NSCLC.vs.melanoma.csv"))
 ```
 
 

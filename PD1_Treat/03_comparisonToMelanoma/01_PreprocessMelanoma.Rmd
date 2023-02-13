@@ -4,7 +4,7 @@ author: "Jenna LaBelle"
 output: html_document
 ---
 
-## Preprocess published  PD1 treated melanoma data
+## Preprocess published  PD1 treated melanoma data- to cd4/cd8 --> program annotations
 GSE120575
 
 ```{r}
@@ -151,6 +151,18 @@ cd8_seurat@meta.data<- cd8_seurat@meta.data %>% dplyr::rename(cytotoxic=cytotoxi
 cd8_seurat$nature_2020_max<- apply(cd8_seurat@meta.data[,names(nature_2020_genes)], 
                                    1, function(x){names(x)[which.max(x)]} )
 
+## For CD8: add on score for my predys program
+glioma_markers<- readRDS("../../ImmuneCellAnalysis/02a_Tcells/02_Ped.Adult/01_compare_NMF/analysis/newMarkers_deNovoPed.AdultTcell/new_markers_NMFrank8_bySeurat_sharedByunion_reAnnot.Rds")
+glioma_markers<- glioma_markers[!glioma_markers$cluster %in% c("Inhibitory", "Treg", "Stress", "Effector.Memory"),]
+glioma_markers<- glioma_markers %>% group_by(cluster) %>% top_n(n=50, wt=avg_log2FC) %>% as.data.frame()
+glioma_list<-split(glioma_markers, f=glioma_markers$cluster)
+glioma_list<- lapply(glioma_list, function(x){x$gene})
+cd8_seurat<- AddModuleScore(cd8_seurat,glioma_list, name=paste0("glioma_", names(glioma_list)))
+colnames(cd8_seurat@meta.data)<- gsub("[0-9]$", "", colnames(cd8_seurat@meta.data))
+cd8_seurat$glioma_max<- apply(cd8_seurat@meta.data[,colnames(cd8_seurat@meta.data) %in% paste0("glioma_", names(glioma_list))], 1, 
+                                                   function(x){names(x)[which.max(x)]})
+
+
 ## For CD4: identify tregs
 cd4_seurat<-AddMetaData(cd4_seurat, as.data.frame(t(cd4_seurat@assays$RNA@data[c("FOXP3", "CTLA4"),])))
 cd4_seurat$Treg<- ifelse(cd4_seurat$FOXP3 >0 & cd4_seurat$CTLA4 >0, "Treg", "Other")
@@ -160,53 +172,16 @@ saveRDS(cd4_seurat, file=paste0(analysis_dir, "cd4_seurat.Rds"))
 saveRDS(cd8_seurat, file=paste0(analysis_dir, "cd8_seurat.Rds"))
 ```
 
-## Expression of dysfunctional markers  by treatment/response
-```{r}
-cd8_seurat<- readRDS(paste0(analysis_dir, "cd8_seurat.Rds"))
-GOI<- c("PDCD1", "TIGIT", "CTLA4", "GZMB", "SELPLG", "PTGER2", "KLRB1", "GNLY")
 
-## All cells
-  ## Create pseudobulking variable
-  cd8_seurat$pb<- paste0(cd8_seurat$treatment, "_", cd8_seurat$response)
-  pb<- pseudobulk_byVariable(cd8_seurat, cd8_seurat@meta.data, "pb")
-  
-  pb_center<- NormCenter(pb)$center_data
-  
-  ## Plot
-  myHeatmap(pb_center, GOI=GOI, min.value = -3, max.value = 3, facetWrap = TRUE, orderSubtypes = c("Pre", "Post")) +
-    scale_fill_gradient2(high="red", low="blue", mid="white", name="Centered log2(TPM)")
-  ggsave(paste0(figure_dir, "CD8_dysfunctionalGenes_byTreatment.Response.png"), width=6, height=5)
-  
-## Predysfunctional only
-  ## subset to predys
-  predys<- subset(cd8_seurat, nature_2020_max=="predysfunctional")
-  
-  ## Create pseudobulking variable
-  predys$pb<- paste0(predys$treatment, "_", predys$response)
-  pb<- pseudobulk_byVariable(predys, predys@meta.data, "pb")
-  
-  pb_center<- NormCenter(pb)$center_data
-  
-  ## Plot
-  myHeatmap(pb_center, GOI=GOI, min.value = -3, max.value = 3, facetWrap = TRUE, orderSubtypes = c("Pre", "Post")) +
-    scale_fill_gradient2(high="red", low="blue", mid="white", name="Centered log2(TPM)")
-  ggsave(paste0(figure_dir, "CD8Predysfunctional_dysfunctionalGenes_byTreatment.Response.png"), width=6, height=5)
+## RAW DATA EXPORT
+```{r}
+cd8_meta<- cd8_seurat@meta.data[,c("sample", "treatment", "response", "therapy", "cytotoxic", "naive", "predysfunctional", "nature_2020_max")]
+cd8_meta<- cd8_meta %>% dplyr::rename(Program=nature_2020_max) %>% as.data.frame()
+write.csv(cd8_meta, file="../../notUploaded/ImmuneDraft_Rebecca/raw_results_files/melanoma.pd1_cellwise_annotations_cd8.csv")
+
+cd4_meta<- cd4_seurat@meta.data[,c("sample", "treatment", "response", "therapy", "FOXP3", "CTLA4", "Treg")]
+cd4_meta<- cd4_meta %>% dplyr::rename(FOXP3_TPM=FOXP3, CTLA4_TPM=CTLA4, Treg_Assignment=Treg) %>% as.data.frame()
+write.csv(cd4_meta, file="../../notUploaded/ImmuneDraft_Rebecca/raw_results_files/melanoma.pd1_cellwise_annotations_cd4.csv")
 ```
 
-## Proportion of tregs by treatment/response
-```{r}
-cd4_seurat<- readRDS(paste0(analysis_dir, "cd4_seurat.Rds"))
-
-my_barchart_programProp(cd4_seurat, grouping_variable ="treatment" , coloring_variable = "Treg",
-                        colors = c(Treg="yellow", Other="grey"))
-ggsave(paste0(figure_dir, "CD4_Treg_proportion.png"), width=4, height=3)
-cd4_seurat$tmp<- paste0(cd4_seurat$treatment, "_", cd4_seurat$response)
-
-my_barchart_programProp(cd4_seurat, grouping_variable ="tmp" , coloring_variable = "Treg", 
-                        colors = c(Treg="yellow", Other="grey"), 
-                        grouping_variable_order = c("Pre_Responder", "Post_Responder",
-                                                    "Pre_Non-responder", "Post_Non-responder"))+
-  xlab("")
-ggsave(paste0(figure_dir, "CD4_Treg_proportion_byResponse.png"), width=4, height=3)
-```
 

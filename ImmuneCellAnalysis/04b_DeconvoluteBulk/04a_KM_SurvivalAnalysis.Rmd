@@ -97,6 +97,15 @@ for(cohort in names(surv_res_list)){
   })
   p<-arrange_ggsurvplots(all_plots, ncol=3, nrow=ceiling(length(all_plots)/3))
   ggsave(plot=p, paste0(figure_dir_use, "CD8_SurvRes_allGenesets.pdf"), device="pdf", width=9, height=9)
+  
+  ## RAW DATA EXPORT
+  res_df_list<- lapply(survRes, function(x){x$res_df})
+  res_df<- do.call("rbind", unname(res_df_list))
+  res_df<- res_df %>% dplyr::rename(Program=Marker, 
+                                    MedianSurvival_HighProgramProportion=HighMarkerMedianSurvival, 
+                                    MedianSurvival_LowProgramProportion=LowMarkerMedianSurvival) %>% 
+    as.data.frame()
+  write.csv(res_df, file=paste0("../../notUploaded/ImmuneDraft_Rebecca/raw_results_files/cd8_km_survival_by_program_", cohort, ".csv"))
 }
 ```
 
@@ -135,6 +144,15 @@ for(cohort in names(surv_res_list)){
   })
   p<-arrange_ggsurvplots(all_plots, ncol=3, nrow=ceiling(length(all_plots)/3))
   ggsave(plot=p, paste0(figure_dir_use, "CD4_SurvRes_allGenesets.pdf"), device="pdf", width=9, height=9)
+  
+  ## RAW DATA EXPORT
+  res_df_list<- lapply(survRes, function(x){x$res_df})
+  res_df<- do.call("rbind", unname(res_df_list))
+  res_df<- res_df %>% dplyr::rename(Program=Marker, 
+                                    MedianSurvival_HighProgramProportion=HighMarkerMedianSurvival, 
+                                    MedianSurvival_LowProgramProportion=LowMarkerMedianSurvival) %>% 
+    as.data.frame()
+  write.csv(res_df, file=paste0("../../notUploaded/ImmuneDraft_Rebecca/raw_results_files/cd4_km_survival_by_program_", cohort, ".csv"))
 }
 ```
 
@@ -176,6 +194,15 @@ for(cohort in names(surv_res_list)){
   })
   p<-arrange_ggsurvplots(all_plots, ncol=3, nrow=ceiling(length(all_plots)/3))
   ggsave(plot=p, paste0(figure_dir_use, "Myeloid_SurvRes_allGenesets.png"), width=9, height=6)
+  
+  ## RAW DATA EXPORT
+  res_df_list<- lapply(survRes, function(x){x$res_df})
+  res_df<- do.call("rbind", unname(res_df_list))
+  res_df<- res_df %>% dplyr::rename(Program=Marker, 
+                                    MedianSurvival_HighProgramProportion=HighMarkerMedianSurvival, 
+                                    MedianSurvival_LowProgramProportion=LowMarkerMedianSurvival) %>% 
+    as.data.frame()
+  write.csv(res_df, file=paste0("../../notUploaded/ImmuneDraft_Rebecca/raw_results_files/myeloid_km_survival_by_program_", cohort, ".csv"))
 }
 ```
 

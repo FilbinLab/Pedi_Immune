@@ -21,7 +21,7 @@ library(Rtreemix)
 figure_dir<- "figures/plot_clonal/"
 analysis_dir<- "analysis/"
 
-if(!dir.exists(figure_dirp)){dir.create(figure_dir,recursive = TRUE)}
+if(!dir.exists(figure_dir)){dir.create(figure_dir,recursive = TRUE)}
 if(!dir.exists(analysis_dir)){dir.create(analysis_dir, recursive = TRUE)}
 
 preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
@@ -223,5 +223,8 @@ ggplot(clonotypes_shared, aes(x=Program1, y=Program2, fill=NClonotypes_Shared_No
   theme(axis.text.x = element_text(angle = 45, hjust=1))+
   xlab("")+ylab("")
 ggsave(paste0(figure_dir, "Tcells_clonotypesSharedAcrossPrograms_NormProp.pdf"), width=7, height=4, device="pdf")
+
+## RAW DATA EXPORT
+write.csv(clonotypes_shared, file="../../../../notUploaded/ImmuneDraft_Rebecca/raw_results_files/ss2_tcell_clonotypes_shared_by_program.csv")
 ```
 

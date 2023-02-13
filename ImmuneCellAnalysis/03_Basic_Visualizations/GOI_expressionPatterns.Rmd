@@ -492,6 +492,7 @@ ggsave(paste0(figure_dir_use, "VlnPlot_SELPLG_CD4_bySample.png"), width = 7, hei
   myHeatmap(pb_center, GOI=c("SELPLG", "PTGER2"), min.value = -1, max.value = 1)+
     scale_fill_gradient2(low="blue", mid="white", high="red")
   ggsave(paste0(figure_dir_use, "Heatmap_byProgram.Age.pdf"), device="pdf", width=12, height=3)
+ 
 ```
 
 ## ANXA1

@@ -51,6 +51,9 @@ save_pheatmap_pdf <- function(x, filename, width=7, height=7) {
 ## Seurat- 10X
 tcell_seurat<- readRDS("analysis/manual_broad_annot/tcell_seurat.Rds")
 
+## Tcell/myeloid- 10x (for adding program annotations)
+immune_seurat<- readRDS( "analysis/preprocessing/seurat_obj_noTumor.Rds")
+
 ## Seurat- full cohort
 full_tcell_seurat<- readRDS(paste0("../../",
                            "02a_Tcells/02_Ped.Adult/03_Visualize.Reannotate_programs/analysis/Reannotate_programs/rank8_sharedByunion/",
@@ -199,6 +202,9 @@ for(r in ranks){
   denovo_scores<- denovo_scores_list[[paste0("Denovo_NMF", r)]]
   scores<- cbind(denovo_scores, full_scores)
   
+  ## RAW DATA EXPORT
+  write.csv(scores, file=paste0(analysis_dir_use, "scores_DenovoRank", r, "_fullCohort.csv"))
+  
   ## NMF factor correlation based on cell score 
   scores_factor_hc = clusterNmfFactors(scores)
   scores_factor_cor = scores_factor_hc$cor_coef[scores_factor_hc$hc_obj$order, scores_factor_hc$hc_obj$order]
@@ -261,9 +267,18 @@ for(r in ranks){
   nmf_column<- paste0("NMF_rank", r)
   tcell_seurat[[paste0(nmf_column, "_annot")]]<-as.character(plyr::mapvalues(paste0("NMF", as.character(tcell_seurat[[nmf_column]][,1])),
                                                   names(annots), annots))
+
 }
 
+## annotate immune seurat
+immune_seurat$Final_Annot<- ifelse(immune_seurat$broad_annot=="Tcell", 
+                                   as.character(plyr::mapvalues(colnames(immune_seurat),
+                                                                colnames(tcell_seurat),
+                                                                tcell_seurat$NMF_rank9_annot, warn_missing = FALSE)),
+                                   "Myeloid")
+
 saveRDS(tcell_seurat, file="analysis/manual_broad_annot/tcell_seurat.Rds")
+saveRDS(immune_seurat, file="analysis/preprocessing/seurat_obj_noTumor.Rds")
 ```
 
 ## Basic plots- UMAP, barchart by sample, expression of expected GOI

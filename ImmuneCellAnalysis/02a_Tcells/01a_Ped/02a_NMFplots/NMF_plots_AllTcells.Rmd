@@ -252,6 +252,31 @@ ggsave(paste0(figure_dir,filename, ".png"), width=5, height=4)
 ```
 
 
+## RAW DATA EXPORT
+```{r}
+## Load in file to be edited- ped cell wise annotations
+df<- read.csv("../../../../notUploaded/ImmuneDraft_Rebecca/raw_results_files/ped_cellwise_annotations.csv", row.names = "X")
+
+## Add program
+df$Program<- ifelse(df$broad_annot=="Tcell" & rownames(df) %in% colnames(tcell_seurat),
+                    as.character(plyr::mapvalues(rownames(df),
+                                                 colnames(tcell_seurat),
+                                                 as.character(tcell_seurat$Final_Annot))),
+                    df$Program)
+df$Program<- gsub("Tcell_Hold", "Tcell_Removed", df$Program)
+df$Program<- gsub("Inhibitory", "Activated_EM", df$Program)
+
+## Add on clonality info
+clonal_df<- tcell_seurat@meta.data[,c("tcr_reconstructed", "clonal_group", "group_size", "clonal")]
+clonal_df<- rbind(clonal_df, data.frame(tcr_reconstructed=rep("NA", sum(df$broad_annot!="Tcell")),
+                                        clonal_group=rep("NA", sum(df$broad_annot!="Tcell")),
+                                        group_size=rep("NA", sum(df$broad_annot!="Tcell")),
+                                        clonal=rep("NA", sum(df$broad_annot!="Tcell")),
+                                        row.names = rownames(df)[df$broad_annot!="Tcell"]))
+df<- merge(df, clonal_df, by=0)
+
+write.csv(df, file="../../../../notUploaded/ImmuneDraft_Rebecca/raw_results_files/ped_cellwise_annotations.csv")
+```
 
 
 

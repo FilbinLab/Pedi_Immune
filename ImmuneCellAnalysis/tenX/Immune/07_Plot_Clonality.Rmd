@@ -405,6 +405,9 @@ ggplot(clonotypes_shared, aes(x=Program1, y=Program2, fill=NClonotypes_Shared_No
 #ggsave(paste0(figure_dir, "Tcells_clonotypesSharedAcrossPrograms_NormProp_magenta.yellow.pdf"), width=8, height=5, device="pdf")
 
 saveRDS(clonotypes_shared, file=paste0(analysis_dir, "clonotypes_shared_across_programs.Rds"))
+
+## RAW DATA EXPORT
+write.csv(clonotypes_shared, file="../../../notUploaded/ImmuneDraft_Rebecca/raw_results_files/tenx_tcell_clonotypes_shared_by_program.csv")
 ```
 
 ## Number of clonotypes shared across programs- permutation testing for significance

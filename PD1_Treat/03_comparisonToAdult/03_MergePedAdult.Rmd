@@ -250,5 +250,12 @@ all_plots<- lapply(names(foldchange_program_treated), function(celltype){
 })
 cowplot::plot_grid(plotlist = all_plots, ncol=3)
 ggsave(paste0(figure_dir, "LogFoldChange_Treated.vs.Untreated_bySample_Boxplot.pdf"),device="pdf", width=20, height=4)
+
+## RAW DATA EXPORT
+for (celltype in names(foldchange_program_treated)){
+  tmp<- foldchange_program_treated[[celltype]]
+  tmp<- tmp %>% dplyr::rename(Proportion=perCells) %>% as.data.frame()
+  write.csv(tmp, file=paste0("../../notUploaded/ImmuneDraft_Rebecca/raw_results_files/foldchange_program.proportion_pd1.itn_ped.adult_", celltype, ".csv"))
+}
 ```
 

@@ -134,9 +134,9 @@ ggsave(paste0(figure_dir, "CD4CD8.BcellDC.png"), width=6, height=5.5)
 
 ## Add on monocyte annotation (confirmed with NMF programs)- just to explain far-clustering myeloid cluster
 ## Need to increase resolution first
-seurat_plot<- FindClusters(immune_seurat, resolution = 1.5)
-seurat_plot<- subset(seurat_plot, detailed_annot_byNMF != "Unclear")
-seurat_plot$plotting<- ifelse(seurat_plot$seurat_clusters=="10", "Monocyte",seurat_plot$detailed_annot_byNMF)
+immune_seurat<- FindClusters(immune_seurat, resolution = 1.5)
+immune_seurat$plotting<- ifelse(immune_seurat$seurat_clusters=="10", "Monocyte",immune_seurat$detailed_annot_byNMF)
+seurat_plot<- subset(immune_seurat, detailed_annot_byNMF != "Unclear")
 immune_colors<- c(immune_colors, Monocyte="orange")
 DimPlot(seurat_plot, group.by = "plotting", label=TRUE, label.size = 5) %>% umap_theme()
 ggsave(paste0(figure_dir, "CD4CD8.BcellDCMonocyte.png"), width=6, height=5.5)
@@ -195,6 +195,11 @@ ggplot(df_bd, aes(x=Subtype, y=CellProportion, fill=CellType))+
   scale_fill_manual(values=c(immune_colors[names(immune_colors) %in% unique(df_bd$CellType)]))
 ggsave(paste0(figure_dir, "Immune_broadAnnot.withDC.Mono.BC_BreakdownAcrossAllSubtypes.pdf"), device="pdf", width=4, height=4)
 
+
+## RAW DATA EXPORT
+df<- immune_seurat@meta.data[,c("sample", "sort", "NiceSubtype", "broad_annot", "plotting")]
+df<- df %>% dplyr::rename(detailed_annot=plotting, subtype=NiceSubtype) %>% as.data.frame()
+write.csv(df, file="../../notUploaded/ImmuneDraft_Rebecca/raw_results_files/ped_cellwise_annotations.csv")
 ```
 
 

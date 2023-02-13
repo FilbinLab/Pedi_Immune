@@ -120,6 +120,15 @@ shared_degs<- lapply(names(ss2_de_filtered), function(x){
 names(shared_degs)<- names(ss2_de_filtered)
 
 saveRDS(shared_degs, file=paste0(analysis_dir, "shared_degs_tenx.ss2_pvalueThresh", pvalue_thresh, ".Rds"))
+
+## RAW DATA EXPORT
+shared_degs<- lapply(names(shared_degs), function(celltype){
+  tmp<- shared_degs[[celltype]]
+  tmp$celltype<- celltype
+  return(tmp)
+})
+shared_degs<- do.call(rbind, shared_degs)
+write.csv(shared_degs, file="../../notUploaded/ImmuneDraft_Rebecca/raw_results_files/de_pd1.itn_byProgram_ss2.tenx.csv")
 ```
 
 ## Plot logFC in ss2 vs tenx for each shared gene

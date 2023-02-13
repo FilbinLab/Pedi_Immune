@@ -385,4 +385,8 @@ cowplot::plot_grid(plotlist = all_plots, ncol=4)
 ggsave(paste0(figure_dir, "SELPLGexpr.vs.exhaustionMarkers_no0Counts.png"), width=18, height=6)
 ```
 
+## RAW FILE EXPORT
+```{r}
+cd8_all<- readRDS(paste0(analysis_dir, "ped_cd8_seurat_cnc_preprocessed_all.Rds"))
+```
 

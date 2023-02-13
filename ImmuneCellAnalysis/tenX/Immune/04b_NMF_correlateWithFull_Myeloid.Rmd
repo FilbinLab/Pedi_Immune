@@ -50,7 +50,7 @@ my_correlationHeatmap<- function(scores,r, figure_dir=figure_dir_use){
                                   ifelse(grepl("Adult10X",scores_factor_cor$color),"green", "black"))
   
   ## Heatmap of correlations
-  hm_colors = rev((brewer.pal(n=9, name="RdBu")))
+  hm_colors<- c("#003366","cyan4", "white","#FFFFCC", "#FFCC66")
   hm_colors = colorRampPalette(colors = hm_colors)
   
   p<-pheatmap(scores_factor_cor[,colnames(scores_factor_cor) != "color"], color = hm_colors(100), 
@@ -82,6 +82,9 @@ save_pheatmap_pdf <- function(x, filename, width=7, height=7) {
 ```{r}
 ## Seurat- 10X
 myeloid_seurat<- readRDS("analysis/manual_broad_annot/myeloid_seurat.Rds")
+
+## Tcell/myeloid- 10x (for adding program annotations)
+immune_seurat<- readRDS( "analysis/preprocessing/seurat_obj_noTumor.Rds")
 
 
 ## Seurat- full cohort
@@ -245,7 +248,7 @@ for(r in ranks){
   p<-my_correlationHeatmap(scores, r)
   cp<- p$p
   
-  save_pheatmap_pdf(cp, paste0(figure_dir_use, "Cor_DenovoRank", r, "_fullCohort.pdf"), width=10, height=6)
+  save_pheatmap_pdf(cp, paste0(figure_dir_use, "Cor_DenovoRank", r, "_fullCohort_updatedColors.pdf"), width=10, height=6)
   
   #pdf(paste0(figure_dir_use, "Cor_DenovoRank", r, "_fullCohort.pdf"), width = 700, height = 400)
   #grid::grid.newpage()
@@ -277,6 +280,9 @@ for(r in ranks){
   #grid::grid.newpage()
   #grid::grid.draw(cp$gtable)
   #dev.off()
+  
+  ## RAW DATA EXPORT
+  write.csv(scores, file=paste0(analysis_dir_use, "scores_DenovoRank", r, "_fullCohort_noAC.csv" ))
   
   ## Dendrogram of hierarchical clustering 
   jpeg(filename=paste0(figure_dir_use, "HC_DenovoRank", r, "_fullCohort.png"), width = 400, height = 600)
@@ -444,8 +450,17 @@ for(r in ranks_use){
                                                gsub("[1-2]", "", myeloid_seurat@meta.data[[m]]),
                                                myeloid_seurat@meta.data[[m]])
 }  
+
+# annotate immune seurat
+immune_seurat$Final_Annot<- ifelse(immune_seurat$broad_annot=="Myeloid", 
+                                   as.character(plyr::mapvalues(colnames(immune_seurat),
+                                                                colnames(myeloid_seurat),
+                                                                myeloid_seurat$NMF_rank13_annot_simplified, warn_missing = FALSE)),
+                                   immune_seurat$Final_Annot)
   
+    
 saveRDS(myeloid_seurat, file="analysis/manual_broad_annot/myeloid_seurat.Rds")
+saveRDS(immune_seurat, file="analysis/preprocessing/seurat_obj_noTumor.Rds")
 
 ```
 

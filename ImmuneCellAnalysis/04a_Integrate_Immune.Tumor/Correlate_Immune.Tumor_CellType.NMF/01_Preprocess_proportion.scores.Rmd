@@ -199,6 +199,11 @@ mean_scores<- lapply(mean_scores, function(x){
 ## Save- mean scores by sample, scores by cell
 saveRDS(mean_scores, file=paste0(analysis_dir, "program_scores_myeloid.cd4.cd8.tumor.Rds"))
 saveRDS(all_scores, file=paste0(analysis_dir, "program_scores_byCell_myeloid.cd4.cd8.tumor.Rds"))
+
+## RAW DATA EXPORT
+mean_scores<- lapply(names(mean_scores), function(celltype){tmp<- mean_scores[[celltype]]; tmp$celltype<- celltype; return(tmp)})
+mean_scores<- do.call("rbind", mean_scores)
+write.csv(mean_scores, file="../../../notUploaded/ImmuneDraft_Rebecca/raw_results_files/scores_tumor.myeloid.cd4.cd8_mean.by.sample.csv")
 ```
 
 

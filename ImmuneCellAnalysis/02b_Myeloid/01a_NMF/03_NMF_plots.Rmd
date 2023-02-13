@@ -272,6 +272,14 @@ n_terms<- 10
 go_plots<- plotGO(go_result = go_result, n_terms = n_terms)
 cowplot::plot_grid(plotlist=go_plots, ncol=2)
 ggsave(paste0(figure_dir, "GO_NMFrank", rank, "_10xAnnotated_nTerms",n_terms, ".pdf"),device="pdf", width=16, height=18)
+
+saveRDS(go_result, file=paste0(analysis_dir,"GO_NMFrank", rank, "_10xAnnotated_nTerms.Rds") )
+
+## RAW DATA EXPORT
+cluster_summary<- lapply(go_result, function(x){x$cluster_summary})
+cluster_summary<- lapply(names(cluster_summary), function(program){tmp<- cluster_summary[[program]]; tmp$program<- program; return(tmp)})
+cluster_summary<- do.call("rbind", cluster_summary)
+write.csv(cluster_summary, file="../../../notUploaded/ImmuneDraft_Rebecca/raw_results_files/myeloid_program_GO_terms.csv")
 ```
 
 ## Density plots
@@ -504,5 +512,34 @@ bd$Sample<- rownames(bd)
 bd$Subtype<- gsub("-", "_", bd$Subtype)
 write.csv(bd, paste0(sccoda_dir,"Ped_Myeloid_NMFPrograms.csv"), row.names = FALSE)
 
+```
+
+## RAW DATA EXPORT
+```{r}
+## Load in file to be edited- ped cell wise annotations
+df<- read.csv("../../../notUploaded/ImmuneDraft_Rebecca/raw_results_files/ped_cellwise_annotations.csv", row.names = "X")
+
+## Add program
+df$Program<- ifelse(df$broad_annot=="Myeloid" & rownames(df) %in% colnames(myeloid_seurat),
+                    as.character(plyr::mapvalues(rownames(df),
+                                                 colnames(myeloid_seurat),
+                                                 as.character(myeloid_seurat$NMF_rank6_annotByAdult10X))),
+                    ifelse(df$broad_annot=="Tcell", "Tcell_Hold", "Myeloid_Removed"))
+df$Program<- gsub("Stress_Response", "Microglia", df$Program)
+
+## Add mg/mo-tam distinction- separate column only for myeloid
+myeloid_seurat$MgMoMonocyte_annot<- gsub("Adult_", "",gsub("Monocytes", "Monocyte", myeloid_seurat$MgMoMonocyte_annot))
+df$Microglia_Macrophage_annot<- ifelse(df$broad_annot=="Myeloid" & rownames(df) %in% colnames(myeloid_seurat),
+                           as.character(plyr::mapvalues(rownames(df),
+                                                 colnames(myeloid_seurat),
+                                                 as.character(myeloid_seurat$MgMoMonocyte_annot))),
+                           "NA")
+df$Microglia_Macrophage_Score<- ifelse(df$broad_annot=="Myeloid" & rownames(df) %in% colnames(myeloid_seurat),
+                           as.character(plyr::mapvalues(rownames(df),
+                                                 colnames(myeloid_seurat),
+                                                 as.character(myeloid_seurat$MgMoMonocyte_score))),
+                           "NA")
+
+write.csv(df, file="../../../notUploaded/ImmuneDraft_Rebecca/raw_results_files/ped_cellwise_annotations.csv")
 ```
 

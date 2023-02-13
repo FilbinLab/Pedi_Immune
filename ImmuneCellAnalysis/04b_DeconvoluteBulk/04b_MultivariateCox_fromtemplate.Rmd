@@ -491,6 +491,9 @@ ggplot(df, aes(x=HazardRatio, y=ControlFor,color=Variable ))+
 ggsave(paste0(figure_dir, "allCoxResults_ControlFor.", 
               paste(ToBeControlled, collapse="."),"_", 
               analysis_name,split_method, ".pdf"), device="pdf", width=13, height=5)
+
+## RAW DATA EXPORT
+write.csv(df, file="../../notUploaded/ImmuneDraft_Rebecca/raw_results_files/cox_regression_survival_by_program.csv")
 ```
 
 
