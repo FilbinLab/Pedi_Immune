@@ -7,7 +7,7 @@ Overall approach:
 4) Compare programs (+ cells types) to adult myeloid cells (SmartSeq2 IDHmut/GBM datasets). 
 
 <p align="center">
-  <img width="460" height="300" src="Myeloidanalysisworkflow">
+  <img width="500" height="280" src="Myeloidanalysisworkflow.png">
 </p>
 
 ### NMF ###
