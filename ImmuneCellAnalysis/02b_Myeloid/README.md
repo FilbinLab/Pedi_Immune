@@ -1,7 +1,7 @@
 ## Analysis of myeloid scRNAseq
 
 Overall approach:
-1) [De novo NMF for pediatric myeloid cells](#01a_NMF/) 
+1) [De novo NMF for pediatric myeloid cells](#***01a_NMF/***) 
 2) Correlate with adult GBM 10X to help annotate
 3) Identify higher-level cell types (macrophage/microglia) across programs. 
 4) Compare programs (+ cells types) to adult myeloid cells (SmartSeq2 IDHmut/GBM datasets). 
