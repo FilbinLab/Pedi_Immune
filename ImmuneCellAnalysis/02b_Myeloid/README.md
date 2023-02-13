@@ -1,21 +1,20 @@
 ## Analysis of myeloid scRNAseq
 
 Overall approach:
-1) [De novo NMF for pediatric myeloid cells](#NMF) 
-2) Correlate with adult GBM 10X to help annotate
-3) Identify higher-level cell types (macrophage/microglia) across programs. 
-4) Compare programs (+ cells types) to adult myeloid cells (SmartSeq2 IDHmut/GBM datasets). 
+1) [De novo NMF for pediatric myeloid cells](#1. NMF) 
+2) [Correlate with adult GBM 10X to help annotate](#2. Use published 10x glioma-associated myeloid scRNAseq data as reference to help annotate)
+3) [Identify higher-level cell types (macrophage/microglia) across programs](#3. Additional layers of annotation *(/02_AdditionalAnnotation/)*)
+4) [Compare programs (+ cells types) to adult myeloid cells (SmartSeq2 IDHmut/GBM datasets)](#4. Adult/pediatric comparison: */03_CompareToAdult/*) 
 
 <p align="center">
   <img width="500" height="280" src="Myeloidanalysisworkflow.png">
 </p>
 
-### NMF ###
+### 1. NMF ###
  
 ***01a_NMF/***
 - Ran NMF locally for myeloid cells, as well as with Cycling set as separate program (this option not used downstream)- ***01a_NMF*.Rmd***
-- programs plotted in ***NMF_plots.Rmd*** (heat maps, UMAP, etc
-- Correlate ped programs with adult gbm 10x to help annotate. Correlated with both primary and recurrent tumors from adult GBM 10X dataset, but recurrent used downstream. ***02b_AdultGBM10X_AnnotatePed*.Rmd***
+- programs plotted in ***NMF_plots.Rmd*** (heat maps, UMAP, etc)
 -Tested different numbers of repeats (10/30/50) in ***NMF_10vs30vs50_repeats.Rmd***. For myeloid cells at least (nothing else tested), there was no real difference between number of repeats, so 10x used downstream.
 
 
@@ -27,8 +26,11 @@ Overall approach:
 ***01c_Liger/***
 	Run integrative NMF (liger) on pediatric myeloid cells. correlate with NMF programs. Main purpose here is to help inform the number of programs to use.
 
+### 2. Use published 10x glioma-associated myeloid scRNAseq data as reference to help annotate
 
-### Addtional layers of annotation- 02_AdditionalAnnotation
+- Correlate ped programs with adult gbm 10x to help annotate. Correlated with both primary and recurrent tumors from adult GBM 10X dataset, but recurrent used downstream. ***01a/NMF/02b_AdultGBM10X_AnnotatePed*.Rmd***
+
+### 3. Additional layers of annotation *(/02_AdditionalAnnotation/)*
 
 - No ordering to these Rmd files, none depend on others
 - Used for additional levels of annotation (primarily microglia/macropahge) on top of programs. Also compare programs to these cell types to help annotate programs- some are exclusively microglia/macrophage, others are a mix
@@ -52,7 +54,7 @@ Overall approach:
 		Li sent markers from a paper that described functional states in myeloid cells. Scored these here, compared to myeloid programs. No clear correlation, not used downstream
 	
 	
-## Adult/pediatric comparison: 03_CompareToAdult
+## 4. Adult/pediatric comparison: */03_CompareToAdult/*
 Overall goal of analyses in this folder are to compare the proportion of programs and cell types in adult vs ped myeloid cells
 
 ***01_Merge_AssessIntegration.Rmd***: merge ped/adult myeloid cells into single object for later use. Compare integration of ped/adult on UMAP. This helped to determine that ped/adult don’t form distinct clusters, and that, in general, we expect PROPORTIONS of cell states to vary, but not necessarily cell states themselves. 
