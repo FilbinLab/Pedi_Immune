@@ -10,7 +10,7 @@ Overall approach:
   <img width="500" height="280" src="Myeloidanalysisworkflow.png">
 </p>
 
-### NMF ###
+### 1. NMF ###
  
 ***01a_NMF/***
 - Ran NMF locally for myeloid cells, as well as with Cycling set as separate program (this option not used downstream)- ***01a_NMF*.Rmd***
