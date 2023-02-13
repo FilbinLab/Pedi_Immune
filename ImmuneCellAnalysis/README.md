@@ -1,6 +1,6 @@
 ## All analyses for immune scRNAseq data
 
-***01_Preprocessing/***: Initial QC performed by Orr Ashenberg. Processing here: 
+***01_Preprocessing/***: Initial QC performed by Orr Ashenberg (Regev lab, Broad Institute). Processing here: 
   - Post-**Tracer** processing for clonal T cell identifiction
   - **merging samples** (sequenced and added to cohort at different times)
   - **"Broad" annotation** (Tcell vs Myeloid)
