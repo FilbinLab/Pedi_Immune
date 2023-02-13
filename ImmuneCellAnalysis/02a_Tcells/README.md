@@ -60,7 +60,7 @@ In ***02_Ped.Adult/04b_ComparisonToOtherTumor***:
 In ***02_Ped.Adult/04a_Trajectory***:
 	- Run Slingshot trajectory analysis- various combinations of programs (*Not used downstream*). ***Slingshot.Rmd***
 	- Run Monocle (*Not used downstream*). ***Monocle.Rmd***
-	- Run STREAM trajectory comparing glioma, NSCLC, and melanoma CD8 Tcells (*This approach used downstream*). ***STREAM_preprocess.Rmd*** and ***3.STREAM_mapping_nsclc.melanoma.glioma.ipynb***
+	- Run STREAM trajectory comparing glioma, NSCLC, and melanoma CD8 Tcells (*This approach used downstream*). ***01_STREAM_preprocess.Rmd***, ***02_Process_ref_for_STREAM.ipynb***, and ***03_Map_onto_ref_STREAM.ipynb***
 
 ### 7- Clonal analysis:
 In ***01a_Ped/02_ClonalOverexpression*** and ***01b_Adult/02_ClonalOverexpression***, run clonal vs monoclonal analysis as in Cell 2021 to identify genes over expressed in clonal cells. Run separately for adult/ped. Actual analysis is run on O2 due to time/memory constraints. NOTE: this analysis is run AFTER NMF and AFTER identifying CD4/CD8 cells in program-wise basis for Adult/Ped t cells together. Thus, the adult results may vary slightly from Cell 2021 paper, as our CD4/CD8 annotations are not identical
