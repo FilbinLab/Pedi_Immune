@@ -6,6 +6,9 @@ Overall approach:
 3) Identify higher-level cell types (macrophage/microglia) across programs. 
 4) Compare programs (+ cells types) to adult myeloid cells (SmartSeq2 IDHmut/GBM datasets). 
 
+<p align="center">
+  <img width="460" height="300" src="Myeloidanalysisworkflow">
+</p>
 
 ### NMF ###
  
