@@ -17,7 +17,7 @@ All Tcell analysis (NMF, comparing programs, detailed annotation based on progra
 
 This includes pediatric Tcells, adult Tcells, and comparisons between the two. It does NOT include basic visualizations (UMAP with annotations, etc) or any analyses that also use myeloid cells. 
 
-### 1 Run NMF:
+### 1- Run NMF:
 
 In ***01a_Ped/NMF*** and ***01b_Adult/NMF***:
 	- Run de novo NMF on all Tcells separately for pediatric (***01a_Ped/NMF***) and adult (***01b_Adult/NMF***) T cells. 
