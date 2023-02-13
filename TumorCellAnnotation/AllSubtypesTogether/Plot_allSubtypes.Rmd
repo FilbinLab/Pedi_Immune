@@ -1,0 +1,183 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+## Plot summary figure of tumor cell annotation/support with markers
+
+```{r}
+base_dir = "/Users/jlabelle/"
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/TumorCellAnnotation/AllSubtypesTogether/")
+
+
+
+library(Seurat)
+library(ggplot2)
+library(ggpubr)
+library(randomcoloR)
+
+analysis_dir<- "analysis/Merge_allSubtypes/"
+figure_dir<- "figures/plot_allSubtypes/"
+if(!dir.exists(figure_dir)){dir.create(figure_dir)}
+
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+nmf_helper = paste0(base_dir, script_dir, "NMF_helper_function.R")
+source(nmf_helper)
+```
+
+
+## Load merged seurat object
+```{r}
+load(paste0(analysis_dir, "AllTumorSeuratObj.Robj"))
+seurat_obj<- tumor_merged; rm(tumor_merged)
+
+## Fix cycling annot to match
+seurat_obj$CellAnnot<- gsub("cycling", "Cycling",
+                            gsub("MES2", "MES-like", 
+                                 gsub("GIPC-like", "Neuronal-like", seurat_obj$CellAnnot)))
+
+## Fix subtype names
+seurat_obj$subtype<- gsub("epn", "EPN", 
+                          gsub("hemiBCOR", "BCOR", 
+                               gsub("hemiHistoneMut", "H3G34RV", 
+                                    gsub("hemiHistoneWT", "GBM",
+                                         gsub("midlineHistoneMut", "H3K27M",
+                                              gsub("midlineHistoneWT", "H3WT", seurat_obj$subtype))))))
+
+## Set colors
+colors<- c(`AC-like`="#da6101", `OPC-like`="#766fb4", Cycling="#666666", `MES-like`="#2e9d78", `OC-like`="#e8298c",
+           Ependymal_like="pink", `GIPC-like`="yellowgreen", Immune_Reactive="brown", Metabolic="blue", `Neuronal-like`="skyblue4",
+           PF_NSC_like="salmon", `Ribo-Active`="cyan", SP_Progenitor_like="palevioletred3", SP_Variable="slateblue", ST_Midline="gold", 
+           ST_Neuronal_Precursor_like="orange", ST_Radial_Glia_like="olivedrab")
+```
+
+## Pie chart of annotations by subtype
+```{r}
+## Proportion of program by subtype
+bd<- as.data.frame(table(seurat_obj$subtype, seurat_obj$CellAnnot))
+colnames(bd)<- c("Subtype", "Program", "NCells")
+bd<- bd %>% group_by(Subtype) %>% mutate(PerCells=NCells/sum(NCells)) %>% as.data.frame()
+
+## Order subtypes
+bd$Subtype<- factor(bd$Subtype, levels=c("EPN", "BCOR", "GBM","H3G34RV", "H3WT", "H3K27M"))
+
+## Plot piechart
+ggplot(bd, aes(x="", y=PerCells, fill=Program))+
+  geom_bar(stat="identity",width=.25, color="white")+
+  theme_void()+
+  coord_polar("y", start=0)+
+  facet_grid(cols=vars(Subtype))+
+  scale_fill_manual(values=colors)+
+  theme(legend.position = "bottom")
+ggsave(paste0(figure_dir, "PieChart_ProgramProportion.pdf"), device="pdf",width=12, height=5)
+```
+
+## Annotation support: scores for expected signatures
+```{r}
+## Load EPN markers
+published_dir<- paste0(base_dir, "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/PublishedDatasets/FilbinPublishedDatasets/Metaprograms/")
+epn_metaprograms<- read.csv(paste0(published_dir,"TableS2_epn2020Paper_Metaprograms_AllMerged.csv"))
+epn_metaprograms<- as.list(epn_metaprograms)
+epn_metaprograms<- lapply(epn_metaprograms, function(x){x[x!=""]})
+names(epn_metaprograms)<- gsub("Neuronal.Precursor.like", "ST.Neuronal.Precursor.like", names(epn_metaprograms))
+
+## Load DIPG (for MES program)
+dipg_metaprograms<- read.table(paste0(published_dir, "metaprogram_genes_DIPG_updated.txt"), header = TRUE)
+
+## Load G34R (for GIPC)
+g34r_programs<- read.csv("../BySubtype/Hemispheric/HistoneMut/analysis/FromIlon_G34RV_Markers_FreshFrozen.csv")
+
+## Load GBM (for neuronal-like)
+gbm_programs<- readRDS(paste0(published_dir, "hemisphericPreviousPrograms_2019_OC.rds"))
+
+marker_list<- list(`OPC.like`=c("PDGFRA", "OLIG1", "APOD","CCND1", "CD24", "ASCL1", "ETV1", "SEZ6L", "HES6"),
+                   `OC.like`=c("BCAS1", "SIRT2", "RGR",  "GPR17", "NFASC", "MBP","TF", "MOG", "PLP1"),
+                   `AC.like`= c("APOE", "AQP4", "AGT",  "SPARCL1", "GFAP", "S100B", "ALDOC", "CLU"),
+                   `Neuronal.like`=c(gbm_programs$NPC2_2019, gbm_programs$NPC1_2019),
+                   Cycling=c("CDK4", "TOP2A"), 
+                   MES.like=dipg_metaprograms$MES_like,
+                   Ribo.Active=c("RPSAP58","RPH3A", "RPN2" ),
+                   GIPC.like=g34r_programs$fresh.GIPC.like)
+marker_list<- c(marker_list, epn_metaprograms)
+
+
+## Add module score
+seurat_obj<- AddModuleScore(seurat_obj, marker_list, name=names(marker_list))
+
+## rename (remove numbers)
+colnames(seurat_obj@meta.data)<-ifelse(!grepl("ST.YAP1", colnames(seurat_obj@meta.data)), 
+                                       gsub("[0-9]*$", "", colnames(seurat_obj@meta.data)),
+                                       "ST.YAP1")
+
+## Plot epn samples
+  ## Subset to epn
+  epn_seurat<- subset(seurat_obj, subtype=="EPN")
+  
+  ## rename programs to match signautre names
+  programs<- unique(gsub("-", "\\.", gsub("_", "\\.", epn_seurat$CellAnnot)))
+  epn_seurat$CellAnnot<- factor(gsub("-", "\\.", gsub("_", "\\.", epn_seurat$CellAnnot)), levels=programs)
+
+  ## Plot
+  DotPlot(epn_seurat, 
+          features=levels(epn_seurat$CellAnnot), 
+          group.by = "CellAnnot")+
+    coord_flip()+
+    theme(axis.text.x = element_text(angle=45, hjust=1))+
+    scale_color_gradient2(low="yellowgreen", mid="white", high="violetred3")+
+    ylab("Signatures") + xlab("Programs")
+  ggsave(paste0(figure_dir, "EPN_signatureScores.pdf"),device="pdf", width=8, height=5)
+  
+## Plot hgg samples (also no bcor)
+  ## Subset 
+  hgg_seurat<- subset(seurat_obj, subtype %in% unique(seurat_obj$subtype)[!unique(seurat_obj$subtype) %in% c("EPN", "BCOR")])
+  
+  ## rename programs to match signautre names
+  programs<- unique(gsub("-", "\\.", gsub("_", "\\.", hgg_seurat$CellAnnot)))
+  hgg_seurat$CellAnnot<- factor(gsub("-", "\\.", gsub("_", "\\.", hgg_seurat$CellAnnot)), levels=programs)
+
+  ## Plot
+  #seurat_obj$CellAnnot_tmp<- ifelse(seurat_obj$subtype %in% c("BCOR", "EPN"), "Other",seurat_obj$CellAnnot)
+  DotPlot(hgg_seurat, 
+          features=c(levels(hgg_seurat$CellAnnot)), 
+          group.by = "CellAnnot")+
+    coord_flip()+
+    theme(axis.text.x = element_text(angle=45, hjust=1))+
+    scale_color_gradient2(low="yellowgreen", mid="white", high="violetred3")+
+    ylab("Signatures") + xlab("Programs")
+  ggsave(paste0(figure_dir, "HGG_signatureScores.pdf"),device="pdf", width=6, height=4)
+
+
+
+
+
+
+
+```
+
+## RAW FILE EXPORT
+```{r}
+## cell wise annotations
+df<- seurat_obj@meta.data[,c("sample", "CellAnnot", "subtype")]
+write.csv(df, "../../notUploaded/ImmuneDraft_Rebecca/raw_results_files/tumor_cellwise_annotations.csv")
+
+## marker genes used to validate
+max_program_length<- max(unlist(lapply(marker_list, length)))
+marker_list_df<- lapply(names(marker_list), function(program){
+  tmp<- marker_list[[program]]
+  tmp<- as.data.frame(tmp)
+  colnames(tmp)<- "tmp"
+  tmp<- rbind(tmp, data.frame(tmp=rep("", max_program_length-nrow(tmp))))
+  colnames(tmp)<- program
+  return(tmp)
+  })
+
+marker_df<- do.call("cbind", marker_list_df)
+marker_df<- marker_df[,colnames(marker_df) %in% gsub("-", "\\.", gsub("_", "\\.", seurat_obj$CellAnnot))]
+write.csv(marker_df, file="../../notUploaded/ImmuneDraft_Rebecca/raw_results_files/tumor_programs_reference_marker_genes.csv")
+```
+
