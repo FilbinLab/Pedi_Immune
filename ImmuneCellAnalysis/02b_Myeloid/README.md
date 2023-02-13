@@ -2,7 +2,7 @@
 
 Overall approach:
 1) [De novo NMF for pediatric myeloid cells](#NMF) 
-2) [Correlate with adult GBM 10X to help annotate](#2.-Use-published-10x-glioma-associated-myeloid-scRNAseq-data-as-reference-to-help-annotate)
+2) [Correlate with adult GBM 10X to help annotate](#Use-published-10x-glioma-associated-myeloid-scRNAseq-data-as-reference-to-help-annotate)
 3) [Identify higher-level cell types (macrophage/microglia) across programs](#3. Additional layers of annotation *(/02_AdditionalAnnotation/)*)
 4) [Compare programs (+ cells types) to adult myeloid cells (SmartSeq2 IDHmut/GBM datasets)](#4. Adult/pediatric comparison: */03_CompareToAdult/*) 
 
@@ -26,7 +26,7 @@ Overall approach:
 ***01c_Liger/***
 	Run integrative NMF (liger) on pediatric myeloid cells. correlate with NMF programs. Main purpose here is to help inform the number of programs to use.
 
-### 2. Use published 10x glioma-associated myeloid scRNAseq data as reference to help annotate
+### Use published 10x glioma-associated myeloid scRNAseq data as reference to help annotate
 
 - Correlate ped programs with adult gbm 10x to help annotate. Correlated with both primary and recurrent tumors from adult GBM 10X dataset, but recurrent used downstream. ***01a/NMF/02b_AdultGBM10X_AnnotatePed*.Rmd***
 
