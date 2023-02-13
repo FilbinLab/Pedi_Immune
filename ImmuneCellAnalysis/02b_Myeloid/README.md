@@ -4,7 +4,7 @@ Overall approach:
 1) [De novo NMF for pediatric myeloid cells](#NMF) 
 2) [Correlate with adult GBM 10X to help annotate](#Use-published-10x-glioma-associated-myeloid-scRNAseq-data-as-reference-to-help-annotate)
 3) [Identify higher-level cell types (macrophage/microglia) across programs](#Additional-layers-of-annotation)
-4) [Compare programs (+ cells types) to adult myeloid cells (SmartSeq2 IDHmut/GBM datasets)](#4. Adult/pediatric comparison: */03_CompareToAdult/*) 
+4) [Compare programs (+ cells types) to adult myeloid cells (SmartSeq2 IDHmut/GBM datasets)](#Adult/pediatric-comparison) 
 
 <p align="center">
   <img width="500" height="280" src="Myeloidanalysisworkflow.png">
@@ -55,7 +55,8 @@ Overall approach:
 		Li sent markers from a paper that described functional states in myeloid cells. Scored these here, compared to myeloid programs. No clear correlation, not used downstream
 	
 	
-## 4. Adult/pediatric comparison: */03_CompareToAdult/*
+## Adult/pediatric comparison: 
+*/03_CompareToAdult/*
 Overall goal of analyses in this folder are to compare the proportion of programs and cell types in adult vs ped myeloid cells
 
 ***01_Merge_AssessIntegration.Rmd***: merge ped/adult myeloid cells into single object for later use. Compare integration of ped/adult on UMAP. This helped to determine that ped/adult don’t form distinct clusters, and that, in general, we expect PROPORTIONS of cell states to vary, but not necessarily cell states themselves. 
