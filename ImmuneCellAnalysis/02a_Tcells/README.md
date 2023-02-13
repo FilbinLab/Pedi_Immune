@@ -6,8 +6,8 @@ All Tcell analysis (NMF, comparing programs, detailed annotation based on progra
 2. [Correlate pediatric and adult programs identified](#Correlate-pediatric-and-adult-programs)
 3. [Identify CD4 and CD8 T cells](#Identify-CD4-and-CD8-T-cells)
 4. [Visualize final programs](#Visualize-final-programs)
-5. [Run Trajectory analysis](#Run-Trajectory-analysis)
-6. [Compare to published melanoma and NSCLC-associated T cells](#Compare-to-published-melanoma-and-NSCLC-associated-T-cells)
+5. [Compare to published melanoma and NSCLC-associated T cells](#Compare-to-published-melanoma-and-NSCLC-associated-T-cells)
+6. [Run Trajectory analysis](#Run-Trajectory-analysis)
 7. [Clonal analysis](#Clonal-analysis)
 
 <p align="center">
@@ -17,7 +17,7 @@ All Tcell analysis (NMF, comparing programs, detailed annotation based on progra
 
 This includes pediatric Tcells, adult Tcells, and comparisons between the two. It does NOT include basic visualizations (UMAP with annotations, etc) or any analyses that also use myeloid cells. 
 
-### Run NMF:
+### 1. Run NMF:
 
 In ***01a_Ped/NMF*** and ***01b_Adult/NMF***:
 	- Run de novo NMF on all Tcells separately for pediatric (***01a_Ped/NMF***) and adult (***01b_Adult/NMF***) T cells. 
