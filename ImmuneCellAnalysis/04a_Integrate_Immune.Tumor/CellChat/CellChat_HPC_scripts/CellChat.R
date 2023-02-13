@@ -1,10 +1,3 @@
----
-title: "R Notebook"
-output: html_document
----
-
-This script kept as example of cellchat analysis, but not run from here- use HPC scripts in CellChat_HPC_scripts
-```{r}
 #!/usr/bin/env Rscript
 
 ## Libraries
@@ -12,51 +5,23 @@ library(CellChat)
 library(Seurat) 
 
 ## Helper function
-#cellchatHelper<-paste0("~/scripts/R/CellChat_HelperFunctions.R")
-#source(cellchatHelper)
-
-options(stringsAsFactors = FALSE)
-
-base_dir = "/Users/jlabelle/"
-script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Scripts/"
-working_dir<- paste0(base_dir, 
-                     "Dropbox (Partners HealthCare)/FilbinLab/",
-                     "data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/04a_Integrate_Immune.Tumor/CellChat/")
-
-
-analysis_dir<- paste0(working_dir, "/analysis/CellChat/")
-
-
-cellchatHelper<- paste0(base_dir, script_dir, "CellChat_HelperFunctions.R")
+cellchatHelper<-paste0("~/scripts/R/CellChat_HelperFunctions.R")
 source(cellchatHelper)
 
-setwd(working_dir)
 
-```
-
-
-```{r}
 ## args: seurat object name, column in metadata to use, output directory, cell type of interest #1, cell type of interest #2, whether or not to downsample (TRUE/FALSE)
 ## cell types #1 and #2 should be present in under annotColumn within the seurat object's metadata
 
-#args=commandArgs(trailingOnly=TRUE)
+args=commandArgs(trailingOnly=TRUE)
 
-#seurat_obj<- args[1]
-#annotColumn<- args[2]
-#output_dir<- args[3]
-#celltype_1<- args[4]
-#celltype_2<- args[5]
-#downsample<- args[6]
+seurat_obj<- args[1]
+annotColumn<- args[2]
+output_dir<- args[3]
+celltype_1<- args[4]
+celltype_2<- args[5]
+downsample<- args[6]
 
-seurat_obj<-  "/Users/jlabelle/Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Projects/git_repos/Pedi_Immune/ImmuneCellAnalysis/04a_Integrate_Immune.Tumor/CellChat/analysis/seurat_list_bySample.Rds"
-annotColumn<- "immunePrograms_tumorCellTypes"
-output_dir<- "test"
-celltype_1<- "Cycling"
-celltype_2<- "AC-like"
-downsample<-TRUE
-```
 
-```{r}
 message(paste0("Processing comparison: ", celltype_1, " vs ", celltype_2))
 
 ## Load in list of seurat objects
@@ -187,8 +152,3 @@ if(class(cellChat) != "list"){
   
   saveRDS(sigLRs_df, file=paste0(output_dir, "/cellChat_LRs_",celltype_1, ".vs.", celltype_2, ".Rds"))
 }
-```
-
-
-
-
