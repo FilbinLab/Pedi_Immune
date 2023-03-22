@@ -1,0 +1,84 @@
+---
+title: "Plot IHC"
+output: html_document
+---
+
+Plot IHC results from alex beck- quantified % of Tregs (based on FOXP3 expression) in ITN and anti-PD1 treated patients
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(harmony)
+
+base_dir = "/Users/jlabelle/"
+working_dir<- paste0(base_dir, 
+                     "Dropbox (Partners HealthCare)/FilbinLab/",
+                     "data_analysis/Projects/git_repos/Pedi_Immune/PD1_Treat/")
+script_dir = "Dropbox (Partners HealthCare)/FilbinLab/data_analysis/Shared/Scripts/"
+
+
+preprocessing = paste0(base_dir, script_dir, "single_cell_preprocessing_helper_functions.R")
+source(preprocessing)
+source(paste0(base_dir, script_dir, "seurat_transferAnchors_helper.R"))
+
+
+figure_dir<- "figures/"
+
+
+if(!dir.exists(figure_dir)){dir.create(figure_dir, recursive = TRUE)}
+
+```
+
+
+## Load in data from alex
+```{r}
+ihc_res<- read.csv("notUploaded/IHC_AlexBeck_FOXP3_PD1.csv")
+
+## Convert to percentage
+ihc_res$PercentTregs<- ihc_res$PercentTregs*100
+ihc_res$PercentTcells_nonTregs<- ihc_res$PercentTcells_nonTregs*100
+ihc_res$PercentTcells<- ihc_res$PercentTcells*100
+
+## Plot separately for each t cell type
+all_plots<- lapply(colnames(ihc_res)[grepl("Percent", colnames(ihc_res))], function(type){
+  tmp<- ihc_res[,c("Treatment", type)]
+  colnames(tmp)<- c("Treatment", "Percent")
+  
+  ggplot(tmp, aes(x=Treatment, y=Percent, fill=Treatment))+
+    geom_boxplot()+
+    theme_classic()+
+    stat_compare_means(method = "t.test")+
+    scale_fill_manual(values=c(ITN="purple", PD1="orange"))+
+    theme(legend.position = "none")+
+    ggtitle(gsub("Percent", "", type))
+  
+})
+cowplot::plot_grid(plotlist=all_plots, ncol=3)
+ggsave(paste0(figure_dir, "BoxPlot_PercentTcellTypes_byTreatment.pdf"), device="pdf", width=6, height=3)
+  
+## Plot barchart of proportion of T cells (tregs + other) by treatment
+  ## get mean across all replicates
+ihc_mean<- ihc_res %>% group_by(Treatment) %>% summarise(Tcells_nonTregs=mean(PercentTcells_nonTregs),
+                                                         Tregs=mean(PercentTregs)) %>% as.data.frame()
+
+  ## reformat
+  ihc_res_melt<- melt(ihc_mean)
+  colnames(ihc_res_melt)<- c("Treatment", "TcellType", "Percent")
+  
+  ggplot(ihc_res_melt, aes(x=Treatment, y=Percent, fill=TcellType))+
+    geom_bar(stat="identity")+
+    theme_classic()+
+    scale_fill_manual(values = c(Tcells_nonTregs="navy", Tregs="yellow"))
+  ggsave(paste0(figure_dir, "BarChart_PercentTcellTypes_byTreatment.pdf"), device="pdf", width=4, height=3)
+    
+## by proportion
+  ihc_res_melt<- ihc_res_melt %>% group_by(Treatment) %>% mutate(proportion_Percent=Percent/sum(Percent)) %>% as.data.frame()
+  
+    ggplot(ihc_res_melt, aes(x=Treatment, y=proportion_Percent, fill=TcellType))+
+    geom_bar(stat="identity")+
+    theme_classic()+
+    scale_fill_manual(values = c(Tcells_nonTregs="navy", Tregs="yellow"))
+  ggsave(paste0(figure_dir, "BarChart_ProportionPercentTcellTypes_byTreatment.pdf"), device="pdf", width=4, height=3)
+
+```
+
