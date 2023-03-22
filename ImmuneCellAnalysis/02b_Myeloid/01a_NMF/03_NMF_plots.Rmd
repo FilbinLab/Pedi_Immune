@@ -395,6 +395,7 @@ ggsave(paste0(figure_dir, "ProgramBreakdown_WithinCycling_rank", rank, ".png"), 
 rank_use<- 6
 colors_use<-annot_colors[[paste0("rank", rank_use)]]
 
+
 ## Create df for plotting
 myeloid_df<-myeloid_seurat@meta.data[,c("sampleid", "NiceSubtype", paste0("NMF_rank", rank_use, "_annotByAdult10X"))]
 myeloid_bd<- as.data.frame(table(myeloid_df$NiceSubtype, myeloid_df[[ paste0("NMF_rank", rank_use, "_annotByAdult10X")]]))
@@ -407,6 +408,8 @@ myeloid_bd<- myeloid_bd %>% group_by(Subtype) %>% mutate(PerCells=NCells/sum(NCe
 myeloid_bd$BroadSubtype<- plyr::mapvalues(myeloid_bd$Subtype, myeloid_seurat$NiceSubtype, myeloid_seurat$NiceSubtype_Merge,warn_missing = FALSE)
 myeloid_bd$Subtype<- gsub("Hemispheric-", "", gsub("Midline-", "", myeloid_bd$Subtype))
 
+
+
 ## Plot
 ggplot(myeloid_bd, aes(x=Subtype, y=PerCells, fill=Program))+
   geom_bar(position = "stack", stat="identity")+
@@ -417,11 +420,11 @@ ggplot(myeloid_bd, aes(x=Subtype, y=PerCells, fill=Program))+
         axis.title.y = element_text(color="black", face="bold"))+
   ylab("Proportion of cells in program")+xlab("")+
   facet_grid(cols=vars(BroadSubtype), scale="free_x", space="free_x")
-ggsave(paste0(figure_dir, "ProgramBreakdown_BySubtype_rank", rank, ".png"), width=6.2, height=4)  
+ggsave(paste0(figure_dir, "ProgramBreakdown_BySubtype_rank", rank_use, ".pdf"), device="pdf", width=6.2, height=4)  
 
 ## Breakdown by sample within subtype
   ## Create df for plotting
-  myeloid_df<-myeloid_seurat@meta.data[,c("sampleid", "NiceSubtype", paste0("NMF_rank", rank_use, "_annotByAdult10X"))]
+  myeloid_df<-myeloid_seurat@meta.data[,c("sampleid", "NiceSubtype_epnGrade", paste0("NMF_rank", rank_use, "_annotByAdult10X"))]
   myeloid_bd<- as.data.frame(table(myeloid_df$sampleid, myeloid_df[[ paste0("NMF_rank", rank_use, "_annotByAdult10X")]]))
   colnames(myeloid_bd)<- c("Sample", "Program", "NCells")
   

@@ -51,6 +51,9 @@ full_myeloid_seurat<- readRDS(paste0("../../",
                                "01_Preprocessing/02_Counts_Preprocess/analysis/detailed_annotation/pedOnly_nomuv63/",
                               "myeloid_seurat_noDC.B_harmony.Rds"))
 
+## Full cohort- marker genes
+full_markers<- read.csv("../../02b_Myeloid/01a_NMF/analysis/GBM.10X_AnnotatePed_recurrent/pedOnly_nomuv63/top_DE_genes_10Xannotated_NMF_rank6.csv")
+
 ## Load monocyte/mg/mo markers
 adult_markers_top100<- readRDS(paste0("../../01_Preprocessing/03_PreprocessAdultDatasets/", 
                                       "analysis/Preprocess_AdultMyeloid/", 
@@ -143,14 +146,14 @@ ggsave(paste0(figure_dir, "Barchart_proportionProgram_bySample_ranks", paste(ran
 ## expression of expected GOI
 ```{r}
 ## Expression of expected markers by sample
-top_markers<- full_markers %>% group_by(cluster) %>% top_n(n=5, wt=avg_log2FC) %>% as.data.frame()
+top_markers<- full_markers %>% group_by(cluster) %>% top_n(n=6, wt=avg_log2FC) %>% as.data.frame()
 top_markers<- top_markers[,c("cluster", "gene")]
 
   ## Rename as needed
-  if(ranks==9){
+  if(rank_use==9){
     top_markers$cluster<- gsub("Inflammatory", "Inflammatory_Microglia", gsub("Stress_Response", "Inflammatory_Microglia", top_markers$cluster))
   } 
-  if(ranks==13){
+  if(rank_use==13){
     top_markers$cluster<- gsub("Stress_Response", "Microglia", top_markers$cluster)
   }
 
@@ -160,7 +163,7 @@ top_markers<- top_markers[,c("cluster", "gene")]
 top_markers$cluster<- factor(top_markers$cluster, levels=sort(unique(top_markers$cluster)))
 top_markers<- top_markers[order(top_markers$cluster),]
 
-all_plots<- lapply(ranks, function(r){
+all_plots<- lapply(rank_use, function(r){
     myeloid_seurat$tmp<- myeloid_seurat@meta.data[[paste0("NMF_rank", r, "_annot_simplified")]]
     
     ## Remove 1/2/3 distinction
@@ -175,7 +178,19 @@ all_plots<- lapply(ranks, function(r){
       xlab("")+ylab("")
 })
 cowplot::plot_grid(plotlist = all_plots, ncol=1)
-ggsave(paste0(figure_dir, "DotPlot_expectedMarkers", paste(ranks, collapse = "."),"_simplified.pdf"),device="pdf", width=14, height=4*length(ranks))
+ggsave(paste0(figure_dir, "DotPlot_expectedMarkers", paste(rank_use, collapse = "."),"_simplified.pdf"),device="pdf", width=14, height=4*length(ranks))
+
+## Violin plot of CSF1R, nFeatures to support CD3 pos myeloid cell annotation
+VlnPlot(myeloid_seurat, group.by = paste0("NMF_rank", rank_use, "_annot_simplified"), features=c("CSF1R","nFeature_RNA"), 
+        cols = myeloid_colors, ncol = 1)+
+  NoLegend()+
+  xlab("")
+ggsave(paste0(figure_dir, "Vln_CSF1R.nFeatures_NMFrank", rank_use, ".pdf" ), device="pdf", width=5, height=8)
+
+## N features per program to support non-doublet identity of cd4 pos myeloid
+ VlnPlot(myeloid_seurat, features="nFeature_RNA", group.by = "NMF_rank13_annot_simplified")+
+   scale_fill_manual(values=myeloid_colors)+NoLegend()
+ ggsave(paste0(figure_dir, "Vln_nFeatures_NMFrank", rank_use, ".pdf"), device="pdf", width=5, height=4)
 ```
 
 ## Density plots by mg/mo/monocyte tam score
