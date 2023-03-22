@@ -198,3 +198,25 @@ ggplot(facs_melt, aes(x=reorder(Sample, Order), y=ImmuneCellProportion, fill=Cel
 ggsave(paste0(figure_dir, "ImmuneCellFACsPercentage_Tumor.Myeloid.Tcell_NoAdult.BCOR.png"), width=8, height=4)
 ggsave(paste0(figure_dir, "ImmuneCellFACsPercentage_Tumor.Myeloid.Tcell_NoAdult.BCOR.pdf"), device="pdf", width=8, height=4)
 ```
+
+## Alteratively: FACS for limited subset, only for patients with same dissociation method
+```{r}
+facs_df<- read.csv("../notUploaded/FACssamples.csv")
+
+## SUBSET TO NEEDED columns
+facs_df<- facs_df[,c("X", "Tcell_byTotal")]
+colnames(facs_df)<-c("Sample", "TcellProportion")
+
+## ad treatment
+facs_df$Treatment<- c(rep("antiPD1", 4), "ITN", "ITN")
+
+
+ggplot(facs_df, aes(x=Treatment, y=TcellProportion, fill=Treatment))+
+  geom_boxplot()+
+  geom_point()+
+  theme_classic()+
+  scale_fill_manual(values=c(ITN="purple", antiPD1="orange"))+
+  theme(legend.position = "none")
+ggsave(paste0(figure_dir, "FACS_PD1_proportionTcells.pdf"), device="pdf", width=3, height=3)
+```
+
