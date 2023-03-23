@@ -44,6 +44,34 @@ seurat_list<- lapply(files, function(f){
 })
 names(seurat_list)<- gsub("_seurat.Rds", "", files)
 
+
+cd4<- seurat_list$cd4
+cd4$detailed_annot<- ifelse(cd4$Treatment=="Untreated", cd4$detailed_annot_byNMFrank9, cd4$detailed_annot_projected_manual)
+
+cd8<- seurat_list$cd8
+cd8$detailed_annot<- ifelse(cd8$Treatment=="Untreated", cd8$detailed_annot_byNMFrank9, cd8$detailed_annot_projected_manual)
+
+myeloid<- seurat_list$myeloid
+myeloid@meta.data<- myeloid@meta.data[,!colnames(myeloid@meta.data) %in% c("raw_clonotype_id", "v_gene", "j_gene", "clonotype_size",
+                                                                           "clonal", "clonotype_size_max20", "macrophage1", "microglia1",
+                                                                           "broad_annot_projected", "broad_annot_projected_manual")]
+myeloid$broad_annot<-"Myeloid"
+myeloid$detailed_annot<- "Myeloid"
+
+seurat_list$cd4<-cd4; seurat_list$cd8<-cd8; seurat_list$myeloid<- myeloid
+
+seurat_list<- lapply(seurat_list, function(x){
+  x@meta.data<- x@meta.data[,!grepl("NMF", colnames(x@meta.data)) & 
+                              !grepl("tmp", colnames(x@meta.data)) & 
+                              !grepl("cd4_expr", colnames(x@meta.data)) &
+                              !grepl("cd8_expr", colnames(x@meta.data)) &
+                              !grepl("detailed_annot_projected_manual", colnames(x@meta.data))]
+  return(x)
+})
+
+saveRDS(seurat_list$cd4, file=paste0(data_dir, "cd4_seurat.Rds"))
+saveRDS(seurat_list$cd8, file=paste0(data_dir, "cd8_seurat.Rds"))
+saveRDS(seurat_list$myeloid, file=paste0(data_dir, "myeloid_seurat.Rds"))
 ```
 
 

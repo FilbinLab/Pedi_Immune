@@ -39,12 +39,11 @@ source(paste0(base_dir, script_dir, "seurat_transferAnchors_helper.R"))
 ```{r}
 ## Load in tenx/ss2 merged seurat objects
 files<- list.files(data_dir)
-files<- files[!grepl("tcell", files)]
+#files<- files[!grepl("tcell", files)]
 seurat_list<- lapply(files, function(f){
    readRDS(paste0(data_dir, f))
 })
 names(seurat_list)<- gsub("ss2_", "", gsub("_seurat.Rds", "", files))
-
 ```
 
 
